@@ -1,0 +1,265 @@
+<html>
+<head>
+<style type="text/css">
+/* other */
+.tbl_track tr:hover {
+	background-color: yellow;
+}
+
+/*https://stevesanderson.github.io/fixed-height-layouts-demo/simple.html*/
+/* Generic pane rules */
+body { margin: 0; -webkit-text-size-adjust: 100%; }
+.page { left: 0; right: 0; top: 0; bottom: 0; }
+.row, .col, .page { overflow: hidden; position: absolute; }
+.row { left: 0; right: 0; }
+.col { top: 0; bottom: 0; }
+.scroll-x { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.scroll-y { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.fill, .pane { position: absolute; left: 0; top: 0; right: 0; bottom: 0; width: 100%; height: 100% }
+.pane { display: none; }
+
+/* Workaround: in landscape mode, IEMobile makes bottom toolbar overlap the page, so shorten the page by 75px to compensate */
+.iemobile .page { bottom: -6px; }
+@media screen and (orientation:landscape) { .iemobile .page { bottom: 75px; } }
+
+
+/* Specific pane configuration */
+.header.row { height: 75px; top: ; }
+.body.row { top: 75px; bottom: 50px; background: #000; padding: 1em; } 
+.footer.row { height: 200px; bottom: 0px; }
+.header, .footer { padding: 0 1em; }
+body { color: #ababab; background: #000; font-family: Segoe UI, Helvetica, Arial, Sans-Serif; 
+
+
+
+</style>
+<title>Music</title>
+</head>
+<body>
+<div class="header row">
+<h1>Music</h1>
+</div>
+
+
+<div class="body row scroll-y">
+<div id="musicdb">
+
+</div>
+</div>
+<div class="footer row" style="background-color:blue;">    
+    <table border="1">
+    <tr><th>Previous</th><th>Now Playing</th><th>Next</th></tr>
+	<tr><td><div id="prev_text"></div></td><td><div id="play_text"></div></td><td><div id="next_text"></div></td></tr>
+	</table>
+	<input type="button" value="PREV" onclick="playPreviousTrack();"><audio id="mainplayer" controls="controls" preload="none"> <source id="audio_src" src=""></source></audio><input type="button" value="NEXT" onclick="playNextTrack()">
+</div>
+    <script>
+	
+            /*
+	    var ctrl = document.getElementById('playpause');		
+		ctrl.onclick = function () {
+			var pause = ctrl.value === 'PAUSE';
+			ctrl.value = pause ? 'PLAY' : 'PAUSE';
+
+            // Update the Audio
+            var method = pause ? 'pause' : 'play';
+            document.getElementById('mainplayer')[method]();
+			
+			return false;
+		};
+
+             */			 
+			 
+	    var getJSON = function(url, callback) {
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', url, true);
+        //xhr.responseType = 'json';
+        xhr.onreadystatechange = function() {
+			if(xhr.readyState == 4) {
+				var status = xhr.status;
+                if (status === 200) {  
+                    //callback(null, xhr.response); 
+					 try {
+                     var data = JSON.parse(xhr.responseText);	
+                     callback(null, data);
+                     }
+                     catch(err) {
+                         alert(err.message);
+                     }					 
+                     
+                } else {
+                    callback(status, xhr.response);
+                }				
+			}
+        
+        };
+        xhr.send();
+        };		
+		
+		function getNodeHTML(node, nodeids) {
+			var html = '';
+			if((node.tracks !== undefined)||(node.nodes !==undefined)) {				
+				
+						
+			if(node.tracks !== undefined) {
+				html = '<table border="1" class="tbl_track">';
+				html +=    '<tr><th>' + node.dir + '</th><th>Play</th><th>Queue</th></tr>';
+			    node.tracks.forEach(function(track, tindex) {					
+					nodeids.push(tindex);					
+				    html +=    '<tr><td>' + track.filename + '</td>'; 
+					html +=    '<td><a href="javascript:playTrackNow([' + nodeids +']);">Play</a></td>';
+					html +=    '<td><a href="javascript:queueTrack([' + nodeids + ']);">Queue</a></td>';
+                    nodeids.pop();                    					
+			    });
+			}
+			else {
+				html = '<table border="1">';
+				html +=    '<tr><th>' + node.dir + '</th></tr>';
+			}
+			
+			if(node.nodes !== undefined) {
+				
+				for( var i = 0; i < node.nodes.length; i++) {
+					nodeids.push(i);
+					html += '<tr><td>' + getNodeHTML(node.nodes[i], nodeids) + '</td></tr>';
+			    }			    
+			}				
+			html +=    '</table>';	
+            html += '<br>';			
+			
+			}
+			nodeids.pop();
+			return html;
+			
+		};
+		
+		var MusicDB;
+		function LoadDB() {
+			getJSON('https://computoid.com/music/music.json', function(err, data) {
+                if (err !== null) {
+                    alert('Something went wrong: ' + err);		
+                } else { 
+				    MusicDB = data.musicdb;
+                    var html = '';                    
+				    for( var s = 0; s < data.musicdb.sources.length; s++) {
+					    if((MusicDB.sources[s].nodes) !== undefined) {
+						for( var i = 0; i < data.musicdb.sources[s].nodes.length; i++) {
+							html += getNodeHTML(data.musicdb.sources[s].nodes[i], [s,i]);
+						}					                        
+					    }}					
+					document.getElementById('musicdb').innerHTML = html;
+                }
+            });
+			
+		};
+        LoadDB();
+		
+		
+		function GetTrackFromArr(track) {
+			var getid = 'sid=' + track[0];	
+			var displayName = '';
+            var i = 1;
+			var node = MusicDB.sources[track[0]];
+            var nodes = MusicDB.sources[track[0]].nodes;			
+			for(; i < (track.length - 1); i++) {
+				getid += '&fid[]=' + track[i];
+				node = nodes[track[i]];
+				displayName += node.dir + '/';
+				nodes = node.nodes;
+			}
+			getid += '&tid=' + track[i];
+			getid += '&fmt=' + node.format;
+			displayName += node.tracks[track[i]].filename;			
+			
+			return [getid, displayName];
+         			
+		}
+		
+        var QueueIndex = 0;
+        var TrackQueue = [];
+		var finished = true;
+        function play_track(track_index) { 
+            QueueIndex = track_index;
+            var track = TrackQueue[track_index];           
+	        document.getElementById('audio_src').src = 'https://computoid.com/music/get_track.php?' + track[0];
+	        document.getElementById('mainplayer').load();
+	        document.getElementById('mainplayer').play(); 
+			
+			if((track_index-1) >= 0) {
+			    document.getElementById('prev_text').innerHTML = '<span>' + TrackQueue[track_index-1][1] + '</span>';
+			}
+			else {
+                document.getElementById('prev_text').innerHTML = '<span></span>';
+			}
+			
+	        document.getElementById('play_text').innerHTML = '<span>' + track[1] + '</span>';
+			
+			if((track_index+1) <= (TrackQueue.length - 1)) {
+			    document.getElementById('next_text').innerHTML = '<span>' + TrackQueue[track_index+1][1] + '</span>';
+			}
+			else {
+				document.getElementById('next_text').innerHTML = '<span></span>';
+			}
+			
+			//ctrl.value = 'PAUSE';
+			finished = false;
+        }
+        
+        
+        function onTrackEnd() {            
+            var track = TrackQueue[QueueIndex+1];
+            if(track) {
+                play_track(QueueIndex+1);
+            }
+            else {                
+				finished = true;
+            }
+        }
+        document.getElementById('mainplayer').addEventListener("ended", onTrackEnd);
+        
+        function queueTrack(temptrack) {
+			var track = GetTrackFromArr(temptrack);
+            TrackQueue.push(track);
+			if(finished) {
+				play_track(TrackQueue.length - 1);				
+			}            
+            else if(QueueIndex <= (TrackQueue.length - 2)) {
+                document.getElementById('next_text').innerHTML = '<span>' + TrackQueue[QueueIndex+1][1] + '</span>';
+            }			
+        }
+
+        function playPreviousTrack() {
+			if(QueueIndex > 0) {
+                document.getElementById('mainplayer').pause();
+                play_track(QueueIndex-1);
+			}
+        }
+
+        function playNextTrack() {
+			if(QueueIndex <= (TrackQueue.length - 2)) {
+                document.getElementById('mainplayer').pause();
+                play_track(QueueIndex+1);
+			}
+        }
+
+        function playTrackNow(track) {
+			if(finished) {
+				queueTrack(track);
+			}
+			else {
+				var newtrack = GetTrackFromArr(track);
+                TrackQueue.splice(QueueIndex+1, 0, newtrack);           
+                playNextTrack();
+			}
+        }
+    
+        /*queueTrack(['5-Crawling.flac','1']);
+        queueTrack(['5-Crawling.flac', '2']);
+        queueTrack(['5-Crawling.flac', '3']);
+        playTrackNow(['5-Crawling.flac', 'NOW']);
+        playPreviousTrack();
+        playNextTrack();*/
+        
+    </script>   
+</body>
+</html>
