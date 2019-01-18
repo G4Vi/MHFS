@@ -7,6 +7,7 @@ package HTTP::BS::Server {
     use Socket qw(IPPROTO_TCP TCP_KEEPALIVE);
     use IO::Poll qw(POLLIN POLLOUT POLLHUP);
     use Scalar::Util qw(weaken);
+    use Data::Dumper;
     sub new {
 	    my ($class, $settings) = @_;
 		
@@ -33,14 +34,21 @@ package HTTP::BS::Server {
 		my %self = ( 'settings' => $settings, 'sock' => $sock, 'evp' => $evp);
 		bless \%self, $class;
 
-        $evp->set($sock, \%self, POLLIN);	
+        $evp->set($sock, \%self, POLLIN);       
+        foreach my $plugin (@{$settings->{'PLUGINS'}}) {
+            say "plugin";
+            foreach my $timer (@{$plugin->{'timers'}}) {
+                say "adding timer";                
+                $self{'evp'}->add_timer(@{$timer});
+            }
+        }
         
         # delete old files from google drive
         # BAD
-        $self{'evp'}->add_timer(0, 0, sub {
-            App::MHFS::gdrive_remove_tmp_rec();
-            return 1;        
-        });
+        #$self{'evp'}->add_timer(0, 0, sub {
+        #    App::MHFS::gdrive_remove_tmp_rec();
+        #    return 1;        
+        #});
             
         
         $evp->run(0.1);
@@ -118,12 +126,16 @@ package HTTP::BS::Server::Request {
                 if($proto =~ /^HTTP/i) {
                      #$uri =~ s/%([A-Fa-f\d]{2})/chr hex $1/eg; #decode the uri
                      my ($path, $querystring) = ($uri =~ /^([^\?]+)(?:\?)?(.*)$/g);             
-                     say("path: $path\nquerystring: $querystring");
+                     say("path: $path\nquerystring before transformations: $querystring");
                      #transformations
                      $path = uri_unescape($path);
-                     $path =~ s/^\/stream\/?/\//;
-                     $querystring =~ s/\?[0-9]+\-[0-9]+$//;
-                     $querystring =~ s/\?[0-9]+\-NaN$//;
+                     my $webpath = quotemeta $client->{'server'}{'settings'}{'WEBPATH'};
+                     $path =~ s/^$webpath\/?/\//;
+                     $path =~ s/(?:\/|\\)+$//;
+                     # jsmpeg transformations
+                     $querystring =~ s/[0-9]+\-[0-9]+$//;
+                     $querystring =~ s/[0-9]+\-NaN$//;
+                     say "querystring: $querystring";
                      #parse path]
     		         print "fixedpath: $path ";
                      my $abspath = abs_path('.' . $path);                  
@@ -135,8 +147,10 @@ package HTTP::BS::Server::Request {
                      my %qsStruct = ( 'querystring' => $querystring);
                      my @qsPairs = split('&', $querystring);
                      foreach my $pair (@qsPairs) {
-                         my($key, $value) = split('=', $pair);                  
-                         $qsStruct{$key} = uri_unescape($value);               
+                         my($key, $value) = split('=', $pair);
+                         if(defined $value) {
+                             $qsStruct{$key} = uri_unescape($value);
+                         }                                      
                      }
                      #parse headers
                      my %headerStruct;
@@ -459,6 +473,64 @@ package EventLoop::Poll {
     1;
 }
 
+package GDRIVE {
+    use strict; use warnings;
+    use feature 'say';
+    use Cwd qw(abs_path getcwd);
+    use File::Find;
+    use Data::Dumper;
+
+    sub gdrive_remove_tmp_rec {
+        my($self) = @_;
+        my @files;
+    
+        my $curdir = getcwd();
+        # find all files newer that are older than
+        my $current_time = time();
+        eval {
+            File::Find::find({wanted => sub {        
+                if((($current_time - stat($_)->mtime) > 1000) && ($_ ne '.')) {
+                    push @files, $File::Find::name; 
+                    die if(@files == 10); # only delete 10 files at a time because api limits               
+                }
+                
+            }}, $self->{'settings'}{'GDRIVE_TMP_REC_DIR'}); 
+        };    
+        chdir($curdir);
+        
+        say "deleting: " if @files;
+        foreach my $file (@files) {
+            say "id: $file";
+            my $gdrivefile = read_file($file);
+            say "gdrivefile: $gdrivefile";
+            unlink($gdrivefile);
+            unlink($file);
+            ASYNC(sub {
+                exec $self->{'settings'}{'BINDIR'}.'/upload.sh',  '--delete', basename($file), '--config', $self->{'settings'}{'CFGDIR'} . '/.googledrive.conf';        
+            });               
+        }
+    }
+    
+    
+    sub new {
+    	my ($class, $settings) = @_;
+        my $self =  {'settings' => $settings};
+    	bless $self, $class;           
+        $self->{'timers'} = [
+            [0, 0, sub {                
+                $self->gdrive_remove_tmp_rec;                                     
+                return 1;        
+            }],
+        ];
+    
+        return $self;
+    }
+
+    
+    1;
+}
+
+
 package App::MHFS; #Media Http File Server
 
 use strict; use warnings;
@@ -494,15 +566,33 @@ my $SCRIPTDIR = dirname(abs_path(__FILE__));
 my $CFGDIR = $SCRIPTDIR . '/.conf';
 my $SETTINGS_FILE = $CFGDIR . '/settings.pl';
 my $SETTINGS = do ($SETTINGS_FILE);
-$SETTINGS or die "Failed to read settings";
-$SETTINGS->{'DOCUMENTROOT'} ||= $SCRIPTDIR;
+$SETTINGS or die "Failed to read settings: $@";
+if( ! $SETTINGS->{'DOCUMENTROOT'}) {
+    die "Must specify DOCUMENTROOT if specifying DROOT_IGNORE" if $SETTINGS->{'DROOT_IGNORE'};
+    $SETTINGS->{'DOCUMENTROOT'} = $SCRIPTDIR;
+}
+if(! $SETTINGS->{'DROOT_IGNORE'}) {
+    my $droot = $SETTINGS->{'DOCUMENTROOT'};
+    my $BINNAME = quotemeta $0;
+    $SETTINGS->{'DROOT_IGNORE'} = qr/^$droot\/(?:(?:\..*)|(?:$BINNAME))/;
+}
+$SETTINGS->{'XSEND'} //= 0;
+$SETTINGS->{'WEBPATH'} ||= '/';
+$SETTINGS->{'DOMAIN'} ||= "127.0.0.1";     
 $SETTINGS->{'TMPDIR'} ||= $SETTINGS->{'DOCUMENTROOT'} . '/tmp';
 $SETTINGS->{'VIDEO_TMPDIR'} ||= $SETTINGS->{'TMPDIR'};
-$SETTINGS->{'GDRIVE_TMP_REC_DIR'} ||= $SETTINGS->{'VIDEO_TMPDIR'} . '/gdrive_tmp_rec';
 $SETTINGS->{'BINDIR'} ||= $SCRIPTDIR . '/.bin';
 $SETTINGS->{'TOOLDIR'} ||= $SCRIPTDIR . '/.tool';
 $SETTINGS->{'DOCDIR'} ||= $SCRIPTDIR . '/.doc';
 $SETTINGS->{'CFGDIR'} ||= $CFGDIR;
+$SETTINGS->{'PLUGINS'} = [];
+if(defined $SETTINGS->{'GDRIVE'}) {
+
+    $SETTINGS->{'GDRIVE_TMP_REC_DIR'} ||= $SETTINGS->{'TMPDIR'} . '/gdrive_tmp_rec';
+    my $gplugin = GDRIVE->new($SETTINGS);
+    push @{$SETTINGS->{'PLUGINS'}}, $gplugin; 
+    say "GDRIVE plugin Enabled";
+}
 my $EXT_SOURCE_SITES = $SETTINGS->{'EXT_SOURCE_SITES'};
 
 # make the temp dirs
@@ -559,13 +649,13 @@ sub HandleGET {
     
     # if the file exists in or below this directory
     my $droot = $SETTINGS->{'DOCUMENTROOT'};
-    
+   
     # send player
     if($unsafePath =~ /^(\/(index\.htm(l)?)?)?$/) {
         say "$droot/static/stream.html";
         QueueLocalFile($client, "$droot/static/stream.html", $startpos, $endpos);    
     }
-    elsif($unsafePath =~ /^\/video\/?$/) {
+    elsif($unsafePath =~ /^\/video\/?$/) {        
         player_video($client, $querystringStruct, $headerStruct);       
     }
     elsif($unsafePath =~ /^\/get_video$/) {
@@ -593,15 +683,23 @@ sub HandleGET {
         rpc($client, $querystringStruct);    
     }
     elsif(defined $requestfile) {
-        if(($requestfile =~ /^$droot/) && (-e $requestfile)) {
-            my @badfiles = (abs_path(__FILE__), $SETTINGS->{'CFGDIR'}, $SETTINGS->{'BINDIR'}, $SETTINGS->{'TOOLDIR'}, $SETTINGS->{'DOCDIR'});
-            foreach my $badfile (@badfiles) {
-                if($requestfile =~ /^\Q$badfile/) {
-                    Send404($client);
-                    return;
-                }
+        if(($requestfile =~ /^$droot/) && (-f $requestfile)) {
+            #my @badfiles = (abs_path(__FILE__), $SETTINGS->{'CFGDIR'}, $SETTINGS->{'BINDIR'}, $SETTINGS->{'TOOLDIR'}, $SETTINGS->{'DOCDIR'});
+            #foreach my $badfile (@badfiles) {
+            #    if($requestfile =~ /^\Q$badfile/) {
+            #        Send404($client);
+            #        return;
+            #    }
+            #}
+            if($requestfile =~ $SETTINGS->{'DROOT_IGNORE'}) {
+                say $requestfile . ' is forbidden';
+                Send404($client);
+                return;
             }
             AcquireFile($client, $requestfile, $headerStruct);                           
+        }
+        else {
+            Send404($client);
         }        
     }     
     else {       
@@ -804,12 +902,12 @@ sub dlext {
                 say $torrent_dllink; 
                 xmlrpc('load_verbose', $torrent_dllink);                                
                 while(1) {
-                    xmlrpc("d.directory.set", $infoHash, $SETTINGS->{'MUSIC_ROOT'});
+                    xmlrpc("d.directory.set", $infoHash, $SETTINGS->{'MUSIC_TORRENT_DIR'});
                     say "-------------";
                     $torrentPath = xmlrpc("d.directory", $infoHash)->[0][0];
                     if($torrentPath) {
                         say "torrentPath: $torrentPath";
-                        last if(index($torrentPath, $SETTINGS->{'MUSIC_ROOT'}) != -1);
+                        last if(index($torrentPath, $SETTINGS->{'MUSIC_TORRENT_DIR'}) != -1);
                     }                    
                     sleep 1;
                 }
@@ -1951,7 +2049,11 @@ sub escape_html {
 
 sub output_dir {
     my ($path, $fmt) = @_;
-    opendir(my $dir, $path) or die "Cannot open directory: $!";
+    my $dir;
+    if(! opendir($dir, $path)) {
+        warn "outputdir: Cannot open directory: $path $!";
+        return \"";
+    }
     #my @files = sort(readdir $dir);
     my @files = sort { uc($a) cmp uc($b)} (readdir $dir);
     closedir($dir);
