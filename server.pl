@@ -9,7 +9,7 @@ package HTTP::BS::Server {
     use Scalar::Util qw(weaken);
     use Data::Dumper;
     sub new {
-	    my ($class, $settings) = @_;
+	    my ($class, $settings, $routes, $plugins) = @_;
 		
         my $sock = IO::Socket::INET->new(Listen => 50, LocalAddr => '127.0.0.1', LocalPort => 8000, Proto => 'tcp', Reuse => 1, Blocking => 0);
         if(! $sock) {
@@ -31,25 +31,15 @@ package HTTP::BS::Server {
         #$SERVER->setsockopt(IPPROTO_TCP, $TCP_USER_TIMEOUT, 10000) or die; #doesn't work?
         #$SERVER->setsockopt(SOL_SOCKET, SO_LINGER, pack("II",1,0)) or die; #to stop last ack bullshit
         my $evp = EventLoop::Poll->new;
-		my %self = ( 'settings' => $settings, 'sock' => $sock, 'evp' => $evp);
+		my %self = ( 'settings' => $settings, 'routes' => $routes, 'route_default' => pop @$routes, 'plugins' => $plugins, 'sock' => $sock, 'evp' => $evp);
 		bless \%self, $class;
 
         $evp->set($sock, \%self, POLLIN);       
-        foreach my $plugin (@{$settings->{'PLUGINS'}}) {
-            say "plugin";
-            foreach my $timer (@{$plugin->{'timers'}}) {
-                say "adding timer";                
+        foreach my $plugin (@{$plugins}) {            
+            foreach my $timer (@{$plugin->{'timers'}}) {                              
                 $self{'evp'}->add_timer(@{$timer});
             }
-        }
-        
-        # delete old files from google drive
-        # BAD
-        #$self{'evp'}->add_timer(0, 0, sub {
-        #    App::MHFS::gdrive_remove_tmp_rec();
-        #    return 1;        
-        #});
-            
+        }            
         
         $evp->run(0.1);
         
@@ -96,17 +86,61 @@ package HTTP::BS::Server {
         return 1;
     
     }
+
+    sub getMIME {
+        my ($self, $filename) = @_;
+        
+        my %audioexts = ( 'mp3' => 'audio/mp3', 
+            'flac' => 'audio/flac',
+            'opus' => 'audio',
+            'ogg'  => 'audio/ogg');
+    
+        my %videoexts = ('mp4' => 'video/mp4',
+            'mkv'  => 'video/mp4',
+            'ts'   => 'video/mp2t',
+            'webm' => 'video/webm',
+            'flv'  => 'video/x-flv');
+    
+        my %otherexts = ('html' => 'text/html; charset=utf-8',
+            'json' => 'text/json',
+            'js'   => 'application/javascript',
+            'txt' => 'text/plain',
+            'pdf' => 'application/pdf',
+            'jpg' => 'image/jpeg',
+            'png' => 'image/png',
+            'gif' => 'image/gif',
+            'bmp' => 'image/bmp',
+            'tar' => 'application/x-tar',
+            'mpd' => 'application/dash+xml',
+            'm3u8' => 'application/x-mpegURL',
+            'm3u8_v' => 'application/x-mpegURL');
+    
+        
+    
+        my ($ext) = $filename =~ /\.([^.]+)$/;
+    
+        my %combined = (%audioexts, %videoexts, %otherexts);
+        return $combined{$ext} if defined($combined{$ext});    
+       
+        if(open(my $filecmd, '-|', 'file', '-b', '--mime-type', $filename)) {
+	        my $mime = <$filecmd>;
+	        chomp $mime;	    
+	        return $mime;
+        }
+        return 'text/plain';
+    }
 	
 	1;
 }
 
-package HTTP::BS::Server::Request {
+package HTTP::BS::Server::Client::Request {
     use strict; use warnings;
 	use feature 'say';
     use Any::URI::Escape;
 	use Cwd qw(abs_path getcwd);
 	use File::Basename;
-	
+	use Data::Dumper;
+    use Scalar::Util qw(weaken);
     sub new {
 	    my ($class, $client, $indataRef) = @_;		
 		my %self = ( 'client' => $client);
@@ -126,23 +160,23 @@ package HTTP::BS::Server::Request {
                 if($proto =~ /^HTTP/i) {
                      #$uri =~ s/%([A-Fa-f\d]{2})/chr hex $1/eg; #decode the uri
                      my ($path, $querystring) = ($uri =~ /^([^\?]+)(?:\?)?(.*)$/g);             
-                     say("path: $path\nquerystring before transformations: $querystring");
+                     say("raw path: $path\nraw querystring: $querystring");
                      #transformations
                      $path = uri_unescape($path);
                      my $webpath = quotemeta $client->{'server'}{'settings'}{'WEBPATH'};
                      $path =~ s/^$webpath\/?/\//;
                      $path =~ s/(?:\/|\\)+$//;
-                     # jsmpeg transformations
-                     $querystring =~ s/[0-9]+\-[0-9]+$//;
-                     $querystring =~ s/[0-9]+\-NaN$//;
-                     say "querystring: $querystring";
-                     #parse path]
-    		         print "fixedpath: $path ";
+                     print "path: $path ";                    
+                     say "querystring: $querystring";                     
+                     #parse path    		         
+                     my %pathStruct = ( 'unsafepath' => $path);
                      my $abspath = abs_path('.' . $path);                  
-    		         print "abs: " . $abspath if (defined $abspath);
-                     print "\n";
-                     my %pathStruct = ( 'unsafepath' => $path, 'requestfile' => $abspath);
-                     $pathStruct{'basename'} = basename( $pathStruct{'requestfile'}) if(defined $pathStruct{'requestfile'});
+    		         if (defined $abspath) {
+                        print "abs: " . $abspath;
+                        $pathStruct{'requestfile'} = $abspath;
+                        $pathStruct{'basename'} = basename( $pathStruct{'requestfile'}); 
+                     }
+                     print "\n";                    
                      #parse querystring
                      my %qsStruct = ( 'querystring' => $querystring);
                      my @qsPairs = split('&', $querystring);
@@ -165,30 +199,74 @@ package HTTP::BS::Server::Request {
                      }                 
                      
                      #dispatch
-                     if(($method =~ /^HEAD|GET$/i) ) {                   
-                         App::MHFS::HandleGET($client, \%pathStruct, \%qsStruct, \%headerStruct);
-                         $success = 1;              
+                     if(($method =~ /^HEAD|GET$/i) ) {
+                         $self{'path'} = \%pathStruct;
+                         $self{'qs'} = \%qsStruct;
+                         $self{'header'} = \%headerStruct;                        
+                         Handle(\%self);
+                         return \%self;              
                      }              
                 }
                         
             }   
         }
         
-        if(! defined($success)) {
-             App::MHFS::Send403($client);  
-        }
-        
-        # try to send any data in queue
-        my $qdatalen = scalar(@{$client->{'queuedata'}});                   
-        if($qdatalen > 0) {
-            my $qdret = App::MHFS::TrySendQueueData($client);
-                if(!defined $qdret){
-                    return undef;
-                }                       
-        }
-        return \%self;
-		
+        Send403(\%self);
+        return \%self;		
 	}
+
+    sub Handle {
+        my ($self) = @_;
+        my $routes = $self->{'client'}{'server'}{'routes'};        
+        foreach my $route (@$routes) {                        
+            if($self->{'path'}{'unsafepath'} eq $route->[0]) {
+                $route->[1]($self);
+                return;
+            }
+        }
+        $self->{'client'}{'server'}{'route_default'}($self);        
+    }
+
+    sub Send403 {
+        my ($self) = @_;
+        my $client = $self->{'client'};
+        my $data = "HTTP/1.1 403 Forbidden\r\n";        
+        my $mime = $client->{'server'}->getMIME('.html');
+        $data .= "Content-Type: $mime\r\n";
+        my $msg = "403 Forbidden\r\n";
+        $data .= "Content-Length: " . length($msg) . "\r\n";
+        $data .= "\r\n";
+        $data .= $msg;
+        my %fileitem = ( buf => $data);
+        push @{$client->{'queuedata'}}, \%fileitem;  
+    }
+
+    sub Send404 {
+        my ($self) = @_;
+        my $client = $self->{'client'};
+        my $data = "HTTP/1.1 404 File Not Found\r\n";
+        my $mime = $client->{'server'}->getMIME('.html');
+        $data .= "Content-Type: $mime\r\n";
+        my $msg = "404 Not Found\r\n";
+        $data .= "Content-Length: " . length($msg) . "\r\n";
+        $data .= "\r\n";
+        $data .= $msg;
+        my %fileitem = ( buf => $data);
+        push @{$client->{'queuedata'}}, \%fileitem;       
+    }
+
+    sub queueFileActions {
+        my ($self) = @_;
+        weaken($self);
+        $self->{'server'}{'evp'}(0, 0, sub {
+            my ($timer, $current_time) = @_;
+            if(! defined $self) {                
+                return undef;            
+            }
+            
+        });        
+    }
+
     1;
 }
 
@@ -196,6 +274,10 @@ package HTTP::BS::Server::Client {
     use strict; use warnings;
 	use feature 'say';
     use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
+    use IO::Socket::INET;
+    use Errno qw(EINTR EIO :POSIX);
+    use Fcntl qw(:seek :mode);
+
 	#use HTTP::BS::Server::Request;
     sub new {
 	    my ($class, $sock, $server) = @_;
@@ -215,40 +297,40 @@ package HTTP::BS::Server::Client {
         # read until about $maxlength, end of http headers, or error
         my $err;
         for(my $tempdata; ($err = defined($handle->recv($tempdata, 1024))); ) {
-            if($tempdata eq '') {
-                print("recv  == 0\n");
+            if($tempdata eq '') {                
+                say "recv  == 0, error: $!";
                 goto ON_ERROR;
             }
             $recvdata .= $tempdata;
             
-            if(index($tempdata, "\r\n\r\n") != -1) {
+           
+            if(index($tempdata, "\r\n\r\n") != -1) {                           
                 last;       
             }
+            #slightly faster on GET only            
+            #if(substr($tempdata, -4) eq "\r\n\r\n") {                
+            #    last;
+            #}
+            
             
             if(length($recvdata) >= $maxlength) {
-                say "TRUNCATED";
-                last;
+                say "End of header not found in $maxlength !!!";
+                goto ON_ERROR;
             }       
-        }
+        }        
         
-        #if we read until EAGAIN or did not error, handle the data
-        if($!{EAGAIN} || ($err == 1)) {
-            if($recvdata ne '') {
-                # recv twice why?
-                my $garbage;
-                while($handle->recv($garbage, 4096)){}				
-				my $request = HTTP::BS::Server::Request->new($client, \$recvdata); # store this somewhere? 
-                if(! defined($request)) {
-                    goto ON_ERROR;                
-                }
-			    return $request;                
+        if($err == 1)
+        {
+            my $request = HTTP::BS::Server::Client::Request->new($client, \$recvdata); # store this somewhere?     
+            my $qdret = TrySendQueueData($client);
+            if(!defined $qdret){
+                goto ON_ERROR;
             }
-            else {
-                say "err defined" if defined($err);
-                say "eagain" if($!{EAGAIN} );
-                print "RECV EAGAIN\n";               
-                return '';           
-            }       
+			return $request;
+        }
+        elsif($!{EAGAIN}) {
+            say "RECV EAGAIN";                            
+            return '';  
         }
         elsif($!{ETIMEDOUT}) {
             print "ETIMEDOUT\n";
@@ -268,7 +350,7 @@ package HTTP::BS::Server::Client {
         my ($client) = @_;
         # send the queue until empty, eagain, not all data sent, or error                             
         if(scalar(@{$client->{'queuedata'}}) > 0) {                    
-            my $qdret = App::MHFS::TrySendQueueData($client);
+            my $qdret = TrySendQueueData($client);
             if(!defined $qdret){
             say "-------------------------------------------------";
                 $client->cleanup();                
@@ -276,6 +358,120 @@ package HTTP::BS::Server::Client {
             }                    
         }
         return 1;        
+    }
+
+    sub TrySendQueueData {
+        my ($client) = @_;
+        my $csock = $client->{'sock'};
+        
+        # foreach queue item
+        while(scalar(@{$client->{'queuedata'}}) > 0) {
+            my $dataitem = $client->{'queuedata'}->[0];
+    
+            my ($buf, $bytesToSend);
+            if(defined $dataitem->{'buf'}) {
+                $buf = $dataitem->{'buf'};
+                $dataitem->{'buf'} = undef; 
+                use bytes;
+                $bytesToSend = length $buf;        
+            }        
+            
+            do {
+                # Try to send the buf if set
+                if(defined $buf) {
+                    $client->{'time'} = clock_gettime(CLOCK_MONOTONIC);
+                    use bytes;
+                    #my $n = length($buf);
+                    my $remdata = TrySendItem($csock, $buf, $bytesToSend);        
+                    # critical conn error
+                    if(! defined($remdata)) {
+                        say "-------------------------------------------------";
+                        return undef;
+                    }
+                    # eagain or not all data sent
+                    elsif($remdata ne '') {
+                        $dataitem->{'buf'} = $remdata;                    
+                        return '';
+                    }
+                    else {
+                        #we sent the full buf
+                    }
+                    $buf = undef;                
+                }
+                
+                #try to grab a buf from the file         
+                if(defined $dataitem->{'fh'}) {            
+                    my $FH = $dataitem->{'fh'};                
+                    my $req_length = $dataitem->{'length'}; # if the file is still locked/we haven't checked for it yet it will be 99999999999                
+                    my $filepos = tell($FH);
+                    if($req_length && ($filepos >= $req_length)) {
+                        if($filepos > $req_length) {
+                            die "Reading too much tell: $filepos req_length: $req_length";
+                        }
+                        say "file read done";
+                        close($FH);
+                    }
+                    else {
+                        my $readamt = 24000;
+                        my $tmpsend = $req_length - $filepos;
+                        $readamt = $tmpsend if($tmpsend < $readamt);
+                        $bytesToSend = read($FH, $buf, $readamt);
+                        
+                        #$bytesToSend = sysread($FH, $buf, $readamt);
+                        if(! defined($bytesToSend)) {
+                            $buf = undef;
+                            say "READ ERROR: $!";            
+                        }
+                        elsif($bytesToSend == 0) {
+                            # read EOF, better remove the error
+                            seek($FH, 0, 1);                       
+                            return '';
+                        }                    
+                    }
+                }        
+                      
+            } while(defined $buf);        
+            splice(@{$client->{'queuedata'}}, 0, 1);
+        }
+    
+        say "DONE Sending Data";    
+        return undef; # commented 10-02-18 for keep-alive
+        #return ''; # messes with incomplete partial requests
+    }
+    
+    sub TrySendItem {
+        my ($csock, $data, $n) = @_;
+        my $total = $n;
+        my $sret;
+        if(! defined($sret = $csock->send($data, MSG_DONTWAIT))) {                
+            if($!{ECONNRESET}) {
+                print "ECONNRESET\n";
+                return undef;
+            }
+            elsif($!{EPIPE}) {
+                print "EPIPE\n";
+                return undef;
+            }
+            elsif($!{EAGAIN}) {         
+                #say "SEND EAGAIN\n";
+                return $data;           
+            }
+            else {
+                print "send errno $!\n";
+                return undef;
+            }       
+                
+        }
+        elsif($sret != $n) {
+            $data = substr($data, $sret);
+            $n = $n - $sret;
+            say "Wrote $sret bytes out of $total, $n bytes to go";
+            return $data;   
+        }
+        else {
+            # success we sent everything
+            return '';      
+        }   
     }
     
     sub onHangUp {
@@ -321,15 +517,16 @@ package EventLoop::Poll {
         }
     }
     
-    # Change to timer system?
+    # Change to timer system? Yes definitely, this is awful. 
     sub CheckWaitingFiles {
         my ($filepairs) = @_;
         #say "There are " . @$filepairs .  " filepairs";
         for (my $i = $#$filepairs; $i >= 0; $i--) {
             my $filename = ${ $filepairs}[$i]->{'filename'};        
             if((-e $filename)){ 
-                my $fmt =  ${ $filepairs}[$i]->{'fmt'};         
-                if($fmt && defined($App::MHFS::VIDEOFORMATS{$fmt}->{'minsize'}) && ((-s $filename) < $App::MHFS::VIDEOFORMATS{$fmt}->{'minsize'})) {                      
+                my $fmt =  ${ $filepairs}[$i]->{'fmt'};
+                my $minsize = ${ $filepairs}[$i]->{'minsize'};      
+                if($fmt && defined($minsize) && ((-s $filename) < $minsize)) {                      
                     next;
                 }            
                 
@@ -585,12 +782,11 @@ $SETTINGS->{'BINDIR'} ||= $SCRIPTDIR . '/.bin';
 $SETTINGS->{'TOOLDIR'} ||= $SCRIPTDIR . '/.tool';
 $SETTINGS->{'DOCDIR'} ||= $SCRIPTDIR . '/.doc';
 $SETTINGS->{'CFGDIR'} ||= $CFGDIR;
-$SETTINGS->{'PLUGINS'} = [];
-if(defined $SETTINGS->{'GDRIVE'}) {
 
-    $SETTINGS->{'GDRIVE_TMP_REC_DIR'} ||= $SETTINGS->{'TMPDIR'} . '/gdrive_tmp_rec';
-    my $gplugin = GDRIVE->new($SETTINGS);
-    push @{$SETTINGS->{'PLUGINS'}}, $gplugin; 
+my @plugins;
+if(defined $SETTINGS->{'GDRIVE'}) {
+    $SETTINGS->{'GDRIVE_TMP_REC_DIR'} ||= $SETTINGS->{'TMPDIR'} . '/gdrive_tmp_rec';    
+    push @plugins, GDRIVE->new($SETTINGS); 
     say "GDRIVE plugin Enabled";
 }
 my $EXT_SOURCE_SITES = $SETTINGS->{'EXT_SOURCE_SITES'};
@@ -631,80 +827,99 @@ our %VIDEOFORMATS = (
 );
 
 my %RESOURCES;
-my $server = HTTP::BS::Server->new($SETTINGS);
+my @routes = (
+    [
+        '', sub {
+            my ($request) = @_;
+            my $droot = $SETTINGS->{'DOCUMENTROOT'};
+            say $droot . "/static/stream.html";
+            my $startpos =  $request->{'header'}{'_RangeStart'};                 
+            my $endpos =  $request->{'header'}{'_RangeEnd'}; 
+            QueueLocalFile($request->{'client'}, "$droot/static/stream.html", $startpos, $endpos);
+        }
+    ],
+    [
+        '/video', sub {
+            my ($request) = @_;            
+            player_video($request->{'client'}, $request->{'qs'}, $request->{'header'}); 
+        }
+    ],
+    [
+        '/get_video', sub {
+            my ($request) = @_;
+            if(!get_video(@_)) {
+                $request->Send404;
+            }
+        }
+    ],
+    [
+        '/play_video', sub {
+            my ($request) = @_;
+            my $buf = '<audio controls autoplay src="get_video?' . $request->{'qs'} . '">Terrible</video>';
+            my $startpos =  $request->{'header'}{'_RangeStart'};                 
+            my $endpos =  $request->{'header'}{'_RangeEnd'}; 
+	        QueueBuf($request->{'client'}, $buf, 'text/html', $startpos, $endpos);
+        }
+    ],
+    [
+        '/yt', sub {
+            my ($request) = @_;
+            youtube_search($request->{'client'}, $request->{'qs'});
+        }
+    ],
+    [
+        '/browseext', sub {
+            my ($request) = @_;
+            browseext($request->{'client'}, $request->{'qs'});            
+        }
+    ],
+    [
+        '/foreign', sub {
+            my ($request) = @_;
+            foreign($request->{'client'}, $request->{'qs'});
+        }
+    ],
+    [
+        '/dlext', sub {
+            my ($request) = @_;
+            dlext($request->{'client'}, $request->{'qs'});
+        }    
+    ],
+    [
+        '/rpc', sub {
+            my ($request) = @_;
+            rpc($request->{'client'}, $request->{'qs'});
+        }
+    ],
+    # otherwise attempt to send a file from droot
+    sub {
+        my ($request) = @_;
+        my $droot = $SETTINGS->{'DOCUMENTROOT'};
+        my $requestfile = $request->{'path'}{'requestfile'};
+        my $client = $request->{'client'};
+        my $headerStruct = $request->{'header'};
+        if(( ! defined $requestfile) ||
+           ($requestfile !~ /^$droot/) ||
+           (! -f $requestfile)){
+            $request->Send404;            
+        }
+        elsif($requestfile =~ $SETTINGS->{'DROOT_IGNORE'}) {
+            say $requestfile . ' is forbidden';
+            $request->Send404;
+        }
+        else {
+            AcquireFile($client, $requestfile, $headerStruct); 
+        }       
+    }
+);
+
+        
+my $server = HTTP::BS::Server->new($SETTINGS, \@routes, \@plugins);
 
 sub shell_escape {
     my ($cmd) = @_;
     ($cmd) =~ s/'/'"'"'/g;
     return $cmd;
-}
-
-
-sub HandleGET {
-    my ($client, $pathStruct, $querystringStruct, $headerStruct) = @_;   
-    my $unsafePath = $pathStruct->{'unsafepath'};
-    my $requestfile = $pathStruct->{'requestfile'};       
-    my $startpos =  $headerStruct->{'_RangeStart'};                 
-    my $endpos =  $headerStruct->{'_RangeEnd'}; 
-    
-    # if the file exists in or below this directory
-    my $droot = $SETTINGS->{'DOCUMENTROOT'};
-   
-    # send player
-    if($unsafePath =~ /^(\/(index\.htm(l)?)?)?$/) {
-        say "$droot/static/stream.html";
-        QueueLocalFile($client, "$droot/static/stream.html", $startpos, $endpos);    
-    }
-    elsif($unsafePath =~ /^\/video\/?$/) {        
-        player_video($client, $querystringStruct, $headerStruct);       
-    }
-    elsif($unsafePath =~ /^\/get_video$/) {
-        if(!get_video($client, $querystringStruct, $headerStruct)) {
-            Send404($client); 
-        }
-    }
-    elsif($unsafePath =~ /^\/play_video$/) {
-        my $buf = '<audio controls autoplay src="get_video?' . $querystringStruct->{'querystring'} . '">Fuck off</video>';
-	    QueueBuf($client, $buf, 'text/html', $startpos, $endpos);
-    }
-    elsif(($unsafePath =~ /^\/yt$/)) {
-        youtube_search($client, $querystringStruct);
-    }
-    elsif($unsafePath =~ /^\/browseext$/) {
-        browseext($client, $querystringStruct); 
-    }
-    elsif($unsafePath =~ /^\/foreign$/) {   
-        foreign($client, $querystringStruct);
-    }
-    elsif($unsafePath =~ /^\/dlext$/) { 
-        dlext($client, $querystringStruct);
-    }
-    elsif($unsafePath =~ /^\/rpc$/) {
-        rpc($client, $querystringStruct);    
-    }
-    elsif(defined $requestfile) {
-        if(($requestfile =~ /^$droot/) && (-f $requestfile)) {
-            #my @badfiles = (abs_path(__FILE__), $SETTINGS->{'CFGDIR'}, $SETTINGS->{'BINDIR'}, $SETTINGS->{'TOOLDIR'}, $SETTINGS->{'DOCDIR'});
-            #foreach my $badfile (@badfiles) {
-            #    if($requestfile =~ /^\Q$badfile/) {
-            #        Send404($client);
-            #        return;
-            #    }
-            #}
-            if($requestfile =~ $SETTINGS->{'DROOT_IGNORE'}) {
-                say $requestfile . ' is forbidden';
-                Send404($client);
-                return;
-            }
-            AcquireFile($client, $requestfile, $headerStruct);                           
-        }
-        else {
-            Send404($client);
-        }        
-    }     
-    else {       
-        Send404($client);        
-    }
 }
 
 # if it would be optimal to gdrive the file
@@ -1043,22 +1258,6 @@ sub foreign {
     QueueBuf($client, $$response, getMIME($url), 0);
 }
 
-sub SendByGDRIVE {
-    my ($client, $tmpname) = @_;
-    my $gdrivename = $tmpname . '_gdrive';
-    if( ! -e $gdrivename) {
-        ASYNC(\&_gdrive_upload, $tmpname);
-        say "After ASYNC";    
-        my %filepair = ( 'sock' => $client->{'sock'}, 'client' => $client, 'filename' => $gdrivename, 'fmt' => '302');
-        say "SendByGDRIVE: adding waiting_files $gdrivename";
-        push @$EventLoop::Poll::WAITING_FILES, \%filepair;
-    }
-    else {    
-        QueueLocalFile($client, $gdrivename);     
-    }
-
-}
-
 sub video_get_format {
     my ($fmt) = @_; 
     if(!defined($fmt) || !defined($VIDEOFORMATS{$fmt})) {
@@ -1371,7 +1570,8 @@ sub media_file_search {
 }
 
 sub get_video {
-    my ($client, $querystringStruct, $headerStruct) = @_;
+    my ($request) = @_;
+    my ($client, $querystringStruct, $headerStruct) =  ($request->{'client'}, $request->{'qs'}, $request->{'header'});
     my $droot = $SETTINGS->{'DOCUMENTROOT'};
     my $vroot = $SETTINGS->{'VIDEO_ROOT'};
     say "/get_video ---------------------------------------";
@@ -1477,7 +1677,7 @@ sub get_video {
 	        return undef;
         }         
         
-        my %filepair = ( 'sock' => $client->{'sock'}, 'client' => $client, 'filename' => $video{'out_filepath'}, 'startpos' => $headerStruct->{'_RangeStart'}, 'endpos' => $headerStruct->{'_RangeEnd'}, 'fmt' => $fmt);
+        my %filepair = ( 'sock' => $client->{'sock'}, 'client' => $client, 'filename' => $video{'out_filepath'}, 'startpos' => $headerStruct->{'_RangeStart'}, 'endpos' => $headerStruct->{'_RangeEnd'}, 'fmt' => $fmt, 'minsize' => $VIDEOFORMATS{$fmt}->{'minsize'});
         if(defined $video{'on_exists'}) {
             $filepair{'on_exists'} = { 'func' => $video{'on_exists'}, 'param' => \%video };
         }
@@ -1552,13 +1752,9 @@ sub video_write_master_playlist {
         say "subm3u $subm3u";
         my $default = 'NO';
         my $forced =  'NO';
-        foreach my $sub (@{$video->{'subtitle'}}) {
-	        #if($sub->{'is_default'} || $sub->{'is_forced'}) {
-            #    $default = 'YES';
-            #    $forced = 'YES';
-                $default = 'YES' if($sub->{'is_default'});
-                $forced = 'YES' if($sub->{'is_forced'});            
-            #}        
+        foreach my $sub (@{$video->{'subtitle'}}) {	        
+            $default = 'YES' if($sub->{'is_default'});
+            $forced = 'YES' if($sub->{'is_forced'});     
         }
         # assume its in english
         $newm3ucontent .= '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="English",DEFAULT='.$default.',FORCED='.$forced.',URI="' . $subm3u . '",LANGUAGE="en"' . "\n";	                       
@@ -1644,125 +1840,6 @@ sub AcquireFile {
     foreach my $file (@togdrive) {
         gdrive_upload($file);                                
     }
-}
-
-sub TrySendQueueData {
-    my ($client) = @_;
-    my $csock = $client->{'sock'};
-    
-    # foreach queue item
-    while(scalar(@{$client->{'queuedata'}}) > 0) {
-        my $dataitem = $client->{'queuedata'}->[0];
-
-        my ($buf, $bytesToSend);
-        if(defined $dataitem->{'buf'}) {
-            $buf = $dataitem->{'buf'};
-            $dataitem->{'buf'} = undef; 
-            use bytes;
-            $bytesToSend = length $buf;        
-        }        
-        
-        do {
-            # Try to send the buf if set
-            if(defined $buf) {
-                $client->{'time'} = clock_gettime(CLOCK_MONOTONIC);
-                use bytes;
-                #my $n = length($buf);
-                my $remdata = TrySendItem($csock, $buf, $bytesToSend);        
-                # critical conn error
-                if(! defined($remdata)) {
-                    say "-------------------------------------------------";
-                    return undef;
-                }
-                # eagain or not all data sent
-                elsif($remdata ne '') {
-                    $dataitem->{'buf'} = $remdata;                    
-                    return '';
-                }
-                else {
-                    #we sent the full buf
-                }
-                $buf = undef;                
-            }
-            
-            #try to grab a buf from the file         
-            if(defined $dataitem->{'fh'}) {            
-                my $FH = $dataitem->{'fh'};                
-                my $req_length = $dataitem->{'length'};
-                if(($req_length == 99999999999) && (! defined(LOCK_GET_LOCKDATA($dataitem->{'requestfile'})))) {
-                    $req_length = stat($FH)->size;
-                    $dataitem->{'length'} = $req_length;
-                    say "length is actually $req_length";                    
-                }
-                my $filepos = tell($FH);
-                if($req_length && ($filepos >= $req_length)) {
-                    if($filepos > $req_length) {
-                        die "Reading too much tell: $filepos req_length: $req_length";
-                    }
-                    say "file read done";
-                    close($FH);
-                }
-                else {
-                    my $readamt = 24000;
-                    my $tmpsend = $req_length - $filepos;
-                    $readamt = $tmpsend if($tmpsend < $readamt);
-                    $bytesToSend = read($FH, $buf, $readamt);
-                    
-                    #$bytesToSend = sysread($FH, $buf, $readamt);
-                    if(! defined($bytesToSend)) {
-                        $buf = undef;
-                        say "READ ERROR: $!";            
-                    }
-                    elsif($bytesToSend == 0) {
-                        # read EOF, better remove the error
-                        seek($FH, 0, 1);                       
-                        return '';
-                    }                    
-                }
-            }        
-                  
-        } while(defined $buf);        
-        splice(@{$client->{'queuedata'}}, 0, 1);
-    }
-
-    say "DONE Sending Data";    
-    return undef; # commented 10-02-18 for keep-alive
-    #return ''; # messes with incomplete partial requests
-}
-
-sub TrySendItem {
-    my ($csock, $data, $n) = @_;
-    my $total = $n;
-    my $sret;
-    if(! defined($sret = $csock->send($data, MSG_DONTWAIT))) {                
-        if($!{ECONNRESET}) {
-            print "ECONNRESET\n";
-            return undef;
-        }
-        elsif($!{EPIPE}) {
-            print "EPIPE\n";
-            return undef;
-        }
-        elsif($!{EAGAIN}) {         
-            #say "SEND EAGAIN\n";
-            return $data;           
-        }
-        else {
-            print "send errno $!\n";
-            return undef;
-        }       
-            
-    }
-    elsif($sret != $n) {
-        $data = substr($data, $sret);
-        $n = $n - $sret;
-        say "Wrote $sret bytes out of $total, $n bytes to go";
-        return $data;   
-    }
-    else {
-        # success we sent everything
-        return '';      
-    }   
 }
 
 sub read_file {
@@ -1947,15 +2024,7 @@ sub Send404 {
    
 }
 
-sub Send403 {
-    my ($client) = @_;
-    my $data = "HTTP/1.1 403 Forbidden\r\n";
-    my $mime = getMIME('.html');
-    $data .= "Content-Type: $mime\r\n";
-    $data .= "\r\n";
-    my %fileitem = ( buf => $data);
-    push @{$client->{'queuedata'}}, \%fileitem;  
-}
+
 
 sub getMIME {
     my ($filename) = @_;
@@ -1990,14 +2059,12 @@ sub getMIME {
     my ($ext) = $filename =~ /\.([^.]+)$/;
 
     my %combined = (%audioexts, %videoexts, %otherexts);
-    return $combined{$ext} if defined($combined{$ext});
-    
-    print "mime time: " . `date`;
+    return $combined{$ext} if defined($combined{$ext});    
+   
     if(open(my $filecmd, '-|', 'file', '-b', '--mime-type', $filename)) {
-	my $mime = <$filecmd>;
-	chomp $mime;
-	print "mime time: " . `date`;
-	return $mime;
+	    my $mime = <$filecmd>;
+	    chomp $mime;	    
+	    return $mime;
     }
     
 
