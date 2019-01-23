@@ -7,9 +7,11 @@ package EventLoop::Poll {
 	use feature 'say';
     use IO::Poll qw(POLLIN POLLOUT POLLHUP);
     use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
-    
+    use Scalar::Util qw(looks_like_number);
+    use Data::Dumper;
+
     our $POLLRDHUP = 0;
-    our $ALWAYSMASK = 0; # $ALWAYSMASK = ($POLLRDHUP | POLLHUP);    
+    our $ALWAYSMASK = ($POLLRDHUP | POLLHUP);    
     
     sub new {
         my ($class) = @_;
@@ -28,8 +30,8 @@ package EventLoop::Poll {
     
     sub remove {
         my ($self, $handle) = @_;
-        $self->{'fh_map'}{$handle} = undef;
-        $self->{'poll'}->remove($handle);    
+        $self->{'poll'}->remove($handle);        
+        $self->{'fh_map'}{$handle} = undef;          
     }
     
     # all times are relative, is 0 is set as the interval, it will be run every main loop iteration
@@ -75,17 +77,19 @@ package EventLoop::Poll {
                     last;
                 }                
             }
-            $self->requeue_timers(\@requeue_timers, $current_time);
-            
+            $self->requeue_timers(\@requeue_timers, $current_time);           
                
             
             # check all the handles  
+            #say "loop";
             my $pollret = $poll->poll($loop_interval);
-            if($pollret > 0){
+            if($pollret > 0){                             
                 foreach my $handle ($poll->handles()) {
                     my $revents = $poll->events($handle);
-                    my $obj = $self->{'fh_map'}{$handle};          
-                    if($revents & POLLIN) {                    
+                    my $obj = $self->{'fh_map'}{$handle};                    
+
+                    if($revents & POLLIN) { 
+                        #say "readyReady";                                                                  
                         if(! defined($obj->onReadReady)) {
                             $self->remove($handle);
                             next;
@@ -93,22 +97,29 @@ package EventLoop::Poll {
                     }
                     
                     if($revents & POLLOUT) {
+                        #say "writeReady";                        
                         if(! defined($obj->onWriteReady)) {
                             $self->remove($handle);
                             next;
                         }                                  
                     }
                     
-                    if($revents & (POLLHUP | $POLLRDHUP )) {                    
+                    if($revents & (POLLHUP | $POLLRDHUP )) { 
+                        say "hangUp";                   
                         $obj->onHangUp();
                         $self->remove($handle);                        
-                    }            
-        
+                    }                   
+
+                    #if(! looks_like_number($revents ) ) {
+                    #    if(! defined $obj->{'route_default'}) {           
+                    #        say "client no events;
+                    #    }                        
+                    #}           
                 }
         
             }
             elsif($pollret == 0) {
-            
+                #say "pollret == 0";
             }
             else {
                 say "Poll ERROR";
@@ -172,7 +183,7 @@ package HTTP::BS::Server {
             }
         }            
         
-        $evp->run(1);
+        $evp->run(0.1);
         
    		return \%self;
     }
@@ -189,7 +200,7 @@ package HTTP::BS::Server {
         say "-------------------------------------------------";
         say "NEW CONN " . $csock->peerhost() . ':' . $csock->peerport();                   
         
-        my $MAX_TIME_WITHOUT_SEND = 600; #600;
+        my $MAX_TIME_WITHOUT_SEND = 300; #600;
 		my $cref = HTTP::BS::Server::Client->new($csock, $server);
                
         $server->{'evp'}->set($csock, $cref, POLLIN | $EventLoop::Poll::ALWAYSMASK);    
@@ -204,9 +215,10 @@ package HTTP::BS::Server {
             my $time_elapsed = $current_time - $cref->{'time'};
             if($time_elapsed > $MAX_TIME_WITHOUT_SEND) {
                 say "\$MAX_TIME_WITHOUT_SEND ($MAX_TIME_WITHOUT_SEND) exceeded, closing CONN";
-                say "-------------------------------------------------";
-                $cref->cleanup();
+                say "-------------------------------------------------";               
+                say "poll has " . scalar ( $server->{'evp'}{'poll'}->handles) . " handles";
                 $server->{'evp'}->remove($cref->{'sock'});
+                say "poll has " . scalar ( $server->{'evp'}{'poll'}->handles) . " handles";                             
                 return undef;                
             }
             $timer->{'interval'} = $MAX_TIME_WITHOUT_SEND - $time_elapsed;
@@ -691,13 +703,16 @@ package HTTP::BS::Server::Client {
     use Fcntl qw(:seek :mode);
     use File::stat;
     use IO::Poll qw(POLLIN POLLOUT POLLHUP);
+    use Scalar::Util qw(looks_like_number weaken);
     use Data::Dumper;
+    use Carp;
+    $SIG{ __DIE__ } = sub { Carp::confess( @_ ) };
 
 	#use HTTP::BS::Server::Request;
     sub new {
 	    my ($class, $sock, $server) = @_;
         $sock->blocking(0);
-		my %self = ('sock' => $sock, 'server' => $server, 'time' => clock_gettime(CLOCK_MONOTONIC), 'inbuf' => '');		
+		my %self = ('sock' => $sock, 'server' => $server, 'time' => clock_gettime(CLOCK_MONOTONIC), 'inbuf' => '');        
 		return bless \%self, $class;
 	}
 
@@ -715,6 +730,17 @@ package HTTP::BS::Server::Client {
         my $tempdata;
         my $success = defined($handle->recv($tempdata, $maxlength-length($client->{'inbuf'})));
         if($success) {
+            if(length($tempdata) == 0) {
+                # read 0 bytes, so put this client to rest for a little while                
+                $client->SetEvents($EventLoop::Poll::ALWAYSMASK );
+                weaken($client);                
+                $client->{'server'}{'evp'}->add_timer(0.1, 0, sub {
+                    if(defined $client) {
+                        $client->SetEvents(POLLIN | $EventLoop::Poll::ALWAYSMASK );
+                    }
+                    return undef;
+                });
+            }
             $client->{'inbuf'} .= $tempdata;
         }
         else {
@@ -741,9 +767,7 @@ package HTTP::BS::Server::Client {
         }        
         
         ON_ERROR:
-        say "ON_ERROR-------------------------------------------------";
-        #print Dumper($client);                
-        $client->cleanup();       
+        say "ON_ERROR-------------------------------------------------";               
         return undef;       
     }
     
@@ -754,8 +778,7 @@ package HTTP::BS::Server::Client {
         if(defined $client->{'request'}{'response'}) {
             my $tsrRet = $client->TrySendResponse;
             if(!defined($tsrRet)) {
-                say "-------------------------------------------------";
-                $client->cleanup();                
+                say "-------------------------------------------------";                               
                 return undef;
             }
             elsif($tsrRet ne '') {
@@ -882,16 +905,17 @@ package HTTP::BS::Server::Client {
     sub onHangUp {
         my ($client) = @_;
         say "Client Hangup\n";
-        $client->cleanup(); 
-    
+        return undef;    
     }
-    
-    sub cleanup {
-        my ($client) = @_;
-        #$client->{'server'}{'evp'}->remove($client->{'sock'});         
-        shutdown($client->{'sock'}, 2);
-        close($client->{'sock'});        
-    }
+
+    sub DESTROY {
+        my $self = shift;
+        say "client destructor called";
+        if($self->{'sock'}) {
+            shutdown($self->{'sock'}, 2);
+            close($self->{'sock'});  
+        }
+    }   
     
     1;	
 }
