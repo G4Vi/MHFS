@@ -740,6 +740,7 @@ package HTTP::BS::Server::Client {
                     }
                     return undef;
                 });
+                return '';
             }
             $client->{'inbuf'} .= $tempdata;
         }
