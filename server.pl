@@ -8,7 +8,8 @@ package EventLoop::Poll {
     use IO::Poll qw(POLLIN POLLOUT POLLHUP);
     use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
     
-    our $POLLRDHUP = 0;    
+    our $POLLRDHUP = 0;
+    our $ALWAYSMASK = 0; # $ALWAYSMASK = ($POLLRDHUP | POLLHUP);    
     
     sub new {
         my ($class) = @_;
@@ -131,6 +132,8 @@ package HTTP::BS::Server {
     use IO::Poll qw(POLLIN POLLOUT POLLHUP);
     use Scalar::Util qw(weaken);
     use Data::Dumper;
+    HTTP::BS::Server::Util->import();
+    
     sub new {
 	    my ($class, $settings, $routes, $plugins) = @_;
 		
@@ -154,17 +157,22 @@ package HTTP::BS::Server {
         #$SERVER->setsockopt(IPPROTO_TCP, $TCP_USER_TIMEOUT, 10000) or die; #doesn't work?
         #$SERVER->setsockopt(SOL_SOCKET, SO_LINGER, pack("II",1,0)) or die; #to stop last ack bullshit
         my $evp = EventLoop::Poll->new;
-		my %self = ( 'settings' => $settings, 'routes' => $routes, 'route_default' => pop @$routes, 'plugins' => $plugins, 'sock' => $sock, 'evp' => $evp);
+		my %self = ( 'settings' => $settings, 'routes' => $routes, 'route_default' => pop @$routes, 'plugins' => $plugins, 'sock' => $sock, 'evp' => $evp, 'uploaders' => []);
 		bless \%self, $class;
 
-        $evp->set($sock, \%self, POLLIN);       
+        $evp->set($sock, \%self, POLLIN);
+        # load the plugins        
         foreach my $plugin (@{$plugins}) {            
             foreach my $timer (@{$plugin->{'timers'}}) {                              
                 $self{'evp'}->add_timer(@{$timer});
+                if(my $func = $plugin->{'uploader'}) {
+                    say "adding function";
+                    push (@{$self{'uploaders'}}, $func);
+                }                                
             }
         }            
         
-        $evp->run(0.1);
+        $evp->run(1);
         
    		return \%self;
     }
@@ -184,7 +192,7 @@ package HTTP::BS::Server {
         my $MAX_TIME_WITHOUT_SEND = 600; #600;
 		my $cref = HTTP::BS::Server::Client->new($csock, $server);
                
-        $server->{'evp'}->set($csock, $cref, POLLIN | POLLHUP | $EventLoop::Poll::POLLRDHUP);    
+        $server->{'evp'}->set($csock, $cref, POLLIN | $EventLoop::Poll::ALWAYSMASK);    
 
         weaken($cref); #don't allow this timer to keep the client object alive
         $server->{'evp'}->add_timer($MAX_TIME_WITHOUT_SEND, 0, sub {
@@ -260,7 +268,7 @@ package HTTP::BS::Server::Util {
     use Exporter 'import';
     use File::Find;
     use Cwd qw(abs_path getcwd);
-    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC_ARR', 'FindFile', 'space2us', 'escape_html');
+    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC_ARR', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'ASYNC', 'shell_stdout');
     sub LOCK_GET_LOCKDATA {
         my ($filename) = @_;
         my $lockname = "$filename.lock";    
@@ -356,6 +364,15 @@ package HTTP::BS::Server::Util {
     	    exit 0;
         }
     }
+    
+    sub ASYNC {
+        my ($func, $arg) = @_;
+        $SIG{CHLD} = "IGNORE";
+        if(fork() == 0) {
+        $func->($arg);
+        exit 0;
+        }    
+    }
 
     sub space2us {
         my ($string) = @_;
@@ -371,6 +388,24 @@ package HTTP::BS::Server::Util {
             $string =~ s/$key/$val/g;
         }
         return \$string;
+    }
+    
+    sub function_exists {    
+        no strict 'refs';
+        my $funcname = shift;
+        return \&{$funcname} if defined &{$funcname};
+        return;
+    }
+    
+    sub shell_stdout {
+        return do {
+    	local $/ = undef;
+        print "shell_stdout: ";
+        print "$_ " foreach @_;
+        print "\n";
+        open(my $cmdh, '-|', @_) or die("shell_stdout $!");
+    	<$cmdh>;
+        }
     }
 }
 
@@ -523,7 +558,7 @@ package HTTP::BS::Server::Client::Request {
     sub _SendResponse {
         my ($self, $fileitem) = @_;
         $self->{'response'} = $fileitem;
-        $self->{'client'}->SetEvents(POLLOUT | $EventLoop::Poll::POLLRDHUP | POLLHUP );        
+        $self->{'client'}->SetEvents(POLLOUT | $EventLoop::Poll::ALWAYSMASK );        
     }
 
     sub Send403 {
@@ -558,6 +593,17 @@ package HTTP::BS::Server::Client::Request {
         my ($self, $url) = @_;
         my $buf = "HTTP/1.1 301 Moved Permanently\r\nLocation: $url\r\n"; 
         my $msg = "301 Moved Permanently\r\n<a href=\"$url\"></a>\r\n";
+        $buf .= "Content-Length: " . length($msg) . "\r\n";
+        $buf .= "\r\n";
+        $buf .= $msg;
+        my %fileitem = ('buf' => $buf);
+        $self->_SendResponse(\%fileitem);
+    }
+
+    sub Send307 {
+        my ($self, $url) = @_;
+        my $buf = "HTTP/1.1 307 Temporary Redirect\r\nLocation: $url\r\n"; 
+        my $msg = "307 Temporary Redirect\r\n<a href=\"$url\"></a>\r\n";
         $buf .= "Content-Length: " . length($msg) . "\r\n";
         $buf .= "\r\n";
         $buf .= $msg;
@@ -625,6 +671,9 @@ package HTTP::BS::Server::Client::Request {
     # TODO, check plugins for SendOption
     sub SendFile {
         my ($self, $requestfile) = @_;
+        foreach my $uploader (@{$self->{'client'}{'server'}{'uploaders'}}) {
+            return if($uploader->($self, $requestfile));
+        }
         return $self->SendLocalFile($requestfile);
     }
 
@@ -677,7 +726,7 @@ package HTTP::BS::Server::Client {
         }
         my $pos = index($client->{'inbuf'}, "\r\n\r\n");
         if($pos != -1) {
-            $client->SetEvents($EventLoop::Poll::POLLRDHUP | POLLHUP );  
+            $client->SetEvents($EventLoop::Poll::ALWAYSMASK );  
             my $recvdata = substr $client->{'inbuf'}, 0, $pos+4;
             $client->{'inbuf'} = substr $client->{'inbuf'}, $pos+4;
             say "inbuf: " . $client->{'inbuf'} . ' ' . length($client->{'inbuf'});
@@ -692,8 +741,8 @@ package HTTP::BS::Server::Client {
         }        
         
         ON_ERROR:
-        say "-------------------------------------------------";
-        print Dumper($client);                
+        say "ON_ERROR-------------------------------------------------";
+        #print Dumper($client);                
         $client->cleanup();       
         return undef;       
     }
@@ -710,7 +759,7 @@ package HTTP::BS::Server::Client {
                 return undef;
             }
             elsif($tsrRet ne '') {
-                $client->SetEvents(POLLIN | $EventLoop::Poll::POLLRDHUP | POLLHUP );
+                $client->SetEvents(POLLIN | $EventLoop::Poll::ALWAYSMASK );
                 $client->onReadReady;
             }            
         }
@@ -856,7 +905,15 @@ package GDRIVE {
     use File::Find;
     use Data::Dumper;
     use File::stat;
-
+    use File::Basename;
+    use Scalar::Util qw(looks_like_number);
+    HTTP::BS::Server::Util->import();
+    
+    sub gdrive_add_tmp_rec {
+        my ($id, $gdrivefile, $settings) = @_;
+        write_file($settings->{'GDRIVE_TMP_REC_DIR'} . "/$id", $gdrivefile);
+    }
+    
     sub gdrive_remove_tmp_rec {
         my($self) = @_;
         my @files;
@@ -888,18 +945,116 @@ package GDRIVE {
         }
     }
     
+    # if it would be optimal to gdrive the file
+    # AND it hasn't been gdrived, or is being gdrived return the newname
+    # if it is being gdrived return the original file
+    # if it has been gdrived, return 0
+    # if its too small or is locked return empty string
+    # otherwise undef
+    # (is defined if the file exists)
+    sub should_gdrive {
+        my ($requestfile) = @_;
+        if(my $st = stat($requestfile)) {
+    	if(($st->size > 524288) && (! defined (LOCK_GET_LOCKDATA($requestfile))))   {
+                my $gdrivename = $requestfile . '_gdrive';
+                if(! -e $gdrivename) {
+                    if(! -e $gdrivename . '.tmp') {
+                        say "should_gdrive: $requestfile";
+                        return $gdrivename;
+                    }
+                    else {
+                        say "Already gdriving: $requestfile";
+                        return $requestfile;
+                    }                            
+                }
+                say "gdrivefile already exists";
+                return 0;            
+            } 
+            say "should not gdrive, file is locked or LEQ 1M";
+            return '';        
+        }
+        else {
+            say "Should not gdrive can't stat: $requestfile";
+        }
+        return undef;    
+    }
+    
+    sub _gdrive_upload {
+        my ($filename, $settings) = @_;               
+        my $cmdout = shell_stdout('perl', $settings->{'BINDIR'} . '/gdrivemanager.pl', $filename, $settings->{'CFGDIR'} . '/gdrivemanager.json');
+        say $cmdout; 
+        my ($id, $newurl) = split("\n", $cmdout);   
+        my $url;    
+        my $fname = $filename . '_gdrive';
+        gdrive_add_tmp_rec($id, $fname, $settings);
+        my $fname_tmp = $fname . '.tmp';
+        write_file($fname_tmp, $newurl);
+        rename($fname_tmp, $fname);
+    }
+    
+    sub gdrive_upload {
+        my ($file, $settings) = @_;
+        #BADHACK, gdrive things not in the temp dir
+        #my $tmpdir = $SETTINGS->{'TMPDIR'};
+        #if($file =~ /^$tmpdir/)    
+        {
+            my $fnametmp = $file . '_gdrive.tmp';
+            say "fnamtmp $fnametmp";
+            open(my $tmpfile, ">>", $fnametmp) or die;
+            close($tmpfile);
+        }
+        ASYNC_ARR(\&_gdrive_upload, $file, $settings);
+    }
+    
+    
+    sub uploader {
+        my($request, $requestfile) = @_;
+        my $handled;
+        
+        # only send it by gdrive, if it was uploaded in time
+        my $gdrivefile = should_gdrive($requestfile);       
+        if(defined($gdrivefile) && looks_like_number($gdrivefile) && ($gdrivefile == 0)) {
+            $handled = 1;
+            my $url = read_file($requestfile . '_gdrive');
+            $request->Send307($url);
+        }       
+        
+        # queue up future hls files
+        my @togdrive;
+        if( $requestfile =~ /^(.+[^\d])(\d+)\.ts$/) {
+            my ($start, $num) = ($1, $2);
+            # no more than 3 uploads should be occurring at a time
+            for(my $i = 0; ($i < 2) && (scalar(@togdrive) < 1); $i++) {                     
+                my $extrafile = $start . sprintf("%04d", ++$num) . '.ts';                    
+                my $shgdrive;                
+                if(($shgdrive = should_gdrive($extrafile)) && ( $shgdrive =~ /_gdrive$/)) {                    
+                    push @togdrive, $extrafile;                                               
+                }
+                else {
+                    last if(! defined($shgdrive));
+                }                    
+            }                                   
+        }        
+        foreach my $file (@togdrive) {
+            gdrive_upload($file, $request->{'client'}{'server'}{'settings'});                                
+        }        
+        
+        return $handled;    
+    }
+    
     
     sub new {
     	my ($class, $settings) = @_;
         my $self =  {'settings' => $settings};
     	bless $self, $class;           
         $self->{'timers'} = [
-            [0, 0, sub {                
+            [0, 0, sub {
+                #say "running timer";            
                 $self->gdrive_remove_tmp_rec;                                     
                 return 1;        
             }],
         ];
-    
+        $self->{'uploader'} = \&uploader;
         return $self;
     }
 
@@ -1056,7 +1211,7 @@ my @routes = (
             $request->Send404;
         }
         else {
-            $request->SendLocalFile($requestfile);
+            $request->SendFile($requestfile);
         }       
     }
 );
