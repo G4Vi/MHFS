@@ -4,7 +4,7 @@
 # return undef to have them removed from poll's structures
 package EventLoop::Poll {     
     use strict; use warnings;
-	use feature 'say';
+    use feature 'say';
     use IO::Poll qw(POLLIN POLLOUT POLLHUP);
     use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
     use Scalar::Util qw(looks_like_number);
@@ -137,7 +137,7 @@ package EventLoop::Poll {
 
 package HTTP::BS::Server {
     use strict; use warnings;
-	use feature 'say';
+    use feature 'say';
     use IO::Socket::INET;
     use Socket qw(IPPROTO_TCP TCP_KEEPALIVE);
     use IO::Poll qw(POLLIN POLLOUT POLLHUP);
@@ -146,9 +146,9 @@ package HTTP::BS::Server {
     HTTP::BS::Server::Util->import();
     
     sub new {
-	    my ($class, $settings, $routes, $plugins) = @_;
-		
-        my $sock = IO::Socket::INET->new(Listen => 50, LocalAddr => '127.0.0.1', LocalPort => 8000, Proto => 'tcp', Reuse => 1, Blocking => 0);
+        my ($class, $settings, $routes, $plugins) = @_;
+        
+        my $sock = IO::Socket::INET->new(Listen => 50, LocalAddr => $settings->{'HOST'}, LocalPort => $settings->{'PORT'}, Proto => 'tcp', Reuse => 1, Blocking => 0);
         if(! $sock) {
             say "server: Cannot create self socket";
             return undef;
@@ -168,8 +168,8 @@ package HTTP::BS::Server {
         #$SERVER->setsockopt(IPPROTO_TCP, $TCP_USER_TIMEOUT, 10000) or die; #doesn't work?
         #$SERVER->setsockopt(SOL_SOCKET, SO_LINGER, pack("II",1,0)) or die; #to stop last ack bullshit
         my $evp = EventLoop::Poll->new;
-		my %self = ( 'settings' => $settings, 'routes' => $routes, 'route_default' => pop @$routes, 'plugins' => $plugins, 'sock' => $sock, 'evp' => $evp, 'uploaders' => []);
-		bless \%self, $class;
+        my %self = ( 'settings' => $settings, 'routes' => $routes, 'route_default' => pop @$routes, 'plugins' => $plugins, 'sock' => $sock, 'evp' => $evp, 'uploaders' => []);
+        bless \%self, $class;
 
         $evp->set($sock, \%self, POLLIN);
         # load the plugins        
@@ -190,7 +190,7 @@ package HTTP::BS::Server {
         
         $evp->run(0.1);
         
-   		return \%self;
+        return \%self;
     }
     
     sub onReadReady {
@@ -206,7 +206,7 @@ package HTTP::BS::Server {
         say "NEW CONN " . $csock->peerhost() . ':' . $csock->peerport();                   
         
         my $MAX_TIME_WITHOUT_SEND = 300; #600;
-		my $cref = HTTP::BS::Server::Client->new($csock, $server);
+        my $cref = HTTP::BS::Server::Client->new($csock, $server);
                
         $server->{'evp'}->set($csock, $cref, POLLIN | $EventLoop::Poll::ALWAYSMASK);    
 
@@ -269,14 +269,14 @@ package HTTP::BS::Server {
         return $combined{$ext} if defined($combined{$ext});    
        
         if(open(my $filecmd, '-|', 'file', '-b', '--mime-type', $filename)) {
-	        my $mime = <$filecmd>;
-	        chomp $mime;	    
-	        return $mime;
+            my $mime = <$filecmd>;
+            chomp $mime;        
+            return $mime;
         }
         return 'text/plain';
     }
-	
-	1;
+    
+    1;
 }
 
 package HTTP::BS::Server::Util {
@@ -349,7 +349,7 @@ package HTTP::BS::Server::Util {
                 if(/$name_req/i) {
                     return if( -d );
                     $foundpath = $File::Find::name;
-    			    die;
+                    die;
                 }
             });
             
@@ -378,7 +378,7 @@ package HTTP::BS::Server::Util {
         $SIG{CHLD} = "IGNORE";
         if(fork() == 0) {
             $func->(@_);
-    	    exit 0;
+            exit 0;
         }
     }
     
@@ -416,18 +416,18 @@ package HTTP::BS::Server::Util {
     
     sub shell_stdout {
         return do {
-    	local $/ = undef;
+        local $/ = undef;
         print "shell_stdout: ";
         print "$_ " foreach @_;
         print "\n";
         open(my $cmdh, '-|', @_) or die("shell_stdout $!");
-    	<$cmdh>;
+        <$cmdh>;
         }
     }
 
     sub ssh_stdout {
         my $source = shift;
-	return shell_stdout('ssh', $source->{'userhost'}, '-p', $source->{'port'}, @_);
+    return shell_stdout('ssh', $source->{'userhost'}, '-p', $source->{'port'}, @_);
     }
     
     sub shell_escape {
@@ -440,22 +440,22 @@ package HTTP::BS::Server::Util {
 package HTTP::BS::Server::Client::Request {
     HTTP::BS::Server::Util->import();
     use strict; use warnings;
-	use feature 'say';
+    use feature 'say';
     use Any::URI::Escape;
-	use Cwd qw(abs_path getcwd);
-	use File::Basename;
+    use Cwd qw(abs_path getcwd);
+    use File::Basename;
     use File::stat;
     use IO::Poll qw(POLLIN POLLOUT POLLHUP);
-	use Data::Dumper;
+    use Data::Dumper;
     use Scalar::Util qw(weaken);
     use IPC::Open3;    
     sub new {
-	    my ($class, $client, $indataRef) = @_;        
-		my %self = ( 'client' => $client);
-		bless \%self, $class;
-		weaken($self{'client'}); #don't allow Request to keep client alive	
+        my ($class, $client, $indataRef) = @_;        
+        my %self = ( 'client' => $client);
+        bless \%self, $class;
+        weaken($self{'client'}); #don't allow Request to keep client alive  
 
-		my $success;    
+        my $success;    
         if($$indataRef =~ /^(?:\r\n)*(.+?)\r\n(.+?)\r\n\r\n(.*)$/s) {  
             my $requestline =  $1;
             my @headerlines = split('\r\n', $2);
@@ -477,10 +477,10 @@ package HTTP::BS::Server::Client::Request {
                      $path =~ s/(?:\/|\\)+$//;
                      print "path: $path ";                    
                      say "querystring: $querystring";                     
-                     #parse path    		         
+                     #parse path                     
                      my %pathStruct = ( 'unsafepath' => $path);
                      my $abspath = abs_path('.' . $path);                  
-    		         if (defined $abspath) {
+                     if (defined $abspath) {
                         print "abs: " . $abspath;
                         $pathStruct{'requestfile'} = $abspath;
                         $pathStruct{'basename'} = basename( $pathStruct{'requestfile'}); 
@@ -512,7 +512,7 @@ package HTTP::BS::Server::Client::Request {
                          $self{'path'} = \%pathStruct;
                          $self{'qs'} = \%qsStruct;
                          $self{'header'} = \%headerStruct;
-			 $self{'request'} = $$indataRef;
+             $self{'request'} = $$indataRef;
                          _Handle(\%self);
                          return \%self;              
                      }              
@@ -522,8 +522,8 @@ package HTTP::BS::Server::Client::Request {
         }
         
         Send403(\%self);
-        return \%self;		
-	}
+        return \%self;      
+    }
 
     sub _Handle {
         my ($self) = @_;
@@ -559,11 +559,11 @@ package HTTP::BS::Server::Client::Request {
             $headtext = "HTTP/1.1 200 OK\r\n";
         }
         else {
-    	    say "end: $end" if(defined($end));
+            say "end: $end" if(defined($end));
             $cend = $end if(defined($end) && $end ne '');
             $headtext = "HTTP/1.1 206 Partial Content\r\n"; 
             $retlength = $cend+1;        
-    	    say "cend: $cend";
+            say "cend: $cend";
             $headtext .= "Content-Range: bytes $start-$cend/$datalength\r\n";
         }
         if($datalength ne '*') {
@@ -690,9 +690,9 @@ package HTTP::BS::Server::Client::Request {
         my $start = $self->{'header'}{'_RangeStart'};
         my $end = $self->{'header'}{'_RangeEnd'};
         binmode($FH);
-	#seek($FH, 0, 0); #you can't really seek on a pipe, we must create the pipe at the right point
+    #seek($FH, 0, 0); #you can't really seek on a pipe, we must create the pipe at the right point
         my %fileitem;
-        $fileitem{'fh'} = $FH;	
+        $fileitem{'fh'} = $FH;  
         my $headtext;
         ($fileitem{'length'}, $headtext) = $self->_BuildHeaders($filelength, $mime, $filename);
         $fileitem{'buf'} = $$headtext;
@@ -702,15 +702,15 @@ package HTTP::BS::Server::Client::Request {
     sub SendFromSSH {
         my ($self, $sshsource, $filename, $node) = @_; 
         my @sshcmd = ('ssh', $sshsource->{'userhost'}, '-p', $sshsource->{'port'}); 
-	my $fullescapedname = "'" . shell_escape($filename) . "'";         
-	#my $realp = shell_stdout(@sshcmd, 'realpath', $fullescapedname);
+        my $fullescapedname = "'" . shell_escape($filename) . "'";         
+    #my $realp = shell_stdout(@sshcmd, 'realpath', $fullescapedname);
         my $folder = $sshsource->{'folder'};
-	#return undef if($realp !~ /^$folder/);	    
-	# my $sizeout = shell_stdout(@sshcmd , 'wc', '-c', $fullescapedname);
-	#if($sizeout =~ /^([0-9]+)\s.+/) {
-	# my $size = $1;
-	{
-	    my $size = $node->[1];
+    #return undef if($realp !~ /^$folder/);     
+    # my $sizeout = shell_stdout(@sshcmd , 'wc', '-c', $fullescapedname);
+    #if($sizeout =~ /^([0-9]+)\s.+/) {
+    # my $size = $1;
+    {
+        my $size = $node->[1];
             my @cmd;
             if(defined $self->{'header'}{'_RangeStart'}) {
                 my $start = $self->{'header'}{'_RangeStart'};
@@ -733,39 +733,39 @@ package HTTP::BS::Server::Client::Request {
             $self->SendPipe($cmdh, basename($filename), $size);            
             return 1;
         }        
-	    return undef;
+        return undef;
     }
 
     sub Proxy {
-	my ($self, $proxy, $node) = @_;
-	my $requesttext = $self->{'request'};
+    my ($self, $proxy, $node) = @_;
+    my $requesttext = $self->{'request'};
         my $webpath = quotemeta $self->{'client'}{'server'}{'settings'}{'WEBPATH'};
-	my @lines = split('\r\n', $requesttext);
-	my @outlines = (shift @lines);
-	$outlines[0] =~ s/^(GET|HEAD)\s+$webpath\/?/$1 \//;
+    my @lines = split('\r\n', $requesttext);
+    my @outlines = (shift @lines);
+    $outlines[0] =~ s/^(GET|HEAD)\s+$webpath\/?/$1 \//;
         push @outlines, (shift @lines);
-	my $host = $proxy->{'httphost'};
-	$outlines[1] =~ s/^(Host\:\s+[^\s]+)/Host\: $host/;
-	foreach my $line (@lines) {
+    my $host = $proxy->{'httphost'};
+    $outlines[1] =~ s/^(Host\:\s+[^\s]+)/Host\: $host/;
+    foreach my $line (@lines) {
             next if($line =~ /^X\-Real\-IP/);
-	    push @outlines, $line;
-	}
-	my $newrequest = '';
-	foreach my $outline(@outlines) {
-	    $newrequest .= $outline . "\r\n";
-	}
-	$newrequest .= "\r\n";
-	print $newrequest;
-	write_file('test.http', $newrequest);
-	die;
-	my ($in, $out, $err);
+        push @outlines, $line;
+    }
+    my $newrequest = '';
+    foreach my $outline(@outlines) {
+        $newrequest .= $outline . "\r\n";
+    }
+    $newrequest .= "\r\n";
+    print $newrequest;
+    write_file('test.http', $newrequest);
+    die;
+    my ($in, $out, $err);
         use Symbol 'gensym'; $err = gensym;
         my $pid = open3($in, $out, $err, ('nc', $host, $proxy->{'httpport'})) or die "BAD NC";
-	print $in $newrequest;
-	my $size = $node->[1] if $node;
-	my %fileitem = ('fh' => $out, 'length' => $size // 99999999999);
-	$self->_SendResponse(\%fileitem);
-	return 1;
+    print $in $newrequest;
+    my $size = $node->[1] if $node;
+    my %fileitem = ('fh' => $out, 'length' => $size // 99999999999);
+    $self->_SendResponse(\%fileitem);
+    return 1;
     }
 
     sub SendLocalBuf {
@@ -798,7 +798,7 @@ package HTTP::BS::Server::Client::Request {
 
 package HTTP::BS::Server::Client {
     use strict; use warnings;
-	use feature 'say';
+    use feature 'say';
     use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
     use IO::Socket::INET;
     use Errno qw(EINTR EIO :POSIX);
@@ -810,13 +810,13 @@ package HTTP::BS::Server::Client {
     use Carp;
     $SIG{ __DIE__ } = sub { Carp::confess( @_ ) };
 
-	#use HTTP::BS::Server::Request;
+    #use HTTP::BS::Server::Request;
     sub new {
-	    my ($class, $sock, $server) = @_;
+        my ($class, $sock, $server) = @_;
         $sock->blocking(0);
-		my %self = ('sock' => $sock, 'server' => $server, 'time' => clock_gettime(CLOCK_MONOTONIC), 'inbuf' => '');        
-		return bless \%self, $class;
-	}
+        my %self = ('sock' => $sock, 'server' => $server, 'time' => clock_gettime(CLOCK_MONOTONIC), 'inbuf' => '');        
+        return bless \%self, $class;
+    }
 
     sub SetEvents {
         my ($self, $events) = @_;
@@ -824,7 +824,7 @@ package HTTP::BS::Server::Client {
             
     }
 
-	# currently only creates HTTP Request objects, but this could change if we allow file uploads
+    # currently only creates HTTP Request objects, but this could change if we allow file uploads
     sub onReadReady {        
         my ($client) = @_;
         my $handle = $client->{'sock'};               
@@ -1020,7 +1020,7 @@ package HTTP::BS::Server::Client {
         }
     }   
     
-    1;	
+    1;  
 }
 
 
@@ -1082,7 +1082,7 @@ package GDRIVE {
     sub should_gdrive {
         my ($requestfile) = @_;
         if(my $st = stat($requestfile)) {
-    	if(($st->size > 524288) && (! defined (LOCK_GET_LOCKDATA($requestfile))))   {
+        if(($st->size > 524288) && (! defined (LOCK_GET_LOCKDATA($requestfile))))   {
                 my $gdrivename = $requestfile . '_gdrive';
                 if(! -e $gdrivename) {
                     if(! -e $gdrivename . '.tmp') {
@@ -1171,9 +1171,9 @@ package GDRIVE {
     
     
     sub new {
-    	my ($class, $settings) = @_;
+        my ($class, $settings) = @_;
         my $self =  {'settings' => $settings};
-    	bless $self, $class;           
+        bless $self, $class;           
         $self->{'timers'} = [
             [0, 0, sub {
                 #say "running timer";            
@@ -1209,7 +1209,7 @@ package MusicLibrary {
     sub BuildLibrary_orig {
         my ($path) = @_;        
         if(!(-d $path)){
-	    return undef if($path !~ /\.(flac|mp3|m4a|wav|ogg|webm)$/); 
+        return undef if($path !~ /\.(flac|mp3|m4a|wav|ogg|webm)$/); 
             return basename($path);
         }        
         my $dir;
@@ -1223,9 +1223,9 @@ package MusicLibrary {
         push @tree, basename($path);
         foreach my $file (@files) {
             next if(($file eq '.') || ($file eq '..'));
-	    if(my $file = BuildLibrary("$path/$file")) {
+        if(my $file = BuildLibrary("$path/$file")) {
                 push @tree, $file;
-	    }
+        }
             #say $file;            
         }
         return undef if( scalar(@tree) eq 1);
@@ -1237,7 +1237,7 @@ package MusicLibrary {
         my $statinfo = stat($path);
         return undef if(! $statinfo);       
         if(!S_ISDIR($statinfo->mode)){
-	    return undef if($path !~ /\.(flac|mp3|m4a|wav|ogg|webm)$/); 
+        return undef if($path !~ /\.(flac|mp3|m4a|wav|ogg|webm)$/); 
             return [basename($path), $statinfo->size];          
         } 
         else {
@@ -1252,10 +1252,10 @@ package MusicLibrary {
             my $size = 0;
             foreach my $file (@files) {
                 next if(($file eq '.') || ($file eq '..'));
-	            if(my $file = BuildLibrary("$path/$file")) {
+                if(my $file = BuildLibrary("$path/$file")) {
                         push @tree, $file;
                         $size += $file->[1];
-	            }                   
+                }                   
             }
             return undef if( $size eq 0);
             return [basename($path), $size, \@tree];
@@ -1264,44 +1264,44 @@ package MusicLibrary {
 }
 
     sub GetPrompt {
-	my ($out, $dir) = @_;
-	#$dir = quotemeta $dir;
-	my ($temp, $buf);
-	while(read $out, $temp, 1) {
-	    $buf .= $temp;
-	    return $buf if($buf =~ /$dir\$$/);
-	}
-	return undef;
+    my ($out, $dir) = @_;
+    #$dir = quotemeta $dir;
+    my ($temp, $buf);
+    while(read $out, $temp, 1) {
+        $buf .= $temp;
+        return $buf if($buf =~ /$dir\$$/);
+    }
+    return undef;
     }
 
     sub BuildRemoteLibrary {
         my ($self, $source) = @_;
-	return undef if($source->{'type'} ne 'ssh');
+        return undef if($source->{'type'} ne 'ssh');
         my $bin = $self->{'settings'}{'BIN'};
-	my $aslibrary = $self->{'settings'}{'BINDIR'} . '/aslibrary.pl';
-	my $userhost = $source->{'userhost'};
-	my $port = $source->{'port'};
-	my $folder = $source->{'folder'};
+    my $aslibrary = $self->{'settings'}{'BINDIR'} . '/aslibrary.pl';
+    my $userhost = $source->{'userhost'};
+    my $port = $source->{'port'};
+    my $folder = $source->{'folder'};
 
-	system ('ssh', $userhost, '-p', $port, 'mkdir', '-p', 'MHFS');
-	system ('rsync', '-az', '-e', "ssh -p $port", $bin, "$userhost:MHFS/" . basename($bin));
-	system ('rsync', '-az', '-e', "ssh -p $port", $aslibrary, "$userhost:MHFS/" . basename($aslibrary));
-        	
+    #system ('ssh', $userhost, '-p', $port, 'mkdir', '-p', 'MHFS');
+    #system ('rsync', '-az', '-e', "ssh -p $port", $bin, "$userhost:MHFS/" . basename($bin));
+    system ('rsync', '-az', '-e', "ssh -p $port", $aslibrary, "$userhost:MHFS/" . basename($aslibrary));
+            
 
-	my $buf = shell_stdout('ssh', $userhost, '-p', $port, 'MHFS/aslibrary.pl', 'MHFS/server.pl', $folder);
-	if(! $buf) {
-	    say "failed to read";
-	    return undef;
-	}
-	write_file('music.db', $buf);
-	my $lib = retrieve('music.db');
-	return $lib;
+    my $buf = shell_stdout('ssh', $userhost, '-p', $port, 'MHFS/aslibrary.pl', 'MHFS/server.pl', $folder);
+    if(! $buf) {
+        say "failed to read";
+        return undef;
+    }
+    write_file('music.db', $buf);
+    my $lib = retrieve('music.db');
+    return $lib;
     }
     
     sub ToHTML {
         my ($files) = @_;
         my $buf = '';
-	my $name = encode_entities(decode('UTF-8', $files->[0]));
+    my $name = encode_entities(decode('UTF-8', $files->[0]));
         if($files->[2]) {
             my $dir = $files->[0];                        
             $buf .= '<td>';
@@ -1339,95 +1339,95 @@ package MusicLibrary {
     }
 
     sub BuildLibraries {
-	my ($self, $sources) = @_;
-	my @wholeLibrary;
-	$self->{'sources'} = [];
-	foreach my $source (@{$sources}) {
-	    my $lib;
-	    my $folder = quotemeta $source->{'folder'};
-	    if($source->{'type'} eq 'local') {
+    my ($self, $sources) = @_;
+    my @wholeLibrary;
+    $self->{'sources'} = [];
+    foreach my $source (@{$sources}) {
+        my $lib;
+        my $folder = quotemeta $source->{'folder'};
+        if($source->{'type'} eq 'local') {
             $lib = BuildLibrary($source->{'folder'});
-		    $source->{'SendFile'} //= sub   {
+            $source->{'SendFile'} //= sub   {
                 my ($request, $file) = @_;
-		        return undef if(! -e $file);
-		        $request->SendLocalFile($file);
-		        return 1;
-		    };		
-	    }
-	    elsif($source->{'type'} eq 'ssh') {
-		    $lib = $self->BuildRemoteLibrary($source);
-		    $source->{'SendFile'} //= sub {
-		        my ($request, $file, $node) = @_;               
+                return undef if(! -e $file);
+                $request->SendLocalFile($file);
+                return 1;
+            };      
+        }
+        elsif($source->{'type'} eq 'ssh') {
+            $lib = $self->BuildRemoteLibrary($source);
+            $source->{'SendFile'} //= sub {
+                my ($request, $file, $node) = @_;               
                         return $request->SendFromSSH($source, $file, $node);
-		    };
-	    }
-	    elsif($source->{'type'} eq 'mhfs') {
-		    $source->{'type'} = 'ssh';
-		    $lib = $self->BuildRemoteLibrary($source);
-		    if(!$source->{'httphost'}) {
-			$source->{'httphost'} =  ssh_stdout($source, 'curl', 'ipinfo.io/ip');
-		        chop $source->{'httphost'};
-			$source->{'httpport'} //= 8000;
-		    }
-		    $source->{'SendFile'} //= sub {
-			my ($request, $file, $node) = @_;
-			return $request->Proxy($source, $node);
-		    };
-	    }
-	    if($lib) {
-		push @{$self->{'sources'}}, $source;
+            };
+        }
+        elsif($source->{'type'} eq 'mhfs') {
+            $source->{'type'} = 'ssh';
+            $lib = $self->BuildRemoteLibrary($source);
+            if(!$source->{'httphost'}) {
+            $source->{'httphost'} =  ssh_stdout($source, 'curl', 'ipinfo.io/ip');
+                chop $source->{'httphost'};
+            $source->{'httpport'} //= 8000;
+            }
+            $source->{'SendFile'} //= sub {
+            my ($request, $file, $node) = @_;
+            return $request->Proxy($source, $node);
+            };
+        }
+        if($lib) {
+        push @{$self->{'sources'}}, $source;
                 $source->{'lib'} = $lib;
-		OUTER: foreach my $item (@{$lib->[2]}) {
-		    foreach my $already (@wholeLibrary) {
-		        next OUTER if($already->[0] eq $item->[0]);
-		    }
-		    push @wholeLibrary, $item;
-		}
-	    }
-	    else {
-		$source->{'lib'} = undef;
-	    }
-	}
-	$self->{'library'} = \@wholeLibrary;
-	$self->LibraryHTML;
-	return \@wholeLibrary;
+        OUTER: foreach my $item (@{$lib->[2]}) {
+            foreach my $already (@wholeLibrary) {
+                next OUTER if($already->[0] eq $item->[0]);
+            }
+            push @wholeLibrary, $item;
+        }
+        }
+        else {
+        $source->{'lib'} = undef;
+        }
+    }
+    $self->{'library'} = \@wholeLibrary;
+    $self->LibraryHTML;
+    return \@wholeLibrary;
     }
 
     sub FindInLibrary {
-	my ($lib, $name) = @_;
-	my @namearr = split('/', $name);
-	FindInLibrary_Outer: foreach my $component (@namearr) {
+    my ($lib, $name) = @_;
+    my @namearr = split('/', $name);
+    FindInLibrary_Outer: foreach my $component (@namearr) {
             foreach my $libcomponent (@{$lib->[2]}) {
                 if($libcomponent->[0] eq $component) {
                     $lib = $libcomponent;
-		    next FindInLibrary_Outer;
-		}
-	    }
-	    return undef;
-	}
-	return $lib;
+            next FindInLibrary_Outer;
+        }
+        }
+        return undef;
+    }
+    return $lib;
     }
 
     sub SendFromLibrary {
-	my ($self, $request) = @_;
-	foreach my $source (@{$self->{'sources'}}) {
+    my ($self, $request) = @_;
+    foreach my $source (@{$self->{'sources'}}) {
             my $node = FindInLibrary($source->{'lib'}, $request->{'qs'}{'name'});
-	    next if ! $node;
+        next if ! $node;
 
-	    my $tfile = $source->{'folder'} . '/' . $request->{'qs'}{'name'};
+        my $tfile = $source->{'folder'} . '/' . $request->{'qs'}{'name'};
             if($source->{'SendFile'}->($request, $tfile, $node)) {
-	        return 1;
-	    } 
-	}
-	$request->Send404;
+            return 1;
+        } 
+    }
+    $request->Send404;
     }
     
     sub new {
-    	my ($class, $settings) = @_;
+        my ($class, $settings) = @_;
         my $self =  {'settings' => $settings};
-    	bless $self, $class;  
+        bless $self, $class;  
 
-	say "building music library";
+    say "building music library";
         $self->{'library'} = $self->BuildLibraries($settings->{'MUSICLIBRARY'}{'sources'});
         say "done build libraries";
         $self->{'routes'} = [
@@ -1436,14 +1436,14 @@ package MusicLibrary {
                 return $self->SendLibrary($request);        
             }],
             [ '/music_force', sub {
-		my ($request) = @_;
+        my ($request) = @_;
                 $self->{'library'} = $self->BuildLibraries($settings->{'MUSICLIBRARY'}{'sources'}); 
-		return $self->SendLibrary($request);
-	    }],
+        return $self->SendLibrary($request);
+        }],
             [ '/music_dl', sub {
-		my ($request) = @_;
-		return $self->SendFromLibrary($request);
-	    }], 
+        my ($request) = @_;
+        return $self->SendFromLibrary($request);
+        }], 
         ];
         
         return $self;
@@ -1503,7 +1503,9 @@ if(! $SETTINGS->{'DROOT_IGNORE'}) {
 $SETTINGS->{'BIN'} = abs_path(__FILE__);
 $SETTINGS->{'XSEND'} //= 0;
 $SETTINGS->{'WEBPATH'} ||= '/';
-$SETTINGS->{'DOMAIN'} ||= "127.0.0.1";     
+$SETTINGS->{'DOMAIN'} ||= "127.0.0.1";
+$SETTINGS->{'HOST'} ||= "127.0.0.1";
+$SETTINGS->{'PORT'} ||= 8000;     
 $SETTINGS->{'TMPDIR'} ||= $SETTINGS->{'DOCUMENTROOT'} . '/tmp';
 $SETTINGS->{'VIDEO_TMPDIR'} ||= $SETTINGS->{'TMPDIR'};
 $SETTINGS->{'VIDEO_ROOT'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/video", 
@@ -1535,7 +1537,7 @@ our %VIDEOFORMATS = (
             'dash' => {'lock' => 0, 'create_cmd' => #['ffmpeg', '-i', '$video{"src_file"}{"filepath"}', '-codec:v', 'copy', '-strict', 'experimental', '-codec:a', 'aac', '-ac', '2', '-map', 'v:0', '-map', 'a:0',  '-f', 'dash',  '$video{"out_filepath"}', '-flush_packets', '1', '-map', '0:2', '-f', 'webvtt', '$video{"out_filepath"} . ".vtt"']
             ['ffmpeg', '-i', '$video{"src_file"}{"filepath"}', '-codec:v', 'copy', '-strict', 'experimental', '-codec:a', 'aac', '-ac', '2', '-f', 'dash',  '$video{"out_filepath"}']
             , 'ext' => 'mpd', 'desired_audio' => 'aac',
-	    'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/dash_player.html'}, #'-use_timeline', '0', '-min_seg_duration', '20000000',
+        'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/dash_player.html'}, #'-use_timeline', '0', '-min_seg_duration', '20000000',
             
             'flv' => {'lock' => 1, 'create_cmd' => "ffmpeg -re -i '%s' -strict experimental -acodec aac -ab 64k -vcodec copy -flush_packets 1 -f flv '%s'", 'create_cmd_args' => ['requestfile', 'outpathext'], 'ext' => 'flv',
             'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/flv_player.html', 'minsize' => '1048576'},
@@ -1579,14 +1581,14 @@ my @routes = (
         '/play_audio', sub {
             my ($request) = @_;
             my $buf = '<audio controls autoplay src="get_video?' . $request->{'qs'}{'querystring'} . '">Terrible</audio>';            
-	        $request->SendLocalBuf($buf, 'text/html');
+            $request->SendLocalBuf($buf, 'text/html');
         }
     ],
     [
         '/play_video', sub {
             my ($request) = @_;
             my $buf = '<video controls autoplay src="get_video?' . $request->{'qs'}{'querystring'} . '">Terrible</video>';            
-	        $request->SendLocalBuf($buf, 'text/html');
+            $request->SendLocalBuf($buf, 'text/html');
         }
     ],
     # otherwise attempt to send a file from droot
@@ -1624,13 +1626,13 @@ sub get_video {
     if(defined($qs->{'name'})) {        
         my $src_file;
         if($src_file = video_file_lookup($qs->{'name'})) {
-	        $video{'src_file'} = $src_file;
+            $video{'src_file'} = $src_file;
             $video{'out_base'} = $src_file->{'name'};
         }
         elsif($src_file = media_file_search($qs->{'name'})) {
-	        say "useragent: " . $header->{'User-Agent'};
+            say "useragent: " . $header->{'User-Agent'};
             if($header->{'User-Agent'} !~ /^VLC\/2\.\d+\.\d+\s/) {                
-	            my $url = 'get_video?' . $qs->{'querystring'};
+                my $url = 'get_video?' . $qs->{'querystring'};
                 my $qname = uri_escape($src_file->{'qname'});
                 $url =~ s/name=[^&]+/name=$qname/;
                 say "url: $url";
@@ -1663,8 +1665,8 @@ sub get_video {
     my $fmt = $video{'out_fmt'};
     # soon https://github.com/video-dev/hls.js/pull/1899
     $video{'out_base'} = space2us($video{'out_base'}) if ($video{'out_fmt'} eq 'hls');
-	$video{'out_location'} = $SETTINGS->{'VIDEO_TMPDIR'} . '/' . $video{'out_base'};
-	$video{'out_filepath'} = $video{'out_location'} . '/' . $video{'out_base'} . '.' . $VIDEOFORMATS{$video{'out_fmt'}}->{'ext'};
+    $video{'out_location'} = $SETTINGS->{'VIDEO_TMPDIR'} . '/' . $video{'out_base'};
+    $video{'out_filepath'} = $video{'out_location'} . '/' . $video{'out_base'} . '.' . $VIDEOFORMATS{$video{'out_fmt'}}->{'ext'};
     $video{'base_url'} = 'tmp/' . $video{'out_base'} . '/';
     if($video{'out_fmt'} eq 'noconv') {
         $video{'out_filepath'} = $video{'src_file'}->{'filepath'};    
@@ -1692,9 +1694,9 @@ sub get_video {
         $request->SendFile($tmpfile);                
     }
     elsif( defined($VIDEOFORMATS{$fmt}->{'create_cmd'})) {
-	    mkdir($video{'out_location'});
-	    say "FAILED to LOCK" if(($VIDEOFORMATS{$fmt}->{'lock'} == 1) && (LOCK_WRITE($video{'out_filepath'}) != 1));                       
-	    if($VIDEOFORMATS{$fmt}->{'create_cmd'}[0] ne '') {
+        mkdir($video{'out_location'});
+        say "FAILED to LOCK" if(($VIDEOFORMATS{$fmt}->{'lock'} == 1) && (LOCK_WRITE($video{'out_filepath'}) != 1));                       
+        if($VIDEOFORMATS{$fmt}->{'create_cmd'}[0] ne '') {
             my @cmd;
             foreach my $cmdpart (@{$VIDEOFORMATS{$fmt}->{'create_cmd'}}) {
                 if($cmdpart =~ /^\$/) {
@@ -1710,18 +1712,18 @@ sub get_video {
             if($fmt eq 'hls') {                    
                 $video{'on_exists'} = \&video_hls_write_master_playlist;                                         
             }
-	        elsif($fmt eq 'dash') {
+            elsif($fmt eq 'dash') {
                 $video{'on_exists'} = \&video_dash_check_ready;
-	        }            
-	        ASYNC_ARR(\&shellcmd_unlock, \@cmd, $video{'out_filepath'});            
+            }            
+            ASYNC_ARR(\&shellcmd_unlock, \@cmd, $video{'out_filepath'});            
         }           
         else {
             $request->Send404;
-	        return undef;
+            return undef;
         }        
         
         # our file isn't ready yet, so create a timer to check the progress and act
-        weaken($request); # the only one who should be keeping $request alive is $client        	        
+        weaken($request); # the only one who should be keeping $request alive is $client                    
         $request->{'client'}{'server'}{'evp'}->add_timer(0, 0, sub {
             if(! defined $request) {
                 say "\$request undef, ignoring CB";
@@ -1761,11 +1763,11 @@ sub video_file_lookup {
     
     my $filepath;
     foreach my $location (@locations) {
-	    my $absolute = abs_path("$location/$filename");
+        my $absolute = abs_path("$location/$filename");
         if($absolute && -e $absolute  && ($absolute =~ /^$location/)) {
-	        $filepath = $absolute;
-	        last;
-	    }
+            $filepath = $absolute;
+            last;
+        }
     }    
     return if(! $filepath);
 
@@ -1791,7 +1793,7 @@ sub video_get_streams {
            $current_stream = $1;
            $current_element = { 'sindex' => $current_stream, 'lang' => $2, 'fmt' => $4, 'additional' => $5, 'metadata' => '' };
            $current_element->{'is_default'} = 1 if($current_element->{'fmt'} =~ /\(default\)$/i);
-	       $current_element->{'is_forced'} = 1 if($current_element->{'fmt'} =~ /FORCED/i);
+           $current_element->{'is_forced'} = 1 if($current_element->{'fmt'} =~ /FORCED/i);
            if($type =~ /audio/i) {
                push @{$video->{'audio'}} , $current_element;       
            }
@@ -1836,7 +1838,7 @@ sub video_hls_write_master_playlist {
     foreach my $line (split("\n", $m3ucontent)) {
         if($line =~ /^(.+)\.m3u8_v$/) {                 
             $subm3u = "tmp/$1/$1";
-             $line = $subm3u . '.m3u8_v';	        	    
+             $line = $subm3u . '.m3u8_v';                   
         }
         $newm3ucontent .= $line . "\n";
     }
@@ -1852,12 +1854,12 @@ sub video_hls_write_master_playlist {
         say "subm3u $subm3u";
         my $default = 'NO';
         my $forced =  'NO';
-        foreach my $sub (@{$video->{'subtitle'}}) {	        
+        foreach my $sub (@{$video->{'subtitle'}}) {         
             $default = 'YES' if($sub->{'is_default'});
             $forced = 'YES' if($sub->{'is_forced'});     
         }
         # assume its in english
-        $newm3ucontent .= '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="English",DEFAULT='.$default.',FORCED='.$forced.',URI="' . $subm3u . '",LANGUAGE="en"' . "\n";	                       
+        $newm3ucontent .= '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="English",DEFAULT='.$default.',FORCED='.$forced.',URI="' . $subm3u . '",LANGUAGE="en"' . "\n";                         
     }
     write_file($requestfile, $newm3ucontent);
     return 1;
