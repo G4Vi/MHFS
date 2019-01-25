@@ -285,7 +285,7 @@ package HTTP::BS::Server::Util {
     use Exporter 'import';
     use File::Find;
     use Cwd qw(abs_path getcwd);
-    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC_ARR', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'ASYNC', 'shell_stdout', 'shell_escape');
+    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC_ARR', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'ASYNC', 'shell_stdout', 'shell_escape', 'ssh_stdout');
     sub LOCK_GET_LOCKDATA {
         my ($filename) = @_;
         my $lockname = "$filename.lock";    
@@ -424,6 +424,11 @@ package HTTP::BS::Server::Util {
     	<$cmdh>;
         }
     }
+
+    sub ssh_stdout {
+        my $source = shift;
+	return shell_stdout('ssh', $source->{'userhost'}, '-p', $source->{'port'}, @_);
+    }
     
     sub shell_escape {
         my ($cmd) = @_;
@@ -443,6 +448,7 @@ package HTTP::BS::Server::Client::Request {
     use IO::Poll qw(POLLIN POLLOUT POLLHUP);
 	use Data::Dumper;
     use Scalar::Util qw(weaken);
+    use IPC::Open3;    
     sub new {
 	    my ($class, $client, $indataRef) = @_;        
 		my %self = ( 'client' => $client);
@@ -505,7 +511,8 @@ package HTTP::BS::Server::Client::Request {
                      if(($method =~ /^HEAD|GET$/i) ) {
                          $self{'path'} = \%pathStruct;
                          $self{'qs'} = \%qsStruct;
-                         $self{'header'} = \%headerStruct;                        
+                         $self{'header'} = \%headerStruct;
+			 $self{'request'} = $$indataRef;
                          _Handle(\%self);
                          return \%self;              
                      }              
@@ -683,7 +690,7 @@ package HTTP::BS::Server::Client::Request {
         my $start = $self->{'header'}{'_RangeStart'};
         my $end = $self->{'header'}{'_RangeEnd'};
         binmode($FH);
-        seek($FH, $start // 0, 0);
+	#seek($FH, 0, 0); #you can't really seek on a pipe, we must create the pipe at the right point
         my %fileitem;
         $fileitem{'fh'} = $FH;	
         my $headtext;
@@ -693,15 +700,17 @@ package HTTP::BS::Server::Client::Request {
     }
 
     sub SendFromSSH {
-        my ($self, $sshsource, $filename) = @_; 
+        my ($self, $sshsource, $filename, $node) = @_; 
         my @sshcmd = ('ssh', $sshsource->{'userhost'}, '-p', $sshsource->{'port'}); 
-        my $fullescapedname = "'" . shell_escape($filename) . "'";         
-	    my $realp = shell_stdout(@sshcmd, 'realpath', $fullescapedname);
+	my $fullescapedname = "'" . shell_escape($filename) . "'";         
+	#my $realp = shell_stdout(@sshcmd, 'realpath', $fullescapedname);
         my $folder = $sshsource->{'folder'};
-        return undef if($realp !~ /^$folder/);	    
-	    my $sizeout = shell_stdout(@sshcmd , 'wc', '-c', $fullescapedname);
-        if($sizeout =~ /^([0-9]+)\s.+/) {
-            my $size = $1;
+	#return undef if($realp !~ /^$folder/);	    
+	# my $sizeout = shell_stdout(@sshcmd , 'wc', '-c', $fullescapedname);
+	#if($sizeout =~ /^([0-9]+)\s.+/) {
+	# my $size = $1;
+	{
+	    my $size = $node->[1];
             my @cmd;
             if(defined $self->{'header'}{'_RangeStart'}) {
                 my $start = $self->{'header'}{'_RangeStart'};
@@ -725,6 +734,38 @@ package HTTP::BS::Server::Client::Request {
             return 1;
         }        
 	    return undef;
+    }
+
+    sub Proxy {
+	my ($self, $proxy, $node) = @_;
+	my $requesttext = $self->{'request'};
+        my $webpath = quotemeta $self->{'client'}{'server'}{'settings'}{'WEBPATH'};
+	my @lines = split('\r\n', $requesttext);
+	my @outlines = (shift @lines);
+	$outlines[0] =~ s/^(GET|HEAD)\s+$webpath\/?/$1 \//;
+        push @outlines, (shift @lines);
+	my $host = $proxy->{'httphost'};
+	$outlines[1] =~ s/^(Host\:\s+[^\s]+)/Host\: $host/;
+	foreach my $line (@lines) {
+            next if($line =~ /^X\-Real\-IP/);
+	    push @outlines, $line;
+	}
+	my $newrequest = '';
+	foreach my $outline(@outlines) {
+	    $newrequest .= $outline . "\r\n";
+	}
+	$newrequest .= "\r\n";
+	print $newrequest;
+	write_file('test.http', $newrequest);
+	die;
+	my ($in, $out, $err);
+        use Symbol 'gensym'; $err = gensym;
+        my $pid = open3($in, $out, $err, ('nc', $host, $proxy->{'httpport'})) or die "BAD NC";
+	print $in $newrequest;
+	my $size = $node->[1] if $node;
+	my %fileitem = ('fh' => $out, 'length' => $size // 99999999999);
+	$self->_SendResponse(\%fileitem);
+	return 1;
     }
 
     sub SendLocalBuf {
@@ -1163,8 +1204,9 @@ package MusicLibrary {
     use Encode qw(decode encode);
     use IPC::Open3;
     use Storable;
+    use Fcntl ':mode';
     
-    sub BuildLibrary {
+    sub BuildLibrary_orig {
         my ($path) = @_;        
         if(!(-d $path)){
 	    return undef if($path !~ /\.(flac|mp3|m4a|wav|ogg|webm)$/); 
@@ -1189,6 +1231,37 @@ package MusicLibrary {
         return undef if( scalar(@tree) eq 1);
         return \@tree;
     }
+
+    sub BuildLibrary {
+    my ($path) = @_;        
+        my $statinfo = stat($path);
+        return undef if(! $statinfo);       
+        if(!S_ISDIR($statinfo->mode)){
+	    return undef if($path !~ /\.(flac|mp3|m4a|wav|ogg|webm)$/); 
+            return [basename($path), $statinfo->size];          
+        } 
+        else {
+            my $dir;
+            if(! opendir($dir, $path)) {
+                warn "outputdir: Cannot open directory: $path $!";
+                return undef;
+            }        
+            my @files = sort { uc($a) cmp uc($b)} (readdir $dir);
+            closedir($dir);
+            my @tree;
+            my $size = 0;
+            foreach my $file (@files) {
+                next if(($file eq '.') || ($file eq '..'));
+	            if(my $file = BuildLibrary("$path/$file")) {
+                        push @tree, $file;
+                        $size += $file->[1];
+	            }                   
+            }
+            return undef if( $size eq 0);
+            return [basename($path), $size, \@tree];
+       } 
+        
+}
 
     sub GetPrompt {
 	my ($out, $dir) = @_;
@@ -1228,30 +1301,26 @@ package MusicLibrary {
     sub ToHTML {
         my ($files) = @_;
         my $buf = '';
-        if(ref($files) eq 'ARRAY') {
-            my $dir = shift @$files;                        
-            #chop $dir;
+	my $name = encode_entities(decode('UTF-8', $files->[0]));
+        if($files->[2]) {
+            my $dir = $files->[0];                        
             $buf .= '<td>';
             $buf .= '<table border="1" class=tbl_track">';
             $buf .= '<tbody>';
             $buf .= '<tr>';
-            $dir = decode('UTF-8', $dir);   
-            $buf .= '<th>' . encode_entities($dir) . '</th>';            
+            $buf .= '<th>' . $name . '</th>';            
             $buf .= '<th>Play</th><th>Queue</th>';
             $buf .= '</tr>';
-            foreach my $file (@$files) {
+            foreach my $file (@{$files->[2]}) {
                 $buf .= '<tr>' . ToHTML($file) . '</tr>';           
             }            
             $buf .= '</tbody></table>';  
             $buf .= '</td>';            
         }
         else {           
-            $files = decode('UTF-8', $files);
-            $buf .= '<td>' . encode_entities($files) . '</td>';
+            $buf .= '<td>' . $name . '</td>';
             $buf .= '<td>Play</td><td>Queue</td>';                    
         }
-        #say $buf;
-        #die;
         return $buf;   
     }
     
@@ -1259,9 +1328,6 @@ package MusicLibrary {
         my ($self) = @_;
         my $buf = '';
         foreach my $file (@{$self->{'library'}}) {
-	    if(ref($file) eq 'ARRAY') {
-		#say $file->[0];
-            }
             $buf .= ToHTML($file);
         }      
         $self->{'html'} = $buf;  
@@ -1275,8 +1341,6 @@ package MusicLibrary {
     sub BuildLibraries {
 	my ($self, $sources) = @_;
 	my @wholeLibrary;
-	my @wholeStrings;
-	my @wholeArrays;
 	$self->{'sources'} = [];
 	foreach my $source (@{$sources}) {
 	    my $lib;
@@ -1285,9 +1349,6 @@ package MusicLibrary {
             $lib = BuildLibrary($source->{'folder'});
 		    $source->{'SendFile'} //= sub   {
                 my ($request, $file) = @_;
-		        $file = abs_path($file);
-		        return undef if(! $file);
-		        return undef if($file !~ /^$folder/);
 		        return undef if(! -e $file);
 		        $request->SendLocalFile($file);
 		        return 1;
@@ -1296,28 +1357,29 @@ package MusicLibrary {
 	    elsif($source->{'type'} eq 'ssh') {
 		    $lib = $self->BuildRemoteLibrary($source);
 		    $source->{'SendFile'} //= sub {
-		        my ($request, $file) = @_;               
-                return $request->SendFromSSH($source, $file);
+		        my ($request, $file, $node) = @_;               
+                        return $request->SendFromSSH($source, $file, $node);
+		    };
+	    }
+	    elsif($source->{'type'} eq 'mhfs') {
+		    $source->{'type'} = 'ssh';
+		    $lib = $self->BuildRemoteLibrary($source);
+		    if(!$source->{'httphost'}) {
+			$source->{'httphost'} =  ssh_stdout($source, 'curl', 'ipinfo.io/ip');
+		        chop $source->{'httphost'};
+			$source->{'httpport'} //= 8000;
+		    }
+		    $source->{'SendFile'} //= sub {
+			my ($request, $file, $node) = @_;
+			return $request->Proxy($source, $node);
 		    };
 	    }
 	    if($lib) {
-		shift (@{$lib});
-		$source->{'lib'} = $lib;
 		push @{$self->{'sources'}}, $source;
-
-		OUTER: foreach my $item (@{$lib}) {
-		    my $isunq = 1;
-		    if(ref($item) eq 'ARRAY') {
-			foreach my $whole (@wholeArrays) {
-			    next OUTER if($item->[0] eq $whole->[0]);
-			}
-			push @wholeArrays, $item;
-		    }
-		    else {
-			foreach my $whole (@wholeStrings) {
-			    next OUTER if($item eq $whole);
-			}
-			push @wholeStrings, $item;
+                $source->{'lib'} = $lib;
+		OUTER: foreach my $item (@{$lib->[2]}) {
+		    foreach my $already (@wholeLibrary) {
+		        next OUTER if($already->[0] eq $item->[0]);
 		    }
 		    push @wholeLibrary, $item;
 		}
@@ -1332,15 +1394,28 @@ package MusicLibrary {
     }
 
     sub FindInLibrary {
-	my ($lib, $path);
+	my ($lib, $name) = @_;
+	my @namearr = split('/', $name);
+	FindInLibrary_Outer: foreach my $component (@namearr) {
+            foreach my $libcomponent (@{$lib->[2]}) {
+                if($libcomponent->[0] eq $component) {
+                    $lib = $libcomponent;
+		    next FindInLibrary_Outer;
+		}
+	    }
+	    return undef;
+	}
+	return $lib;
     }
 
     sub SendFromLibrary {
 	my ($self, $request) = @_;
 	foreach my $source (@{$self->{'sources'}}) {
+            my $node = FindInLibrary($source->{'lib'}, $request->{'qs'}{'name'});
+	    next if ! $node;
+
 	    my $tfile = $source->{'folder'} . '/' . $request->{'qs'}{'name'};
-	    # source must validate this filepath
-            if($source->{'SendFile'}->($request, $tfile)) {
+            if($source->{'SendFile'}->($request, $tfile, $node)) {
 	        return 1;
 	    } 
 	}
