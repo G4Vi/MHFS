@@ -1,8 +1,9 @@
 perl:
 Any::URI::Escape 
 apt-get install libany-uri-escape-perl
-
+htmml escape?
 JSON
+Storable
 
 binaries:
 ffmpeg

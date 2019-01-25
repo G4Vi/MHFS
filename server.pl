@@ -175,12 +175,17 @@ package HTTP::BS::Server {
         # load the plugins        
         foreach my $plugin (@{$plugins}) {            
             foreach my $timer (@{$plugin->{'timers'}}) {                              
-                $self{'evp'}->add_timer(@{$timer});
-                if(my $func = $plugin->{'uploader'}) {
-                    say "adding function";
-                    push (@{$self{'uploaders'}}, $func);
-                }                                
+                $self{'evp'}->add_timer(@{$timer});                                                
             }
+            if(my $func = $plugin->{'uploader'}) {
+                say "adding function";
+                push (@{$self{'uploaders'}}, $func);
+            }
+            foreach my $route (@{$plugin->{'routes'}}) {
+                say "adding route";
+                push @{$self{'routes'}}, $route;                
+            }
+             
         }            
         
         $evp->run(0.1);
@@ -280,7 +285,7 @@ package HTTP::BS::Server::Util {
     use Exporter 'import';
     use File::Find;
     use Cwd qw(abs_path getcwd);
-    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC_ARR', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'ASYNC', 'shell_stdout');
+    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC_ARR', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'ASYNC', 'shell_stdout', 'shell_escape');
     sub LOCK_GET_LOCKDATA {
         my ($filename) = @_;
         my $lockname = "$filename.lock";    
@@ -323,7 +328,7 @@ package HTTP::BS::Server::Util {
         return do {
             local $/ = undef;
             if(!(open my $fh, "<", $filename)) {
-                #say "could not open $filename: $!";
+                say "could not open $filename: $!";
                 return -1;
             }
             else {
@@ -418,6 +423,12 @@ package HTTP::BS::Server::Util {
         open(my $cmdh, '-|', @_) or die("shell_stdout $!");
     	<$cmdh>;
         }
+    }
+    
+    sub shell_escape {
+        my ($cmd) = @_;
+        ($cmd) =~ s/'/'"'"'/g;
+        return $cmd;
     }
 }
 
@@ -664,6 +675,56 @@ package HTTP::BS::Server::Client::Request {
         
         $fileitem{'buf'} = $$headtext;
         $self->_SendResponse(\%fileitem);        
+    }
+
+    sub SendPipe {
+        my ($self, $FH, $filename, $filelength, $mime) = @_;
+        $mime //= $self->{'client'}{'server'}->getMIME($filename);
+        my $start = $self->{'header'}{'_RangeStart'};
+        my $end = $self->{'header'}{'_RangeEnd'};
+        binmode($FH);
+        seek($FH, $start // 0, 0);
+        my %fileitem;
+        $fileitem{'fh'} = $FH;	
+        my $headtext;
+        ($fileitem{'length'}, $headtext) = $self->_BuildHeaders($filelength, $mime, $filename);
+        $fileitem{'buf'} = $$headtext;
+        $self->_SendResponse(\%fileitem);
+    }
+
+    sub SendFromSSH {
+        my ($self, $sshsource, $filename) = @_; 
+        my @sshcmd = ('ssh', $sshsource->{'userhost'}, '-p', $sshsource->{'port'}); 
+        my $fullescapedname = "'" . shell_escape($filename) . "'";         
+	    my $realp = shell_stdout(@sshcmd, 'realpath', $fullescapedname);
+        my $folder = $sshsource->{'folder'};
+        return undef if($realp !~ /^$folder/);	    
+	    my $sizeout = shell_stdout(@sshcmd , 'wc', '-c', $fullescapedname);
+        if($sizeout =~ /^([0-9]+)\s.+/) {
+            my $size = $1;
+            my @cmd;
+            if(defined $self->{'header'}{'_RangeStart'}) {
+                my $start = $self->{'header'}{'_RangeStart'};
+                my $end = $self->{'header'}{'_RangeEnd'};
+                my $bytestoskip =  $start;
+                my $count;
+                if($end) {
+                    $count = $end - $start + 1;
+                }
+                else {
+                    $count = $size - $start;
+                }
+                @cmd = (@sshcmd, 'dd', 'skip='.$bytestoskip, 'count='.$count, 'bs=1', 'if='.$fullescapedname);
+            }
+            else{
+                @cmd = (@sshcmd, 'cat', $fullescapedname);
+            }
+            open(my $cmdh, '-|', @cmd) or die("SendFromSSH $!");
+            
+            $self->SendPipe($cmdh, basename($filename), $size);            
+            return 1;
+        }        
+	    return undef;
     }
 
     sub SendLocalBuf {
@@ -1088,7 +1149,237 @@ package GDRIVE {
 }
 
 
+package MusicLibrary {
+    use strict; use warnings;
+    use feature 'say';
+    use Cwd qw(abs_path getcwd);
+    use File::Find;
+    use Data::Dumper;
+    use File::stat;
+    use File::Basename;
+    use Scalar::Util qw(looks_like_number);
+    use HTML::Entities;
+    HTTP::BS::Server::Util->import();
+    use Encode qw(decode encode);
+    use IPC::Open3;
+    use Storable;
+    
+    sub BuildLibrary {
+        my ($path) = @_;        
+        if(!(-d $path)){
+	    return undef if($path !~ /\.(flac|mp3|m4a|wav|ogg|webm)$/); 
+            return basename($path);
+        }        
+        my $dir;
+        if(! opendir($dir, $path)) {
+            warn "outputdir: Cannot open directory: $path $!";
+            return "";
+        }        
+        my @files = sort { uc($a) cmp uc($b)} (readdir $dir);
+        closedir($dir);
+        my @tree;
+        push @tree, basename($path);
+        foreach my $file (@files) {
+            next if(($file eq '.') || ($file eq '..'));
+	    if(my $file = BuildLibrary("$path/$file")) {
+                push @tree, $file;
+	    }
+            #say $file;            
+        }
+        return undef if( scalar(@tree) eq 1);
+        return \@tree;
+    }
+
+    sub GetPrompt {
+	my ($out, $dir) = @_;
+	#$dir = quotemeta $dir;
+	my ($temp, $buf);
+	while(read $out, $temp, 1) {
+	    $buf .= $temp;
+	    return $buf if($buf =~ /$dir\$$/);
+	}
+	return undef;
+    }
+
+    sub BuildRemoteLibrary {
+        my ($self, $source) = @_;
+	return undef if($source->{'type'} ne 'ssh');
+        my $bin = $self->{'settings'}{'BIN'};
+	my $aslibrary = $self->{'settings'}{'BINDIR'} . '/aslibrary.pl';
+	my $userhost = $source->{'userhost'};
+	my $port = $source->{'port'};
+	my $folder = $source->{'folder'};
+
+	system ('ssh', $userhost, '-p', $port, 'mkdir', '-p', 'MHFS');
+	system ('rsync', '-az', '-e', "ssh -p $port", $bin, "$userhost:MHFS/" . basename($bin));
+	system ('rsync', '-az', '-e', "ssh -p $port", $aslibrary, "$userhost:MHFS/" . basename($aslibrary));
+        	
+
+	my $buf = shell_stdout('ssh', $userhost, '-p', $port, 'MHFS/aslibrary.pl', 'MHFS/server.pl', $folder);
+	if(! $buf) {
+	    say "failed to read";
+	    return undef;
+	}
+	write_file('music.db', $buf);
+	my $lib = retrieve('music.db');
+	return $lib;
+    }
+    
+    sub ToHTML {
+        my ($files) = @_;
+        my $buf = '';
+        if(ref($files) eq 'ARRAY') {
+            my $dir = shift @$files;                        
+            #chop $dir;
+            $buf .= '<td>';
+            $buf .= '<table border="1" class=tbl_track">';
+            $buf .= '<tbody>';
+            $buf .= '<tr>';
+            $dir = decode('UTF-8', $dir);   
+            $buf .= '<th>' . encode_entities($dir) . '</th>';            
+            $buf .= '<th>Play</th><th>Queue</th>';
+            $buf .= '</tr>';
+            foreach my $file (@$files) {
+                $buf .= '<tr>' . ToHTML($file) . '</tr>';           
+            }            
+            $buf .= '</tbody></table>';  
+            $buf .= '</td>';            
+        }
+        else {           
+            $files = decode('UTF-8', $files);
+            $buf .= '<td>' . encode_entities($files) . '</td>';
+            $buf .= '<td>Play</td><td>Queue</td>';                    
+        }
+        #say $buf;
+        #die;
+        return $buf;   
+    }
+    
+    sub LibraryHTML {
+        my ($self) = @_;
+        my $buf = '';
+        foreach my $file (@{$self->{'library'}}) {
+	    if(ref($file) eq 'ARRAY') {
+		#say $file->[0];
+            }
+            $buf .= ToHTML($file);
+        }      
+        $self->{'html'} = $buf;  
+    }
+
+    sub SendLibrary {
+        my ($self, $request) = @_;
+        return $request->SendLocalBuf($self->{'html'}, "text/html; charset=utf-8");
+    }
+
+    sub BuildLibraries {
+	my ($self, $sources) = @_;
+	my @wholeLibrary;
+	my @wholeStrings;
+	my @wholeArrays;
+	$self->{'sources'} = [];
+	foreach my $source (@{$sources}) {
+	    my $lib;
+	    my $folder = quotemeta $source->{'folder'};
+	    if($source->{'type'} eq 'local') {
+            $lib = BuildLibrary($source->{'folder'});
+		    $source->{'SendFile'} //= sub   {
+                my ($request, $file) = @_;
+		        $file = abs_path($file);
+		        return undef if(! $file);
+		        return undef if($file !~ /^$folder/);
+		        return undef if(! -e $file);
+		        $request->SendLocalFile($file);
+		        return 1;
+		    };		
+	    }
+	    elsif($source->{'type'} eq 'ssh') {
+		    $lib = $self->BuildRemoteLibrary($source);
+		    $source->{'SendFile'} //= sub {
+		        my ($request, $file) = @_;               
+                return $request->SendFromSSH($source, $file);
+		    };
+	    }
+	    if($lib) {
+		shift (@{$lib});
+		$source->{'lib'} = $lib;
+		push @{$self->{'sources'}}, $source;
+
+		OUTER: foreach my $item (@{$lib}) {
+		    my $isunq = 1;
+		    if(ref($item) eq 'ARRAY') {
+			foreach my $whole (@wholeArrays) {
+			    next OUTER if($item->[0] eq $whole->[0]);
+			}
+			push @wholeArrays, $item;
+		    }
+		    else {
+			foreach my $whole (@wholeStrings) {
+			    next OUTER if($item eq $whole);
+			}
+			push @wholeStrings, $item;
+		    }
+		    push @wholeLibrary, $item;
+		}
+	    }
+	    else {
+		$source->{'lib'} = undef;
+	    }
+	}
+	$self->{'library'} = \@wholeLibrary;
+	$self->LibraryHTML;
+	return \@wholeLibrary;
+    }
+
+    sub FindInLibrary {
+	my ($lib, $path);
+    }
+
+    sub SendFromLibrary {
+	my ($self, $request) = @_;
+	foreach my $source (@{$self->{'sources'}}) {
+	    my $tfile = $source->{'folder'} . '/' . $request->{'qs'}{'name'};
+	    # source must validate this filepath
+            if($source->{'SendFile'}->($request, $tfile)) {
+	        return 1;
+	    } 
+	}
+	$request->Send404;
+    }
+    
+    sub new {
+    	my ($class, $settings) = @_;
+        my $self =  {'settings' => $settings};
+    	bless $self, $class;  
+
+	say "building music library";
+        $self->{'library'} = $self->BuildLibraries($settings->{'MUSICLIBRARY'}{'sources'});
+        say "done build libraries";
+        $self->{'routes'} = [
+            [ '/music', sub {
+                my ($request) = @_;
+                return $self->SendLibrary($request);        
+            }],
+            [ '/music_force', sub {
+		my ($request) = @_;
+                $self->{'library'} = $self->BuildLibraries($settings->{'MUSICLIBRARY'}{'sources'}); 
+		return $self->SendLibrary($request);
+	    }],
+            [ '/music_dl', sub {
+		my ($request) = @_;
+		return $self->SendFromLibrary($request);
+	    }], 
+        ];
+        
+        return $self;
+    }
+
+    1;
+}
+
+
 package App::MHFS; #Media Http File Server
+unless (caller) {
 use strict; use warnings;
 use feature 'say';
 use Data::Dumper;
@@ -1134,6 +1425,7 @@ if(! $SETTINGS->{'DROOT_IGNORE'}) {
     my $BINNAME = quotemeta $0;
     $SETTINGS->{'DROOT_IGNORE'} = qr/^$droot\/(?:(?:\..*)|(?:$BINNAME))/;
 }
+$SETTINGS->{'BIN'} = abs_path(__FILE__);
 $SETTINGS->{'XSEND'} //= 0;
 $SETTINGS->{'WEBPATH'} ||= '/';
 $SETTINGS->{'DOMAIN'} ||= "127.0.0.1";     
@@ -1152,6 +1444,7 @@ if(defined $SETTINGS->{'GDRIVE'}) {
     push @plugins, GDRIVE->new($SETTINGS); 
     say "GDRIVE plugin Enabled";
 }
+push @plugins, MusicLibrary->new($SETTINGS);
 my $EXT_SOURCE_SITES = $SETTINGS->{'EXT_SOURCE_SITES'};
 
 # make the temp dirs
@@ -1240,6 +1533,8 @@ my @routes = (
         }       
     }
 );
+
+
 
         
 my $server = HTTP::BS::Server->new($SETTINGS, \@routes, \@plugins);
@@ -1615,4 +1910,7 @@ sub output_dir {
 }
 
 
+
+}
+1;
 
