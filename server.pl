@@ -205,7 +205,7 @@ package HTTP::BS::Server {
         say "-------------------------------------------------";
         say "NEW CONN " . $csock->peerhost() . ':' . $csock->peerport();                   
         
-        my $MAX_TIME_WITHOUT_SEND = 300; #600;
+        my $MAX_TIME_WITHOUT_SEND = 30; #600;
         my $cref = HTTP::BS::Server::Client->new($csock, $server);
                
         $server->{'evp'}->set($csock, $cref, POLLIN | $EventLoop::Poll::ALWAYSMASK);    
@@ -743,6 +743,7 @@ package HTTP::BS::Server::Client::Request {
     my @lines = split('\r\n', $requesttext);
     my @outlines = (shift @lines);
     $outlines[0] =~ s/^(GET|HEAD)\s+$webpath\/?/$1 \//;
+    $outlines[0] =~ s/music_dl(\?name=[^\s])/get_video$1&fmt=noconv/; 
         push @outlines, (shift @lines);
     my $host = $proxy->{'httphost'};
     $outlines[1] =~ s/^(Host\:\s+[^\s]+)/Host\: $host/;
@@ -756,8 +757,8 @@ package HTTP::BS::Server::Client::Request {
     }
     $newrequest .= "\r\n";
     print $newrequest;
-    write_file('test.http', $newrequest);
-    die;
+    #write_file('test.http', $newrequest);
+   
     my ($in, $out, $err);
         use Symbol 'gensym'; $err = gensym;
         my $pid = open3($in, $out, $err, ('nc', $host, $proxy->{'httpport'})) or die "BAD NC";
@@ -909,8 +910,7 @@ package HTTP::BS::Server::Client {
         
         do {
             # Try to send the buf if set
-            if(defined $buf) {
-                $client->{'time'} = clock_gettime(CLOCK_MONOTONIC);
+            if(defined $buf) {                
                 use bytes;
                 #my $n = length($buf);
                 my $remdata = TrySendItem($csock, $buf, $bytesToSend);        
@@ -919,14 +919,16 @@ package HTTP::BS::Server::Client {
                     say "-------------------------------------------------";
                     return undef;
                 }
+                # only update the time if we actually sent some data
+                if($remdata ne $buf) {
+                    $client->{'time'} = clock_gettime(CLOCK_MONOTONIC);
+                }
                 # eagain or not all data sent
-                elsif($remdata ne '') {
-                    $dataitem->{'buf'} = $remdata;                    
+                if($remdata ne '') {
+                    $dataitem->{'buf'} = $remdata;                                        
                     return '';
                 }
-                else {
-                    #we sent the full buf
-                }
+                #we sent the full buf                
                 $buf = undef;                
             }
             
@@ -1358,17 +1360,18 @@ package MusicLibrary {
             $lib = $self->BuildRemoteLibrary($source);
             $source->{'SendFile'} //= sub {
                 my ($request, $file, $node) = @_;               
-                        return $request->SendFromSSH($source, $file, $node);
+                return $request->SendFromSSH($source, $file, $node);
             };
         }
         elsif($source->{'type'} eq 'mhfs') {
             $source->{'type'} = 'ssh';
             $lib = $self->BuildRemoteLibrary($source);
             if(!$source->{'httphost'}) {
-            $source->{'httphost'} =  ssh_stdout($source, 'curl', 'ipinfo.io/ip');
+                $source->{'httphost'} =  ssh_stdout($source, 'curl', 'ipinfo.io/ip');
                 chop $source->{'httphost'};
-            $source->{'httpport'} //= 8000;
+                $source->{'httpport'} //= 8000;
             }
+            say "MHFS host at " . $source->{'httphost'} . ':' . $source->{'httpport'};
             $source->{'SendFile'} //= sub {
             my ($request, $file, $node) = @_;
             return $request->Proxy($source, $node);
@@ -1428,7 +1431,7 @@ package MusicLibrary {
         bless $self, $class;  
 
     say "building music library";
-        $self->{'library'} = $self->BuildLibraries($settings->{'MUSICLIBRARY'}{'sources'});
+        $self->BuildLibraries($settings->{'MUSICLIBRARY'}{'sources'});
         say "done build libraries";
         $self->{'routes'} = [
             [ '/music', sub {
@@ -1437,8 +1440,8 @@ package MusicLibrary {
             }],
             [ '/music_force', sub {
         my ($request) = @_;
-                $self->{'library'} = $self->BuildLibraries($settings->{'MUSICLIBRARY'}{'sources'}); 
-        return $self->SendLibrary($request);
+            $self->BuildLibraries($settings->{'MUSICLIBRARY'}{'sources'}); 
+            return $self->SendLibrary($request);
         }],
             [ '/music_dl', sub {
         my ($request) = @_;
