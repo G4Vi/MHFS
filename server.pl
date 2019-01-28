@@ -702,71 +702,62 @@ package HTTP::BS::Server::Client::Request {
     sub SendFromSSH {
         my ($self, $sshsource, $filename, $node) = @_; 
         my @sshcmd = ('ssh', $sshsource->{'userhost'}, '-p', $sshsource->{'port'}); 
-        my $fullescapedname = "'" . shell_escape($filename) . "'";         
-    #my $realp = shell_stdout(@sshcmd, 'realpath', $fullescapedname);
-        my $folder = $sshsource->{'folder'};
-    #return undef if($realp !~ /^$folder/);     
-    # my $sizeout = shell_stdout(@sshcmd , 'wc', '-c', $fullescapedname);
-    #if($sizeout =~ /^([0-9]+)\s.+/) {
-    # my $size = $1;
-    {
+        my $fullescapedname = "'" . shell_escape($filename) . "'";   
+        my $folder = $sshsource->{'folder'};   
         my $size = $node->[1];
-            my @cmd;
-            if(defined $self->{'header'}{'_RangeStart'}) {
-                my $start = $self->{'header'}{'_RangeStart'};
-                my $end = $self->{'header'}{'_RangeEnd'};
-                my $bytestoskip =  $start;
-                my $count;
-                if($end) {
-                    $count = $end - $start + 1;
-                }
-                else {
-                    $count = $size - $start;
-                }
-                @cmd = (@sshcmd, 'dd', 'skip='.$bytestoskip, 'count='.$count, 'bs=1', 'if='.$fullescapedname);
+        my @cmd;
+        if(defined $self->{'header'}{'_RangeStart'}) {
+            my $start = $self->{'header'}{'_RangeStart'};
+            my $end = $self->{'header'}{'_RangeEnd'};
+            my $bytestoskip =  $start;
+            my $count;
+            if($end) {
+                $count = $end - $start + 1;
             }
-            else{
-                @cmd = (@sshcmd, 'cat', $fullescapedname);
+            else {
+                $count = $size - $start;
             }
-            open(my $cmdh, '-|', @cmd) or die("SendFromSSH $!");
-            
-            $self->SendPipe($cmdh, basename($filename), $size);            
-            return 1;
-        }        
-        return undef;
+            @cmd = (@sshcmd, 'dd', 'skip='.$bytestoskip, 'count='.$count, 'bs=1', 'if='.$fullescapedname);
+        }
+        else{
+            @cmd = (@sshcmd, 'cat', $fullescapedname);
+        }
+        open(my $cmdh, '-|', @cmd) or die("SendFromSSH $!");
+        
+        $self->SendPipe($cmdh, basename($filename), $size);            
+        return 1;       
     }
 
     sub Proxy {
     my ($self, $proxy, $node) = @_;
-    my $requesttext = $self->{'request'};
+        my $requesttext = $self->{'request'};
         my $webpath = quotemeta $self->{'client'}{'server'}{'settings'}{'WEBPATH'};
-    my @lines = split('\r\n', $requesttext);
-    my @outlines = (shift @lines);
-    $outlines[0] =~ s/^(GET|HEAD)\s+$webpath\/?/$1 \//;
-    $outlines[0] =~ s/music_dl(\?name=[^\s])/get_video$1&fmt=noconv/; 
+        my @lines = split('\r\n', $requesttext);
+        my @outlines = (shift @lines);
+        $outlines[0] =~ s/^(GET|HEAD)\s+$webpath\/?/$1 \//;
+        #$outlines[0] =~ s/music_dl(\?name=[^\s]+)/get_video$1&fmt=noconv/; 
         push @outlines, (shift @lines);
-    my $host = $proxy->{'httphost'};
-    $outlines[1] =~ s/^(Host\:\s+[^\s]+)/Host\: $host/;
-    foreach my $line (@lines) {
-            next if($line =~ /^X\-Real\-IP/);
-        push @outlines, $line;
-    }
-    my $newrequest = '';
-    foreach my $outline(@outlines) {
-        $newrequest .= $outline . "\r\n";
-    }
-    $newrequest .= "\r\n";
-    print $newrequest;
-    #write_file('test.http', $newrequest);
-   
-    my ($in, $out, $err);
+        my $host = $proxy->{'httphost'};
+        $outlines[1] =~ s/^(Host\:\s+[^\s]+)/Host\: $host/;
+        foreach my $line (@lines) {
+                next if($line =~ /^X\-Real\-IP/);
+            push @outlines, $line;
+        }
+        my $newrequest = '';
+        foreach my $outline(@outlines) {
+            $newrequest .= $outline . "\r\n";
+        }
+        say "Making request via proxy:";
+        print $newrequest;
+        $newrequest .= "\r\n";  
+        my ($in, $out, $err);
         use Symbol 'gensym'; $err = gensym;
         my $pid = open3($in, $out, $err, ('nc', $host, $proxy->{'httpport'})) or die "BAD NC";
-    print $in $newrequest;
-    my $size = $node->[1] if $node;
-    my %fileitem = ('fh' => $out, 'length' => $size // 99999999999);
-    $self->_SendResponse(\%fileitem);
-    return 1;
+        print $in $newrequest;
+        my $size = $node->[1] if $node;
+        my %fileitem = ('fh' => $out, 'length' => $size // 99999999999);
+        $self->_SendResponse(\%fileitem);
+        return 1;
     }
 
     sub SendLocalBuf {
@@ -1352,6 +1343,7 @@ package MusicLibrary {
             $source->{'SendFile'} //= sub   {
                 my ($request, $file) = @_;
                 return undef if(! -e $file);
+                return undef if(-d $file); #we can't handle directories right now
                 $request->SendLocalFile($file);
                 return 1;
             };      
@@ -1374,7 +1366,7 @@ package MusicLibrary {
             say "MHFS host at " . $source->{'httphost'} . ':' . $source->{'httpport'};
             $source->{'SendFile'} //= sub {
             my ($request, $file, $node) = @_;
-            return $request->Proxy($source, $node);
+                return $request->Proxy($source, $node);
             };
         }
         if($lib) {
@@ -1412,17 +1404,18 @@ package MusicLibrary {
     }
 
     sub SendFromLibrary {
-    my ($self, $request) = @_;
-    foreach my $source (@{$self->{'sources'}}) {
+        my ($self, $request) = @_;
+        foreach my $source (@{$self->{'sources'}}) {
             my $node = FindInLibrary($source->{'lib'}, $request->{'qs'}{'name'});
-        next if ! $node;
+            next if ! $node;
 
-        my $tfile = $source->{'folder'} . '/' . $request->{'qs'}{'name'};
+            my $tfile = $source->{'folder'} . '/' . $request->{'qs'}{'name'};
             if($source->{'SendFile'}->($request, $tfile, $node)) {
-            return 1;
-        } 
-    }
-    $request->Send404;
+                return 1;
+            } 
+        }
+        say "SendFromLibrary: did not find in library, 404ing";
+        $request->Send404;
     }
     
     sub new {
