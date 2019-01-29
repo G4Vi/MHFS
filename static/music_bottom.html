@@ -1,0 +1,150 @@
+
+
+</div>
+</div>
+<div class="footer row" style="background-color:blue;">    
+  
+    <table border="1" width="80%">
+    <tr><th>Previous</th><th>Now Playing</th><th>Next</th></tr>
+	<tr><td><div id="prev_text"></div></td><td><div id="play_text"></div></td><td><div id="next_text"></div></td></tr>  
+	</table> 
+    <input type="button" value="PREV" onclick="playPreviousTrack();"><audio id="mainplayer" controls="controls" preload="none"> <source id="audio_src" src=""></source></audio><input type="button" value="NEXT" onclick="playNextTrack()">
+	
+
+</div>
+    <script>
+
+        function GetItemPath(elm) {
+            var els = [];
+            var lastitem;
+            do {                        
+                var elmtemp = elm;
+                while(elmtemp.firstChild)
+                {
+                    elmtemp = elmtemp.firstChild;
+                }
+                if(elmtemp.textContent != lastitem) {                    
+                    lastitem = elmtemp.textContent;                   
+                    els.unshift(elmtemp.textContent);
+                }                       
+                
+                elm = elm.parentNode;                        
+            }while(elm.id != 'musicdb');
+            var path = '';
+            //console.log(els);
+            els.forEach(function(part) {
+                path += part + '/';
+            });
+            path = path.slice(0, -1);
+            return path;
+        }        
+           
+        var dbarea = document.getElementById('musicdb');
+        dbarea.addEventListener('click', function(e) {
+            if(e.target !== e.currentTarget) {
+                console.log(e.target + ' clicked with text ' + e.target.textContent);
+                if(e.target.textContent == 'Queue') {
+                    path = GetItemPath(e.target.parentNode.parentNode);                    
+                    console.log("Queuing - " + path);
+                    queueTrack(path);
+                    e.preventDefault();
+                }
+                else if(e.target.textContent == 'Play') {
+                    path = GetItemPath(e.target.parentNode.parentNode);                    
+                    console.log("Playing - " + path);
+                    playTrackNow(path);
+                    e.preventDefault();
+                }
+            }
+            e.stopPropagation();        
+        });
+
+		
+        var QueueIndex = 0;
+        var TrackQueue = [];
+		var finished = true;        
+        function play_track(track_index) { 
+            QueueIndex = track_index;
+            var track = TrackQueue[track_index];           
+	        document.getElementById('audio_src').src = 'music_dl?name=' + track;
+	        document.getElementById('mainplayer').load();
+	        document.getElementById('mainplayer').play(); 
+			
+			if((track_index-1) >= 0) {
+			    document.getElementById('prev_text').innerHTML = '<span>' + TrackQueue[track_index-1] + '</span>';
+			}
+			else {
+                document.getElementById('prev_text').innerHTML = '<span></span>';
+			}
+			
+	        document.getElementById('play_text').innerHTML = '<span>' + track + '</span>';
+			
+			if((track_index+1) <= (TrackQueue.length - 1)) {
+			    document.getElementById('next_text').innerHTML = '<span>' + TrackQueue[track_index+1]+ '</span>';
+			}
+			else {
+				document.getElementById('next_text').innerHTML = '<span></span>';
+			}
+			
+			//ctrl.value = 'PAUSE';
+			finished = false;
+        }
+        
+        
+        
+        function onTrackEnd() {            
+            var track = TrackQueue[QueueIndex+1];
+            if(track) {
+                play_track(QueueIndex+1);
+            }
+            else {
+                document.getElementById('audio_src').src = "";
+                document.getElementById('mainplayer').load();
+	            document.getElementById('mainplayer').play();                 
+				finished = true;
+            }
+        }
+        document.getElementById('mainplayer').addEventListener("ended", onTrackEnd);
+        
+        
+          
+        function queueTrack(name) {
+			var track = name;
+            TrackQueue.push(track);
+			if(finished) {
+				play_track(TrackQueue.length - 1);				
+			}            
+            else if(QueueIndex <= (TrackQueue.length - 2)) {
+                document.getElementById('next_text').innerHTML = '<span>' + TrackQueue[QueueIndex+1] + '</span>';
+            }			
+        }
+
+        function playPreviousTrack() {
+			if(QueueIndex > 0) {
+                document.getElementById('mainplayer').pause();
+                play_track(QueueIndex-1);
+			}
+        }
+
+        function playNextTrack() {
+			if(QueueIndex <= (TrackQueue.length - 2)) {
+                document.getElementById('mainplayer').pause();
+                play_track(QueueIndex+1);
+			}
+        }
+
+        function playTrackNow(track) {
+			if(finished) {
+				queueTrack(track);
+			}
+			else {				
+                TrackQueue.splice(QueueIndex+1, 0, track);           
+                playNextTrack();
+			}
+        }
+    
+ 
+        
+    </script>   
+</body>
+</html>

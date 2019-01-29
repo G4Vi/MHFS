@@ -1,0 +1,49 @@
+<html>
+<head>
+<style type="text/css">
+
+.track:hover {
+    background-color: yellow;
+}
+
+
+
+
+/*https://stevesanderson.github.io/fixed-height-layouts-demo/simple.html*/
+/* Generic pane rules */
+body { margin: 0; -webkit-text-size-adjust: 100%; }
+.page { left: 0; right: 0; top: 0; bottom: 0; }
+.row, .col, .page { overflow: hidden; position: absolute; }
+.row { left: 0; right: 0; }
+.col { top: 0; bottom: 0; }
+.scroll-x { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.scroll-y { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.fill, .pane { position: absolute; left: 0; top: 0; right: 0; bottom: 0; width: 100%; height: 100% }
+.pane { display: none; }
+
+/* Workaround: in landscape mode, IEMobile makes bottom toolbar overlap the page, so shorten the page by 75px to compensate */
+.iemobile .page { bottom: -6px; }
+@media screen and (orientation:landscape) { .iemobile .page { bottom: 75px; } }
+
+.header.row { height: 75px; top: ; }
+.body.row { top: 75px; bottom: 50px; background: #000; padding: 1em; } 
+.footer.row { height: 200px; bottom: 0px; }
+.header, .footer { padding: 0 1em; }
+body { color: #ababab; background: #000; font-family: Segoe UI, Helvetica, Arial, Sans-Serif; }
+
+
+audio {
+    width: 80%; margin:20px;
+}
+
+
+
+</style>
+<title>Music</title>
+</head>
+<body>
+<div class="header row">
+<h1>Music</h1>
+</div>
+<div class="body row scroll-y">
+<div id="musicdb">
