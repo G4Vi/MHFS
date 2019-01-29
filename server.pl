@@ -882,13 +882,13 @@ package HTTP::BS::Server::Client {
             if(!defined($tsrRet)) {
                 say "-------------------------------------------------";                               
                 return undef;
-            }
-            elsif($client->{'request'}{'header'}{'Connection'} && ($client->{'request'}{'header'}{'Connection'} eq 'close')) {
-                say "Connection close header set closing conn";
-                say "-------------------------------------------------";                               
-                return undef;              
-            }
+            }            
             elsif($tsrRet ne '') {
+                if($client->{'request'}{'header'}{'Connection'} && ($client->{'request'}{'header'}{'Connection'} eq 'close')) {
+                    say "Connection close header set closing conn";
+                    say "-------------------------------------------------";                               
+                    return undef;              
+                }
                 $client->SetEvents(POLLIN | $EventLoop::Poll::ALWAYSMASK );
                 $client->onReadReady;
             }            
@@ -1306,35 +1306,41 @@ package MusicLibrary {
     sub ToHTML {
         my ($files) = @_;
         my $buf = '';
-    my $name = encode_entities(decode('UTF-8', $files->[0]));
+        my $name = encode_entities(decode('UTF-8', $files->[0]));
         if($files->[2]) {
-            my $dir = $files->[0];                        
+            my $dir = $files->[0]; 
+            $buf .= '<tr>';            
             $buf .= '<td>';
-            $buf .= '<table border="1" class=tbl_track">';
+            $buf .= '<table border="1" class="tbl_track">';
             $buf .= '<tbody>';
             $buf .= '<tr>';
             $buf .= '<th>' . $name . '</th>';            
             $buf .= '<th>Play</th><th>Queue</th>';
             $buf .= '</tr>';
             foreach my $file (@{$files->[2]}) {
-                $buf .= '<tr>' . ToHTML($file) . '</tr>';           
+                $buf .= ToHTML($file) ;      
             }            
             $buf .= '</tbody></table>';  
-            $buf .= '</td>';            
+            $buf .= '</td>';
+                        
         }
-        else {           
+        else {
+            $buf .= '<tr class="track">';        
             $buf .= '<td>' . $name . '</td>';
-            $buf .= '<td>Play</td><td>Queue</td>';                    
+            $buf .= '<td><a href="#">Play</a></td><td><a href="#">Queue</a></td>';                    
         }
+        $buf .= '</tr>';     
         return $buf;   
     }
     
     sub LibraryHTML {
         my ($self) = @_;
-        my $buf = '';
+        my $buf = read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_top.html');
         foreach my $file (@{$self->{'library'}}) {
             $buf .= ToHTML($file);
-        }      
+            $buf .= '<br>';
+        }
+        $buf .=   read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_bottom.html');      
         $self->{'html'} = $buf;  
     }
 
