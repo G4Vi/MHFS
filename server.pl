@@ -597,6 +597,9 @@ package HTTP::BS::Server::Client::Request {
         my $data = "HTTP/1.1 403 Forbidden\r\n";        
         my $mime = $client->{'server'}->getMIME('.html');
         $data .= "Content-Type: $mime\r\n";
+        if($self->{'header'}{'Connection'} && ($self->{'header'}{'Connection'} eq 'close')) {
+            $data .= "Connection: close\r\n";
+        }
         my $msg = "403 Forbidden\r\n";
         $data .= "Content-Length: " . length($msg) . "\r\n";
         $data .= "\r\n";
@@ -611,6 +614,9 @@ package HTTP::BS::Server::Client::Request {
         my $data = "HTTP/1.1 404 File Not Found\r\n";
         my $mime = $client->{'server'}->getMIME('.html');
         $data .= "Content-Type: $mime\r\n";
+        if($self->{'header'}{'Connection'} && ($self->{'header'}{'Connection'} eq 'close')) {
+            $data .= "Connection: close\r\n";
+        }
         my $msg = "404 Not Found\r\n";
         $data .= "Content-Length: " . length($msg) . "\r\n";
         $data .= "\r\n";
