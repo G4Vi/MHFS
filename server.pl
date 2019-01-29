@@ -740,9 +740,10 @@ package HTTP::BS::Server::Client::Request {
         my $host = $proxy->{'httphost'};
         $outlines[1] =~ s/^(Host\:\s+[^\s]+)/Host\: $host/;
         foreach my $line (@lines) {
-                next if($line =~ /^X\-Real\-IP/);
+            next if($line =~ /^X\-Real\-IP/);
             push @outlines, $line;
         }
+        push @outlines, 'Connection: close';
         my $newrequest = '';
         foreach my $outline(@outlines) {
             $newrequest .= $outline . "\r\n";
@@ -875,6 +876,11 @@ package HTTP::BS::Server::Client {
             if(!defined($tsrRet)) {
                 say "-------------------------------------------------";                               
                 return undef;
+            }
+            elsif($client->{'request'}{'header'}{'Connection'} && ($client->{'request'}{'header'}{'Connection'} eq 'close')) {
+                say "Connection close header set closing conn";
+                say "-------------------------------------------------";                               
+                return undef;              
             }
             elsif($tsrRet ne '') {
                 $client->SetEvents(POLLIN | $EventLoop::Poll::ALWAYSMASK );
