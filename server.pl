@@ -1209,33 +1209,7 @@ package MusicLibrary {
     use Encode qw(decode encode);
     use IPC::Open3;
     use Storable;
-    use Fcntl ':mode';
-    
-    sub BuildLibrary_orig {
-        my ($path) = @_;        
-        if(!(-d $path)){
-        return undef if($path !~ /\.(flac|mp3|m4a|wav|ogg|webm)$/); 
-            return basename($path);
-        }        
-        my $dir;
-        if(! opendir($dir, $path)) {
-            warn "outputdir: Cannot open directory: $path $!";
-            return "";
-        }        
-        my @files = sort { uc($a) cmp uc($b)} (readdir $dir);
-        closedir($dir);
-        my @tree;
-        push @tree, basename($path);
-        foreach my $file (@files) {
-            next if(($file eq '.') || ($file eq '..'));
-        if(my $file = BuildLibrary("$path/$file")) {
-                push @tree, $file;
-        }
-            #say $file;            
-        }
-        return undef if( scalar(@tree) eq 1);
-        return \@tree;
-    }
+    use Fcntl ':mode';  
 
     sub BuildLibrary {
     my ($path) = @_;        
@@ -1269,38 +1243,38 @@ package MusicLibrary {
 }
 
     sub GetPrompt {
-    my ($out, $dir) = @_;
-    #$dir = quotemeta $dir;
-    my ($temp, $buf);
-    while(read $out, $temp, 1) {
-        $buf .= $temp;
-        return $buf if($buf =~ /$dir\$$/);
-    }
-    return undef;
+        my ($out, $dir) = @_;
+        #$dir = quotemeta $dir;
+        my ($temp, $buf);
+        while(read $out, $temp, 1) {
+            $buf .= $temp;
+            return $buf if($buf =~ /$dir\$$/);
+        }
+        return undef;
     }
 
     sub BuildRemoteLibrary {
         my ($self, $source) = @_;
         return undef if($source->{'type'} ne 'ssh');
         my $bin = $self->{'settings'}{'BIN'};
-    my $aslibrary = $self->{'settings'}{'BINDIR'} . '/aslibrary.pl';
-    my $userhost = $source->{'userhost'};
-    my $port = $source->{'port'};
-    my $folder = $source->{'folder'};
-
-    #system ('ssh', $userhost, '-p', $port, 'mkdir', '-p', 'MHFS');
-    #system ('rsync', '-az', '-e', "ssh -p $port", $bin, "$userhost:MHFS/" . basename($bin));
-    system ('rsync', '-az', '-e', "ssh -p $port", $aslibrary, "$userhost:MHFS/" . basename($aslibrary));
-            
-
-    my $buf = shell_stdout('ssh', $userhost, '-p', $port, 'MHFS/aslibrary.pl', 'MHFS/server.pl', $folder);
-    if(! $buf) {
-        say "failed to read";
-        return undef;
-    }
-    write_file('music.db', $buf);
-    my $lib = retrieve('music.db');
-    return $lib;
+        my $aslibrary = $self->{'settings'}{'BINDIR'} . '/aslibrary.pl';
+        my $userhost = $source->{'userhost'};
+        my $port = $source->{'port'};
+        my $folder = $source->{'folder'};
+        
+        #system ('ssh', $userhost, '-p', $port, 'mkdir', '-p', 'MHFS');
+        #system ('rsync', '-az', '-e', "ssh -p $port", $bin, "$userhost:MHFS/" . basename($bin));
+        system ('rsync', '-az', '-e', "ssh -p $port", $aslibrary, "$userhost:MHFS/" . basename($aslibrary));
+                
+        
+        my $buf = shell_stdout('ssh', $userhost, '-p', $port, 'MHFS/aslibrary.pl', 'MHFS/server.pl', $folder);
+        if(! $buf) {
+            say "failed to read";
+            return undef;
+        }
+        write_file('music.db', $buf);
+        my $lib = retrieve('music.db');
+        return $lib;
     }
     
     sub ToHTML {
@@ -1407,18 +1381,18 @@ package MusicLibrary {
     }
 
     sub FindInLibrary {
-    my ($lib, $name) = @_;
-    my @namearr = split('/', $name);
-    FindInLibrary_Outer: foreach my $component (@namearr) {
+        my ($lib, $name) = @_;
+        my @namearr = split('/', $name);
+        FindInLibrary_Outer: foreach my $component (@namearr) {
             foreach my $libcomponent (@{$lib->[2]}) {
                 if($libcomponent->[0] eq $component) {
                     $lib = $libcomponent;
-            next FindInLibrary_Outer;
+                    next FindInLibrary_Outer;
+                }
+            }
+            return undef;
         }
-        }
-        return undef;
-    }
-    return $lib;
+        return $lib;
     }
 
     sub SendFromLibrary {
