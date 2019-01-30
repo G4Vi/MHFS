@@ -64,12 +64,9 @@
         var TrackQueue = [];
 		var finished = true;        
         function play_track(track_index) { 
-            QueueIndex = track_index;
-            var track = TrackQueue[track_index];           
-	        document.getElementById('audio_src').src = 'music_dl?name=' + track;
-	        document.getElementById('mainplayer').load();
-	        document.getElementById('mainplayer').play(); 
-			
+            
+            var track = TrackQueue[track_index] || '';
+            			
 			if((track_index-1) >= 0) {
 			    document.getElementById('prev_text').innerHTML = '<span>' + TrackQueue[track_index-1] + '</span>';
 			}
@@ -85,24 +82,23 @@
 			else {
 				document.getElementById('next_text').innerHTML = '<span></span>';
 			}
-			
-			//ctrl.value = 'PAUSE';
-			finished = false;
-        }
-        
-        
-        
-        function onTrackEnd() {            
-            var track = TrackQueue[QueueIndex+1];
-            if(track) {
-                play_track(QueueIndex+1);
+            
+            if(track != '') {            
+	            document.getElementById('audio_src').src = 'music_dl?name=' + track;	            
+                finished = false;
+                QueueIndex = track_index;
             }
             else {
                 document.getElementById('audio_src').src = "";
-                document.getElementById('mainplayer').load();
-	            document.getElementById('mainplayer').play();                 
-				finished = true;
+                finished = true;
             }
+            document.getElementById('mainplayer').load();
+	        document.getElementById('mainplayer').play(); 			
+			
+        }        
+        
+        function onTrackEnd() {           
+            play_track(QueueIndex+1);            
         }
         document.getElementById('mainplayer').addEventListener("ended", onTrackEnd);
         

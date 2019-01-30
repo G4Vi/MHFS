@@ -1264,10 +1264,8 @@ package MusicLibrary {
         
         #system ('ssh', $userhost, '-p', $port, 'mkdir', '-p', 'MHFS');
         #system ('rsync', '-az', '-e', "ssh -p $port", $bin, "$userhost:MHFS/" . basename($bin));
-        system ('rsync', '-az', '-e', "ssh -p $port", $aslibrary, "$userhost:MHFS/" . basename($aslibrary));
-                
-        
-        my $buf = shell_stdout('ssh', $userhost, '-p', $port, 'MHFS/aslibrary.pl', 'MHFS/server.pl', $folder);
+        #system ('rsync', '-az', '-e', "ssh -p $port", $aslibrary, "$userhost:MHFS/" . basename($aslibrary));        
+        my $buf = shell_stdout('ssh', $userhost, '-p', $port, 'MHFS/.bin/aslibrary.pl', 'MHFS/server.pl', $folder);
         if(! $buf) {
             say "failed to read";
             return undef;
@@ -1324,60 +1322,65 @@ package MusicLibrary {
     }
 
     sub BuildLibraries {
-    my ($self, $sources) = @_;
-    my @wholeLibrary;
-    $self->{'sources'} = [];
-    foreach my $source (@{$sources}) {
-        my $lib;
-        my $folder = quotemeta $source->{'folder'};
-        if($source->{'type'} eq 'local') {
-            $lib = BuildLibrary($source->{'folder'});
-            $source->{'SendFile'} //= sub   {
-                my ($request, $file) = @_;
-                return undef if(! -e $file);
-                return undef if(-d $file); #we can't handle directories right now
-                $request->SendLocalFile($file);
-                return 1;
-            };      
-        }
-        elsif($source->{'type'} eq 'ssh') {
-            $lib = $self->BuildRemoteLibrary($source);
-            $source->{'SendFile'} //= sub {
-                my ($request, $file, $node) = @_;               
-                return $request->SendFromSSH($source, $file, $node);
-            };
-        }
-        elsif($source->{'type'} eq 'mhfs') {
-            $source->{'type'} = 'ssh';
-            $lib = $self->BuildRemoteLibrary($source);
-            if(!$source->{'httphost'}) {
-                $source->{'httphost'} =  ssh_stdout($source, 'curl', 'ipinfo.io/ip');
-                chop $source->{'httphost'};
-                $source->{'httpport'} //= 8000;
+        my ($self, $sources) = @_;
+        my @wholeLibrary;
+        $self->{'sources'} = [];
+        foreach my $source (@{$sources}) {
+            my $lib;
+            my $folder = quotemeta $source->{'folder'};
+            if($source->{'type'} eq 'local') {
+                $lib = BuildLibrary($source->{'folder'});
+                $source->{'SendFile'} //= sub   {
+                    my ($request, $file) = @_;
+                    return undef if(! -e $file);
+                    return undef if(-d $file); #we can't handle directories right now
+                    $request->SendLocalFile($file);
+                    return 1;
+                };      
             }
-            say "MHFS host at " . $source->{'httphost'} . ':' . $source->{'httpport'};
-            $source->{'SendFile'} //= sub {
-            my ($request, $file, $node) = @_;
-                return $request->Proxy($source, $node);
-            };
-        }
-        if($lib) {
-        push @{$self->{'sources'}}, $source;
+            elsif($source->{'type'} eq 'ssh') {
+                $lib = $self->BuildRemoteLibrary($source);
+                $source->{'SendFile'} //= sub {
+                    my ($request, $file, $node) = @_;               
+                    return $request->SendFromSSH($source, $file, $node);
+                };
+            }
+            elsif($source->{'type'} eq 'mhfs') {
+                $source->{'type'} = 'ssh';
+                $lib = $self->BuildRemoteLibrary($source);
+                if(!$source->{'httphost'}) {
+                    $source->{'httphost'} =  ssh_stdout($source, 'curl', 'ipinfo.io/ip');
+                    if(!  $source->{'httphost'}) {
+                        $lib = undef;
+                    }
+                    else {
+                        chop $source->{'httphost'};
+                        $source->{'httpport'} //= 8000;
+                    }                
+                }            
+                say "MHFS host at " . $source->{'httphost'} . ':' . $source->{'httpport'} if($source->{'httphost'});
+                $source->{'SendFile'} //= sub {
+                my ($request, $file, $node) = @_;
+                    return $request->Proxy($source, $node);
+                };
+            }
+            if($lib) {
+                push @{$self->{'sources'}}, $source;
                 $source->{'lib'} = $lib;
-        OUTER: foreach my $item (@{$lib->[2]}) {
-            foreach my $already (@wholeLibrary) {
-                next OUTER if($already->[0] eq $item->[0]);
+                OUTER: foreach my $item (@{$lib->[2]}) {
+                    foreach my $already (@wholeLibrary) {
+                        next OUTER if($already->[0] eq $item->[0]);
+                    }
+                    push @wholeLibrary, $item;
+                }
             }
-            push @wholeLibrary, $item;
+            else {
+                $source->{'lib'} = undef;
+            }
         }
-        }
-        else {
-        $source->{'lib'} = undef;
-        }
-    }
-    $self->{'library'} = \@wholeLibrary;
-    $self->LibraryHTML;
-    return \@wholeLibrary;
+        $self->{'library'} = \@wholeLibrary;
+        $self->LibraryHTML;
+        return \@wholeLibrary;
     }
 
     sub FindInLibrary {
