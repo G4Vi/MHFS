@@ -329,7 +329,7 @@ package HTTP::BS::Server::Util {
             local $/ = undef;
             if(!(open my $fh, "<", $filename)) {
                 #say "could not open $filename: $!";
-                return '';
+                return undef;
             }
             else {
                 <$fh>;
