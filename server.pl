@@ -328,8 +328,8 @@ package HTTP::BS::Server::Util {
         return do {
             local $/ = undef;
             if(!(open my $fh, "<", $filename)) {
-                say "could not open $filename: $!";
-                return -1;
+                #say "could not open $filename: $!";
+                return '';
             }
             else {
                 <$fh>;
@@ -1016,7 +1016,7 @@ package HTTP::BS::Server::Client {
         my $self = shift;
         say "client destructor called";
         if($self->{'sock'}) {
-            shutdown($self->{'sock'}, 2);
+            #shutdown($self->{'sock'}, 2);
             close($self->{'sock'});  
         }
     }   
