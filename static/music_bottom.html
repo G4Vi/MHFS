@@ -37,6 +37,30 @@
             });
             path = path.slice(0, -1);
             return path;
+        } 
+
+        function GetChildTracks(nnodes) {
+            var nodes = [];        
+            for(var i = nnodes.length; i--; nodes.unshift(nnodes[i]));       
+            var tracks = [];            
+            nodes.splice(0, 1);
+            nodes.forEach( function ( node) {
+                if(node.childNodes.length == 1) {
+                    var newnodes = node.childNodes[0].childNodes[0].childNodes[0].childNodes;
+                    var nodearr = [];
+                    for(var i = newnodes.length; i--; nodearr.unshift(newnodes[i])); 
+                    var felm = nodearr[0].childNodes[0].textContent;       
+                    var ttracks = GetChildTracks(nodearr);
+                    ttracks.forEach( function (elm) {
+                        tracks.push(felm + '/' + elm);
+                    });                                  
+                }
+                else {                    
+                    tracks.push(node.childNodes[0].childNodes[0].textContent);
+                }                
+                        
+            });            
+            return tracks;
         }        
            
         var dbarea = document.getElementById('musicdb');
@@ -46,15 +70,29 @@
                 if(e.target.textContent == 'Queue') {
                     path = GetItemPath(e.target.parentNode.parentNode);                    
                     console.log("Queuing - " + path);
-                    queueTrack(path);
+                    if(e.target.parentNode.tagName == 'TD') {
+                        queueTrack(path);
+                    }
+                    else {                                  
+                        var tracks = GetChildTracks(e.target.parentNode.parentNode.parentNode.childNodes);
+                        tracks.forEach( function(t) {
+                            queueTrack(path + '/' + t);
+                        });
+                    }
                     e.preventDefault();
                 }
                 else if(e.target.textContent == 'Play') {
                     path = GetItemPath(e.target.parentNode.parentNode);                    
                     console.log("Playing - " + path);
-                    playTrackNow(path);
+                    if(e.target.parentNode.tagName == 'TD') {
+                        playTrackNow(path);
+                    }
+                    else {
+                        var tracks = GetChildTracks(e.target.parentNode.parentNode.parentNode.childNodes);
+                        playTracksNow(path, tracks);                    
+                    }
                     e.preventDefault();
-                }
+                }                
             }
             e.stopPropagation();        
         });
@@ -83,10 +121,10 @@
 				document.getElementById('next_text').innerHTML = '<span></span>';
 			}
             
+            QueueIndex = track_index;
             if(track != '') {            
 	            document.getElementById('audio_src').src = 'music_dl?name=' + track;	            
-                finished = false;
-                QueueIndex = track_index;
+                finished = false;                
             }
             else {
                 document.getElementById('audio_src').src = "";
@@ -137,6 +175,22 @@
                 TrackQueue.splice(QueueIndex+1, 0, track);           
                 playNextTrack();
 			}
+        }
+        
+        function playTracksNow(path, tracks) {
+            if(finished) {
+                tracks.forEach(function(track) {
+                    queueTrack(path + '/' + track);
+                });                
+            }
+            else {
+                var i = 1;
+                tracks.forEach(function(track) {
+                    TrackQueue.splice(QueueIndex+i, 0, path + '/' + track);
+                    i++;                    
+                });
+                playNextTrack();
+            }        
         }
     
  

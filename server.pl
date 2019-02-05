@@ -448,7 +448,8 @@ package HTTP::BS::Server::Client::Request {
     use IO::Poll qw(POLLIN POLLOUT POLLHUP);
     use Data::Dumper;
     use Scalar::Util qw(weaken);
-    use IPC::Open3;    
+    use IPC::Open3;
+    use Symbol 'gensym';    
     sub new {
         my ($class, $client, $indataRef) = @_;        
         my %self = ( 'client' => $client);
@@ -735,13 +736,12 @@ package HTTP::BS::Server::Client::Request {
     }
 
     sub Proxy {
-    my ($self, $proxy, $node) = @_;
+        my ($self, $proxy, $node) = @_;
         my $requesttext = $self->{'request'};
         my $webpath = quotemeta $self->{'client'}{'server'}{'settings'}{'WEBPATH'};
         my @lines = split('\r\n', $requesttext);
         my @outlines = (shift @lines);
-        $outlines[0] =~ s/^(GET|HEAD)\s+$webpath\/?/$1 \//;
-        #$outlines[0] =~ s/music_dl(\?name=[^\s]+)/get_video$1&fmt=noconv/; 
+        $outlines[0] =~ s/^(GET|HEAD)\s+$webpath\/?/$1 \//;        
         push @outlines, (shift @lines);
         my $host = $proxy->{'httphost'};
         $outlines[1] =~ s/^(Host\:\s+[^\s]+)/Host\: $host/;
@@ -754,12 +754,9 @@ package HTTP::BS::Server::Client::Request {
         foreach my $outline(@outlines) {
             $newrequest .= $outline . "\r\n";
         }
-        say "Making request via proxy:";
-        print $newrequest;
-        $newrequest .= "\r\n";  
-        my ($in, $out, $err);
-        use Symbol 'gensym'; $err = gensym;
-        my $pid = open3($in, $out, $err, ('nc', $host, $proxy->{'httpport'})) or die "BAD NC";
+        say "Making request via proxy:";        
+        $newrequest .= "\r\n";        
+        my $pid = open3(my $in, my $out, my $err = gensym, ('nc', $host, $proxy->{'httpport'})) or die "BAD NC";
         print $in $newrequest;
         my $size = $node->[1] if $node;
         my %fileitem = ('fh' => $out, 'length' => $size // 99999999999);
@@ -819,8 +816,7 @@ package HTTP::BS::Server::Client {
 
     sub SetEvents {
         my ($self, $events) = @_;
-        $self->{'server'}{'evp'}->set($self->{'sock'}, $self, $events);        
-            
+        $self->{'server'}{'evp'}->set($self->{'sock'}, $self, $events);            
     }
 
     # currently only creates HTTP Request objects, but this could change if we allow file uploads
@@ -1026,6 +1022,53 @@ package HTTP::BS::Server::Client {
     }   
     
     1;  
+}
+
+package HTTP::BS::Server::Process{
+    use strict; use warnings;
+    use feature 'say';
+    use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
+    use IO::Socket::INET;
+    use Errno qw(EINTR EIO :POSIX);
+    use Fcntl qw(:seek :mode);
+    use File::stat;
+    use IO::Poll qw(POLLIN POLLOUT POLLHUP);
+    use Scalar::Util qw(looks_like_number weaken);
+    use Data::Dumper;
+    use Carp;
+    $SIG{ __DIE__ } = sub { Carp::confess( @_ ) };
+    
+    sub new {
+        my ($class, $owner, $torun, $fddispatch) = @_;        
+        my %self = ('time' => clock_gettime(CLOCK_MONOTONIC), 'owner' => $owner);        
+        weaken($self{'owner'});
+        #, 'onReadReady' => $methods->{'onReadReady'}, 'onWriteReady' => $methods->{'onWriteReady'}, 'onHangUp' => $methods->{'onHangUp'});        
+        return bless \%self, $class;
+    }
+    
+    sub onReadReady {
+        my ($self) = @_;
+        return $self->{'onReadReady'}();   
+    }
+    
+    sub onWriteReady {
+        my ($self) = @_;
+        return $self->{'onWriteReady'}();    
+    }
+    
+    sub onHangUp {
+        my ($self) = @_;
+        return $self->{'onHangUp'}();   
+    }
+    
+    sub DESTROY {
+        my $self = shift;
+        foreach my $fditem (@{$self->{'fddispatch'}}) {
+            close($fditem->{'fd'});        
+        }          
+    }
+    
+    1;    
 }
 
 
@@ -1276,7 +1319,8 @@ package MusicLibrary {
     }
     
     sub ToHTML {
-        my ($files) = @_;
+        my ($files, $where) = @_;
+        $where //= '';
         my $buf = '';
         my $name = encode_entities(decode('UTF-8', $files->[0]));
         if($files->[2]) {
@@ -1285,12 +1329,13 @@ package MusicLibrary {
             $buf .= '<td>';
             $buf .= '<table border="1" class="tbl_track">';
             $buf .= '<tbody>';
-            $buf .= '<tr>';
+            $buf .= '<tr class="track">';
             $buf .= '<th>' . $name . '</th>';            
-            $buf .= '<th>Play</th><th>Queue</th>';
-            $buf .= '</tr>';
-            foreach my $file (@{$files->[2]}) {
-                $buf .= ToHTML($file) ;      
+            $buf .= '<th><a href="#">Play</a></th><th><a href="#">Queue</a></th>';
+            $buf .= '</tr>'; 
+            $where .= $name . '/';            
+            foreach my $file (@{$files->[2]}) {                
+                $buf .= ToHTML($file, $where) ;      
             }            
             $buf .= '</tbody></table>';  
             $buf .= '</td>';
@@ -1299,7 +1344,7 @@ package MusicLibrary {
         else {
             $buf .= '<tr class="track">';        
             $buf .= '<td>' . $name . '</td>';
-            $buf .= '<td><a href="#">Play</a></td><td><a href="#">Queue</a></td>';                    
+            $buf .= '<td><a href="#">Play</a></td><td><a href="#">Queue</a></td><td><a href="music_dl?action=dl&name=' . $where.$name.'">DL</a></td>';                    
         }
         $buf .= '</tr>';     
         return $buf;   
@@ -1470,6 +1515,7 @@ use File::Copy;
 use Encode qw(decode encode find_encoding);
 use Any::URI::Escape;
 use Scalar::Util qw(looks_like_number weaken);
+use Symbol 'gensym';
 HTTP::BS::Server::Util->import();
 
 $SIG{PIPE} = sub {
@@ -1768,10 +1814,8 @@ sub video_file_lookup {
 sub video_get_streams {
     my ($video) = @_;
     my $input_file = $video->{'src_file'}{'filepath'};    
-    my @command = ('ffmpeg', '-i', $input_file);
-    my ($in, $out, $err);
-    use Symbol 'gensym'; $err = gensym;
-    my $pid = open3($in, $out, $err, @command) or say "BAD FFMPEG";
+    my @command = ('ffmpeg', '-i', $input_file);    
+    my $pid = open3(my $in, my $out, my $err = gensym, @command) or say "BAD FFMPEG";
     $video->{'audio'} = [];
     $video->{'video'} = [];
     $video->{'subtitle'} = [];
