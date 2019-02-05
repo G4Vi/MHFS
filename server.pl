@@ -105,7 +105,7 @@ package EventLoop::Poll {
                     }
                     
                     if($revents & (POLLHUP | $POLLRDHUP )) { 
-                        say "hangUp";                   
+                        say "Hangup";                   
                         $obj->onHangUp();
                         $self->remove($handle);                        
                     }                   
@@ -290,7 +290,7 @@ package HTTP::BS::Server::Util {
         my ($filename) = @_;
         my $lockname = "$filename.lock";    
         my $bytes = read_file($lockname);
-        if($bytes <= 0) {
+        if(! defined $bytes) {
             return undef;
         }
         return $bytes;
@@ -759,8 +759,8 @@ package HTTP::BS::Server::Client::Request {
         my $pid = open3(my $in, my $out, my $err = gensym, ('nc', $host, $proxy->{'httpport'})) or die "BAD NC";
         print $in $newrequest;
         my $size = $node->[1] if $node;
-        my %fileitem = ('fh' => $out, 'length' => $size // 99999999999);
-        $self->_SendResponse(\%fileitem);
+        my %fileitem = ('fh' => $out);
+        $self->_SendResponse(\%fileitem);        
         return 1;
     }
 
@@ -853,7 +853,8 @@ package HTTP::BS::Server::Client {
             $client->SetEvents($EventLoop::Poll::ALWAYSMASK );  
             my $recvdata = substr $client->{'inbuf'}, 0, $pos+4;
             $client->{'inbuf'} = substr $client->{'inbuf'}, $pos+4;
-            say "inbuf: " . $client->{'inbuf'} . ' ' . length($client->{'inbuf'});
+            my $bodylen = length($client->{'inbuf'});
+            say "body - $bodylen bytes: " . $client->{'inbuf'} if($bodylen > 0);
             $client->{'request'} = HTTP::BS::Server::Client::Request->new($client, \$recvdata);            
             return $client->onWriteReady;            
         }
@@ -945,8 +946,11 @@ package HTTP::BS::Server::Client {
                 }
                 else {
                     my $readamt = 24000;
-                    my $tmpsend = $req_length - $filepos;
-                    $readamt = $tmpsend if($tmpsend < $readamt);
+                    if($req_length) {
+                        my $tmpsend = $req_length - $filepos;
+                        $readamt = $tmpsend if($tmpsend < $readamt);
+                    }
+                    # this is blocking, it shouldn't block for long but it could if it's a pipe especially
                     $bytesToSend = read($FH, $buf, $readamt);
                     
                     #$bytesToSend = sysread($FH, $buf, $readamt);
@@ -956,8 +960,14 @@ package HTTP::BS::Server::Client {
                     }
                     elsif($bytesToSend == 0) {
                         # read EOF, better remove the error
-                        seek($FH, 0, 1);                       
-                        return '';
+                        if(! $req_length) {
+                            say '$req_length not set and read 0 bytes, treating as EOF';
+                            $buf = undef;                        
+                        }
+                        else {
+                            seek($FH, 0, 1);                       
+                            return '';
+                        }
                     }                    
                 }
             }        
@@ -1007,8 +1017,7 @@ package HTTP::BS::Server::Client {
     }
     
     sub onHangUp {
-        my ($client) = @_;
-        say "Client Hangup\n";
+        my ($client) = @_;        
         return undef;    
     }
 
