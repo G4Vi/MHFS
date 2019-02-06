@@ -1255,10 +1255,11 @@ package MusicLibrary {
     use Data::Dumper;
     use File::stat;
     use File::Basename;
-    use Scalar::Util qw(looks_like_number);
-    use HTML::Entities;
+    use Scalar::Util qw(looks_like_number);   
     HTTP::BS::Server::Util->import();
+    use HTML::Entities;
     use Encode qw(decode encode);
+    use Any::URI::Escape;
     use IPC::Open3;
     use Storable;
     use Fcntl ':mode';  
@@ -1331,7 +1332,8 @@ package MusicLibrary {
         my ($files, $where) = @_;
         $where //= '';
         my $buf = '';
-        my $name = encode_entities(decode('UTF-8', $files->[0]));
+        my $name_unencoded = decode('UTF-8', $files->[0]);
+        my $name = encode_entities($name_unencoded);        
         if($files->[2]) {
             my $dir = $files->[0]; 
             $buf .= '<tr>';            
@@ -1342,7 +1344,7 @@ package MusicLibrary {
             $buf .= '<th>' . $name . '</th>';            
             $buf .= '<th><a href="#">Play</a></th><th><a href="#">Queue</a></th>';
             $buf .= '</tr>'; 
-            $where .= $name . '/';            
+            $where .= $name_unencoded . '/';            
             foreach my $file (@{$files->[2]}) {                
                 $buf .= ToHTML($file, $where) ;      
             }            
@@ -1352,8 +1354,8 @@ package MusicLibrary {
         }
         else {
             $buf .= '<tr class="track">';        
-            $buf .= '<td>' . $name . '</td>';
-            $buf .= '<td><a href="#">Play</a></td><td><a href="#">Queue</a></td><td><a href="music_dl?action=dl&name=' . $where.$name.'">DL</a></td>';                    
+            $buf .= '<td>' . $name . '</td>';             
+            $buf .= '<td><a href="#">Play</a></td><td><a href="#">Queue</a></td><td><a href="music_dl?action=dl&name=' . uri_escape($where.$name_unencoded).'">DL</a></td>';                       
         }
         $buf .= '</tr>';     
         return $buf;   

@@ -10,10 +10,9 @@
 	</table> 
     <input type="button" value="PREV" onclick="playPreviousTrack();"><audio id="mainplayer" controls="controls" preload="none"> <source id="audio_src" src=""></source></audio><input type="button" value="NEXT" onclick="playNextTrack()">
 	
-
+    <iframe src="static/250ms_silence.mp3" allow="autoplay" id="audio" style="display:none"></iframe>
 </div>
     <script>
-
         function GetItemPath(elm) {
             var els = [];
             var lastitem;
@@ -97,10 +96,23 @@
             e.stopPropagation();        
         });
 
-		
-        var QueueIndex = 0;
-        var TrackQueue = [];
-		var finished = true;        
+		const urlParams = new URLSearchParams(window.location.search);
+        const MAX_SAMPLE_RATE = urlParams.get('max_sample_rate');        
+        var PTrackUrlParams;
+        var TrackQueue = []; 
+        var QueueIndex = 0;       
+		var finished = true;
+        
+        
+        
+        function AddPTrack(track) {
+            PTrackUrlParams.append('ptrack', track);            
+            window.history.replaceState('playlist', 'Title', 'music?' + PTrackUrlParams.toString());      
+        }
+        
+        
+        
+        
         function play_track(track_index) { 
             
             var track = TrackQueue[track_index] || '';
@@ -122,8 +134,10 @@
 			}
             
             QueueIndex = track_index;
-            if(track != '') {            
-	            document.getElementById('audio_src').src = 'music_dl?name=' + track;	            
+            if(track != '') {   
+                var url = 'music_dl?name=' +  encodeURIComponent(track);
+                if(MAX_SAMPLE_RATE) url += '&max_sample_rate=' + MAX_SAMPLE_RATE;                
+	            document.getElementById('audio_src').src = url;	            
                 finished = false;                
             }
             else {
@@ -143,14 +157,15 @@
         
           
         function queueTrack(name) {
-			var track = name;
+			var track = name;            
             TrackQueue.push(track);
 			if(finished) {
 				play_track(TrackQueue.length - 1);				
 			}            
             else if(QueueIndex <= (TrackQueue.length - 2)) {
                 document.getElementById('next_text').innerHTML = '<span>' + TrackQueue[QueueIndex+1] + '</span>';
-            }			
+            }
+            AddPTrack(track);			
         }
 
         function playPreviousTrack() {
@@ -171,9 +186,10 @@
 			if(finished) {
 				queueTrack(track);
 			}
-			else {				
+			else {                           
                 TrackQueue.splice(QueueIndex+1, 0, track);           
                 playNextTrack();
+                BuildPTrack();                
 			}
         }
         
@@ -190,8 +206,26 @@
                     i++;                    
                 });
                 playNextTrack();
+                BuildPTrack();
             }        
         }
+        
+        function BuildPTrack(constructing) {
+            PTrackUrlParams = new URLSearchParams();
+            if(MAX_SAMPLE_RATE) PTrackUrlParams.append('max_sample_rate', MAX_SAMPLE_RATE);
+            TrackQueue.forEach(function(track) {
+                PTrackUrlParams.append('ptrack', track); 
+            });
+            
+            if(! constructing) window.history.replaceState('playlist', 'Title', 'music?' + PTrackUrlParams.toString());             
+        }
+        
+        BuildPTrack(1);        
+        var orig_ptracks = urlParams.getAll('ptrack');
+        orig_ptracks.forEach(function(elm) {
+            console.log('queuing ptrack ' + elm);
+            queueTrack(elm);                
+        });          
     
  
         
