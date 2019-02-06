@@ -1355,7 +1355,7 @@ package MusicLibrary {
         else {
             $buf .= '<tr class="track">';        
             $buf .= '<td>' . $name . '</td>';             
-            $buf .= '<td><a href="#">Play</a></td><td><a href="#">Queue</a></td><td><a href="music_dl?action=dl&name=' . uri_escape($where.$name_unencoded).'">DL</a></td>';                       
+            $buf .= '<td><a href="#">Play</a></td><td><a href="#">Queue</a></td><td><a href="music_dl?action=dl&name=' . uri_escape_utf8($where.$name_unencoded).'">DL</a></td>';                       
         }
         $buf .= '</tr>';     
         return $buf;   
