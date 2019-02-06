@@ -1260,6 +1260,7 @@ package MusicLibrary {
     use HTML::Entities;
     use Encode qw(decode encode);
     use Any::URI::Escape;
+    use URI::Escape;
     use IPC::Open3;
     use Storable;
     use Fcntl ':mode';  
