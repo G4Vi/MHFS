@@ -65,7 +65,7 @@ sub gdrive_create_upload_session {
     #say "create upload session";
     my($wtr, $rdr, $err);
     $err = gensym;
-    my @curlcmd = 'curl', '-s', '-D', '-', '-X', 'POST', '-H', "Authorization: Bearer $ACCESS_TOKEN", '-H', "Content-Type: application/json", '-d', '{"parents": [{"id":"1_oUiDf_H7-pXHAaJkkGOGoYFC_ozqCTi"}]}', "https://www.googleapis.com/upload/drive/v2/files?uploadType=resumable";
+    my @curlcmd = ('curl', '-s', '-D', '-', '-X', 'POST', '-H', "Authorization: Bearer $ACCESS_TOKEN", '-H', "Content-Type: application/json", '-d', '{"parents": [{"id":"1_oUiDf_H7-pXHAaJkkGOGoYFC_ozqCTi"}]}', "https://www.googleapis.com/upload/drive/v2/files?uploadType=resumable");
     say join(' ', @curlcmd);
     my $pid = open3($wtr, $rdr, $rdr, @curlcmd);
     my $uploadurl;
