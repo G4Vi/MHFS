@@ -74,7 +74,7 @@ sub gdrive_create_upload_session {
     my $uploadurl;
     while(<$rdr>) {
         #say;    
-        if( /^location:\s+(.+)\r$/) {
+        if( /^location:\s+(.+)\r$/i) {
             $uploadurl = $1;
 	    last;
         } 
