@@ -1214,28 +1214,29 @@ package GDRIVE {
                my $reqbase = basename($requestfile);
                my $tmpfile = $tmpdir . '/' . $reqbase;
                $gdrivefile = $tmpdir . '/' . $reqbase . '_gdrive';
-               if(symlink($requestfile, $tmpfile)) {
+               if(! -e $tmpfile) {
+                   symlink($requestfile, $tmpfile);
+               }
+              
                
                push @togdrive, $tmpfile;
-                weaken($request); # the only one who should be keeping $request alive is $client                    
-                $request->{'client'}{'server'}{'evp'}->add_timer(0, 0, sub {
-                    if(! defined $request) {
-                        say "\$request undef, ignoring CB";
-                        return undef;
-                    }                                       
-                    if(! -e $gdrivefile) {
-                        say "extending time for gdrive";                    
-                        $request->{'client'}{'time'} = clock_gettime(CLOCK_MONOTONIC);
-                        return 1;
-                    }
-                    
-                    say "gdrivefile found";
-                    my $url = read_file($gdrivefile);
-                    $request->Send307($url);
-                    return undef;                    
-                }); 
-              }
-                
+               weaken($request); # the only one who should be keeping $request alive is $client                    
+               $request->{'client'}{'server'}{'evp'}->add_timer(0, 0, sub {
+                   if(! defined $request) {
+                       say "\$request undef, ignoring CB";
+                       return undef;
+                   }                                       
+                   if(! -e $gdrivefile) {
+                       say "extending time for gdrive";                    
+                       $request->{'client'}{'time'} = clock_gettime(CLOCK_MONOTONIC);
+                       return 1;
+                   }
+                   
+                   say "gdrivefile found";
+                   my $url = read_file($gdrivefile);
+                   $request->Send307($url);
+                   return undef;                    
+               });               
            }
         }        
         
