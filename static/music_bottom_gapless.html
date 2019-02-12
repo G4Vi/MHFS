@@ -1,0 +1,549 @@
+<br><br><br><br><br><br><br><br><br><br><br>
+</div>
+</div>
+<div class="footer row" style="background-color:blue;">  
+    <table border="1" width="80%">
+    <tr><th>Previous</th><th>Now Playing</th><th>Next</th></tr>
+	<tr><td><div id="prev_text"></div></td><td><div id="play_text"></div></td><td><div id="next_text"></div></td></tr>  
+	</table> 
+    <input type="button" value="PREV" id="prevbtn"> <button id="ppbtn" type="button">IDLE</button> 
+    <input id="curtime" type="text" name="curseconds" value="0">
+    <input type="range" step="any" id="seekbar" value="0">
+    <input id="endtime" type="text" name="endseconds" value="0">
+    <input type="button" value="NEXT" id="nextbtn">
+	
+    <iframe src="static/250ms_silence.mp3" allow="autoplay" id="audio" style="display:none"></iframe>
+</div>
+
+<script type="text/javascript"><!--
+  
+    function GetItemPath(elm) {
+            var els = [];
+            var lastitem;
+            do {                        
+                var elmtemp = elm;
+                while(elmtemp.firstChild)
+                {
+                    elmtemp = elmtemp.firstChild;
+                }
+                if(elmtemp.textContent != lastitem) {                    
+                    lastitem = elmtemp.textContent;                   
+                    els.unshift(elmtemp.textContent);
+                }                       
+                
+                elm = elm.parentNode;                        
+            }while(elm.id != 'musicdb');
+            var path = '';
+            //console.log(els);
+            els.forEach(function(part) {
+                path += part + '/';
+            });
+            path = path.slice(0, -1);
+            return path;
+        }        
+
+        function GetChildTracks(path, nnodes) {
+            path += '/';
+            var nodes = [];        
+            for(var i = nnodes.length; i--; nodes.unshift(nnodes[i]));       
+            var tracks = [];            
+            nodes.splice(0, 1);
+            nodes.forEach( function ( node) {
+                if(node.childNodes.length == 1) {
+                    var newnodes = node.childNodes[0].childNodes[0].childNodes[0].childNodes;
+                    var nodearr = [];
+                    for(var i = newnodes.length; i--; nodearr.unshift(newnodes[i])); 
+                    var felm = nodearr[0].childNodes[0].textContent;       
+                    var ttracks = GetChildTracks(path + felm, nodearr);
+                    tracks = tracks.concat(ttracks);                                 
+                }
+                else {                    
+                    tracks.push(path + node.childNodes[0].childNodes[0].textContent);
+                }                
+                        
+            });            
+            return tracks;
+        }    
+        
+        var dbarea = document.getElementById('musicdb');
+        dbarea.addEventListener('click', function(e) {
+            if(e.target !== e.currentTarget) {
+                console.log(e.target + ' clicked with text ' + e.target.textContent);
+                if(e.target.textContent == 'Queue') {
+                    path = GetItemPath(e.target.parentNode.parentNode);                    
+                    console.log("Queuing - " + path);
+                    if(e.target.parentNode.tagName == 'TD') {
+                        queueTrack(path);
+                    }
+                    else {                                  
+                        var tracks = GetChildTracks(path, e.target.parentNode.parentNode.parentNode.childNodes);                        
+                        queueTracks(tracks);                        
+                    }
+                    e.preventDefault();
+                }
+                else if(e.target.textContent == 'Play') {
+                    path = GetItemPath(e.target.parentNode.parentNode);                    
+                    console.log("Playing - " + path);
+                    if(e.target.parentNode.tagName == 'TD') {
+                        playTrackNow(path);
+                    }
+                    else {
+                        var tracks = GetChildTracks(path, e.target.parentNode.parentNode.parentNode.childNodes);
+                        playTracksNow(tracks);                    
+                    }
+                    e.preventDefault();
+                }                
+            }
+            e.stopPropagation();        
+        });
+        
+     
+    const urlParams = new URLSearchParams(window.location.search);
+    const MAX_SAMPLE_RATE = urlParams.get('max_sample_rate');        
+    var PTrackUrlParams;
+    
+    function AddPTrack(track) {
+        PTrackUrlParams.append('ptrack', track);            
+        window.history.replaceState('playlist', 'Title', 'music_gapless?' + PTrackUrlParams.toString());      
+    }
+    
+    function queueTrack(track) {
+        _queueTrack(track);
+        AddPTrack(track);
+    }
+    
+    function queueTracks(tracks) {
+        tracks.forEach(function(track) {
+            _queueTrack(track);
+            PTrackUrlParams.append('ptrack', track);  
+        });                      
+        window.history.replaceState('playlist', 'Title', 'music_gapless?' + PTrackUrlParams.toString());                        
+    }
+    
+    
+    
+    function SetNextText(text) {
+        document.getElementById('next_text').innerHTML = '<span>' + text + '</span>';    
+    }
+    
+    function SetPrevText(text) {
+        document.getElementById('prev_text').innerHTML = '<span>' + text + '</span>';    
+    }
+    
+    function SetPlayText(text) {    
+        document.getElementById('play_text').innerHTML = '<span>' + text + '</span>';
+    }
+        
+   
+    var MainAudioContext = (window.hasWebKit) ? new webkitAudioContext() : (typeof AudioContext != "undefined") ? new AudioContext() : null;
+    const BUFFER_MS = 300; //in MS
+    const BUFFER_S = (BUFFER_MS/1000);
+    var State = 'IDLE';
+    var CurrentTrack = 0;
+    var Tracks = [];  
+    var DLImmediately = true;   
+    var TickTimer = null;
+    var StartTimer = null;
+    var NextBufferTime; 
+    var request = null;
+    
+    function UpdateState(newState) {
+        console.log('State ' + State + ' -> ' + newState);
+        State = newState;        
+    }
+    
+    function onTrackStart() {
+        StartTimer = null;
+        
+        if(Tracks[CurrentTrack - 1]) {
+            SetPrevText(Tracks[CurrentTrack-1].trackname);
+        }
+        
+        
+        if( Tracks[CurrentTrack].source) {
+            SetPlayText(Tracks[CurrentTrack].trackname);
+        
+            var seekbar = document.getElementById("seekbar");
+            seekbar.min = 0;       
+            seekbar.max = Tracks[CurrentTrack].duration;        
+            Tracks[CurrentTrack].source.onended = onTrackEnd;
+            console.log(Tracks[CurrentTrack].trackname + ' (' + CurrentTrack + ') should now be playing');  
+            if(! Tracks[CurrentTrack+1]) {
+                DLImmediately = true;
+                console.log('DLImmediately set to true');
+                return;
+            }
+            SetNextText(Tracks[CurrentTrack+1].trackname);
+            if(! Tracks[CurrentTrack+1].downloading) {
+                downloadAndQueue(Tracks[CurrentTrack+1]);
+            }
+            else {
+                //next track is already downloading               
+                if(Tracks[CurrentTrack+1].timeskipped != 0) {
+                    alert('timeskipped not cleared ' + CurrentTrack+1 + ' ' + Tracks[CurrentTrack+1]);
+                    console.log('timeskipped value: ' + Tracks[CurrentTrack+1].timeskipped);
+                    Tracks[CurrentTrack+1].timeskipped = 0;
+                }
+                console.log('next track is already downloading?');               
+            }
+        }
+        else if(Tracks[CurrentTrack].downloading) {
+            UpdateState('IDLE');        
+        }
+        else {
+            alert('still going here somehow CurrentTrack doesnt have a source and isnt downloading');                    
+        }
+    }
+    
+    function clearTrackSource(track) {
+        track.source.onended = function(){};                
+        track.source.stop();  
+        track.source.disconnect();
+        track.source = null;   
+    }
+    
+    function onTrackEnd(event) {
+        //if there's still a start timer, we likely seeked to the end
+        if(StartTimer) {        
+            console.log('starttimer present, running it now instead');
+            clearTimeout(StartTimer);
+            onTrackStart();
+            play();
+        }       
+        
+        // free memory
+        clearTrackSource(Tracks[CurrentTrack]); 
+        Tracks[CurrentTrack].buf = null;
+        Tracks[CurrentTrack].timeskipped = 0;  
+        
+        CurrentTrack++;        
+        
+        if(! Tracks[CurrentTrack]) {
+            console.log('reached end of queue, stopping');
+            stop();
+            return;
+        }        
+        onTrackStart() ;          
+    }   
+    
+    
+    function aqueue(track) {
+        var source = MainAudioContext.createBufferSource();                    
+		source.connect(MainAudioContext.destination);
+		source.buffer = track.buf;                      
+        track.astart = NextBufferTime;
+        track.duration = source.buffer.duration;          
+        track.source = source;
+        console.log('Scheduled ' + track.trackname + ' for ' + NextBufferTime);  
+        track.source.start(NextBufferTime, track.timeskipped);                
+        var timeleft = track.duration - track.timeskipped;
+        NextBufferTime += timeleft;         
+    }
+    
+    function OnStartTimer() {
+        StartTimer = setTimeout( function() {
+           onTrackStart();
+           play(); 
+        }, BUFFER_MS);    
+    }    
+    
+    function downloadAndQueue(track) {          
+        track.downloading = true;       
+        request = new XMLHttpRequest();
+		request.open('get', geturl(track.trackname), true);
+		request.responseType = 'arraybuffer';       
+		request.onload = function () {       
+			MainAudioContext.decodeAudioData(request.response, function(incomingBuffer) {
+                if(! track.downloading) {
+                    console.log('STAHPed ' + track.trackname);
+                    track.downloading = false;
+                    return;  
+                }
+                // setup a callback to update the UI, if we aren't running, normally we'll update on source.onended
+                if(State == 'IDLE') {                    
+                    NextBufferTime = MainAudioContext.currentTime + BUFFER_S;                       
+                    OnStartTimer();
+                }                
+                track.buf = incomingBuffer;
+                track.timeskipped = 0;                 
+                aqueue(track);
+                track.downloading = false;
+                console.log('downloaded ' + track.trackname);
+                request = null;              
+			});
+		};
+        request.onabort = function() {
+            console.log('aborted ' + track.trackname);
+            track.downloading = false;        
+        };
+        request.onerror = function() {
+            track.downloading = false;         
+        };   
+
+        request.PleaseSTAHP = function() {            
+            console.log('PleaseSTAHP track ' + track.trackname);
+            track.downloading = false;
+            request.abort();            
+        };        
+		request.send(); 
+    
+    
+    
+    }   
+    
+    function geturl(trackname) {
+        var url = 'music_dl?name=' +  encodeURIComponent(trackname);
+        if(MAX_SAMPLE_RATE) url += '&max_sample_rate=' + MAX_SAMPLE_RATE; 
+        url += '&gapless=1&gdriveforce=1';
+        return url;
+    }
+      
+    function _queueTrack(_trackname) {               
+        var track = {trackname: _trackname};        
+        Tracks.push(track);
+        if(DLImmediately) {
+            DLImmediately = false;
+            console.log('downloading immediately');                        
+            downloadAndQueue(track);                    
+        }
+        else {
+            console.log('queued track for later dl');
+            if(CurrentTrack < (Tracks.length-1)) {
+                SetNextText(Tracks[Tracks.length-1].trackname);
+            }
+        } 
+
+        if(CurrentTrack == (Tracks.length -1)) {
+            SetPlayText(Tracks[CurrentTrack].trackname + ' {![LOADING]!}');
+        }        
+    }
+    
+    function play() {
+        UpdateState('PLAY');
+        var ppbtn = document.getElementById("ppbtn");
+        if(! TickTimer) {
+            Tick(27);
+        }            
+        ppbtn.textContent = 'PAUSE';
+    }
+    
+    function resume() {        
+        MainAudioContext.resume();       
+        play();        
+    }
+    
+    
+    function pause() {           
+        clearTimeout(TickTimer);
+        clearTimeout(StartTimer);  
+        TickTimer = null;
+        StartTimer = null;        
+    }
+    
+    function stop() {
+        var curtime = document.getElementById("curtime");
+        var endtime = document.getElementById("endtime");
+        var ppbtn = document.getElementById("ppbtn"); 
+        UpdateState('IDLE');      
+        curtime.value = 0;
+        endtime.value = 0;
+        seekbar.value = 0;
+        pause();
+        ppbtn.textContent = 'IDLE';
+    }
+    
+    
+    function Tick(tickMS) {
+        if(! Tracks[CurrentTrack]) {
+            TickTimer = null;
+            console.log('TickTimer null');
+            return;        
+        }
+        else if(Tracks[CurrentTrack].astart <= MainAudioContext.currentTime) {                      
+            var curtime = document.getElementById("curtime");
+            var endtime = document.getElementById("endtime");
+            var seekbar = document.getElementById("seekbar");           
+            var time = MainAudioContext.currentTime - Tracks[CurrentTrack].astart  +  Tracks[CurrentTrack].timeskipped;                            
+            curtime.value = time;            
+            endtime.value = Tracks[CurrentTrack].duration;
+            seekbar.value = curtime.value; 
+            console.log(Tracks[CurrentTrack].trackname + ' (' + CurrentTrack + '): updating progress'); 
+        }
+        else {            
+            console.log(Tracks[CurrentTrack].trackname + ' (' + CurrentTrack + '): not updating seekbar');
+        }
+ 
+        TickTimer =  setTimeout(function () { Tick(tickMS); }, tickMS);       
+    } 
+
+    function switchTrackNow(direction) {
+        //anything here is going to take time so stop the ticktimer
+        pause();
+        
+        //stop the current track        
+        if(Tracks[CurrentTrack] && Tracks[CurrentTrack].source) {
+            clearTrackSource(Tracks[CurrentTrack]);           
+        }
+        
+        //stop the next track
+        if(Tracks[CurrentTrack+1] && Tracks[CurrentTrack+1].source) {
+            clearTrackSource(Tracks[CurrentTrack+1]); 
+        }
+        
+        // if the desired track is downloading don't abort it, but abort any other potential download
+        var dtrack = Tracks[CurrentTrack+direction];
+        if(dtrack && (!dtrack.downloading)) {                    
+            if(request){                
+                request.PleaseSTAHP();
+                request = null;
+            }            
+        }      
+        
+        function setTracks(track) {
+            NextBufferTime = MainAudioContext.currentTime + BUFFER_S;                        
+            aqueue(track);
+            track.source.onended = onTrackEnd;                       
+        }
+        
+        // if the desired current track is the same we don't need to download again (seeking)
+        if(direction == 0) {
+            console.log('probably a seek operation');
+            setTracks(Tracks[CurrentTrack]);
+            OnStartTimer();
+            return;
+            
+        }
+        //free memory
+        else if(Tracks[CurrentTrack]) {
+            Tracks[CurrentTrack].timeskipped = 0;            
+            Tracks[CurrentTrack].buf = null;                
+        }
+            
+       
+        // NEXT
+        if(direction == 1) {           
+            //if its downloaded, requeue it 
+            if(Tracks[CurrentTrack+1].buf) {
+                setTracks(Tracks[CurrentTrack+1]); 
+                OnStartTimer();               
+            }
+            // if it is downloading, let the downloader start as if we are idle
+            else if(Tracks[CurrentTrack+1].downloading) {
+                UpdateState('IDLE');           
+            }
+            // othewise download it now
+            else {                         
+                UpdateState('IDLE'); 
+                downloadAndQueue(Tracks[CurrentTrack+1]); 
+            }
+            CurrentTrack++;
+        }
+        else if(direction == -1) {           
+            DLImmediately = false;           
+            UpdateState('IDLE'); 
+            downloadAndQueue(Tracks[CurrentTrack-1]); 
+            CurrentTrack--;            
+        }
+        
+        //update the viewable text
+        if(Tracks[CurrentTrack-1]) SetPrevText(Tracks[CurrentTrack-1].trackname);
+        if(Tracks[CurrentTrack]) SetPrevText(Tracks[CurrentTrack].trackname + ' {![LOADING]!}');
+        if(Tracks[CurrentTrack+1]) SetPrevText(Tracks[CurrentTrack+1].trackname);
+    }  
+    
+    window.onload = function(){ 
+        
+        var curtime = document.getElementById("curtime");
+        var endtime = document.getElementById("endtime");
+        var prevbtn = document.getElementById("prevbtn");
+        var sktxt = document.getElementById("seekfield");
+        var seekbar = document.getElementById("seekbar");
+        var ppbtn = document.getElementById("ppbtn");        
+        
+        ppbtn.addEventListener('click', function (e) {            
+            if(State == 'PLAY') {                              
+                MainAudioContext.suspend();                
+                UpdateState('PAUSE'); 
+                ppbtn.textContent = 'PLAY';
+                pause();                
+            }
+            else if(State == 'PAUSE') {               
+                resume();
+            }
+            else if(State == 'IDLE') {
+                
+            }            
+        });
+        
+        seekbar.addEventListener('change', function(e) {        
+            do {
+            
+                if(State == 'PLAY') {                   
+                    break;
+                }
+                if(State == 'PAUSE') break;               
+                return;           
+            } while(0);
+            console.log( Tracks[CurrentTrack].trackname + ' (' + CurrentTrack + ') ' + ' seeking to ' + seekbar.value);
+            Tracks[CurrentTrack].timeskipped = Number(seekbar.value); 
+            switchTrackNow(0);          
+            curtime.value = Tracks[CurrentTrack].timeskipped;                            
+        });
+        
+        prevbtn.addEventListener('click', function(e) {
+            do {            
+                if(State == 'PLAY') break;
+                else if(State == 'PAUSE') {
+                    resume();
+                    break;
+                }
+                else if(State == 'IDLE') {
+                    break;                
+                }                
+                return;           
+            } while(0);
+            if((CurrentTrack-1) < 0) return;
+            switchTrackNow(-1);   
+            curtime.value = 0;
+            if(Tracks[CurrentTrack].duration) endtime.value = Tracks[CurrentTrack].duration;  
+            console.log('prevtrack?');            
+        });
+        
+        nextbtn.addEventListener('click', function(e) {
+            do {
+                if(State == 'PLAY') break;
+                else if(State == 'PAUSE') {
+                    resume();
+                }                
+                //return;
+            } while(0);
+            if(! Tracks[CurrentTrack+1]) return;
+            switchTrackNow(1);   
+            curtime.value = 0;
+            if(Tracks[CurrentTrack].duration) endtime.value = Tracks[CurrentTrack].duration;            
+        });            
+    };
+    
+     function _BuildPTrack() {
+            PTrackUrlParams = new URLSearchParams();
+            if(MAX_SAMPLE_RATE) PTrackUrlParams.append('max_sample_rate', MAX_SAMPLE_RATE);
+            Tracks.forEach(function(track) {
+                PTrackUrlParams.append('ptrack', track); 
+            });                  
+     }
+        
+        function BuildPTrack() {
+            _BuildPTrack();
+            var urlstring = PTrackUrlParams.toString();
+            if(urlstring != '') {
+                window.history.replaceState('playlist', 'Title', 'music_gapless?' + urlstring);
+            }
+        }
+        
+        _BuildPTrack();        
+        var orig_ptracks = urlParams.getAll('ptrack');
+        queueTracks(orig_ptracks);  
+   
+
+  --></script>
+</body>
