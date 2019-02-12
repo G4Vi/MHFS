@@ -823,7 +823,7 @@ package HTTP::BS::Server::Client {
     sub onReadReady {        
         my ($client) = @_;
         my $handle = $client->{'sock'};               
-        my $maxlength = 8192;
+        my $maxlength = 65536;
         my $tempdata;
         my $success = defined($handle->recv($tempdata, $maxlength-length($client->{'inbuf'})));
         if($success) {
@@ -1090,7 +1090,7 @@ package GDRIVE {
     use Data::Dumper;
     use File::stat;
     use File::Basename;
-    use Scalar::Util qw(looks_like_number);
+    use Scalar::Util qw(looks_like_number weaken);
     HTTP::BS::Server::Util->import();
     
     sub gdrive_add_tmp_rec {
@@ -1183,7 +1183,7 @@ package GDRIVE {
         #if($file =~ /^$tmpdir/)    
         {
             my $fnametmp = $file . '_gdrive.tmp';
-            say "fnamtmp $fnametmp";
+            say "fnametmp $fnametmp";
             open(my $tmpfile, ">>", $fnametmp) or die;
             close($tmpfile);
         }
@@ -1201,10 +1201,41 @@ package GDRIVE {
             $handled = 1;
             my $url = read_file($requestfile . '_gdrive');
             $request->Send307($url);
-        }       
+        } 
+
+        
+        my @togdrive;
+        my $tmpdir = $request->{'client'}{'server'}{'settings'}{'TMPDIR'};
+        if((! $handled) && ($request->{'qs'}{'gdriveforce'})) {
+           if(defined($gdrivefile) && ($gdrivefile ne '')) { 
+               say 'forcing gdrive';           
+               $handled = 1;
+               my $reqbase = basename($requestfile);
+               my $tmpfile = $tmpdir . '/' . $reqbase;
+               $gdrivefile = $tmpdir . '/' . $reqbase . '_gdrive';
+               if(symlink($requestfile, $tmpfile)) {
+               
+               push @togdrive, $tmpfile;
+                weaken($request); # the only one who should be keeping $request alive is $client                    
+                $request->{'client'}{'server'}{'evp'}->add_timer(0, 0, sub {
+                    if(! defined $request) {
+                        say "\$request undef, ignoring CB";
+                        return undef;
+                    }                                       
+                    return 1 if(! -e $gdrivefile);
+                    
+                    say "gdrivefile found";
+                    my $url = read_file($gdrivefile);
+                    $request->Send307($url);
+                    return undef;                    
+                }); 
+              }
+                
+           }
+        }        
         
         # queue up future hls files
-        my @togdrive;
+        
         if( $requestfile =~ /^(.+[^\d])(\d+)\.ts$/) {
             my ($start, $num) = ($1, $2);
             # no more than 3 uploads should be occurring at a time
@@ -1369,13 +1400,25 @@ package MusicLibrary {
             $buf .= ToHTML($file);
             $buf .= '<br>';
         }
-        $buf .=   read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_bottom.html');      
-        $self->{'html'} = $buf;  
+        
+        $self->{'html'} = $buf .  read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_bottom.html');         
+        $self->{'html_gapless'} = $buf . read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_bottom_gapless.html');
+        
     }
 
     sub SendLibrary {
         my ($self, $request) = @_;
         return $request->SendLocalBuf($self->{'html'}, "text/html; charset=utf-8");
+    }
+    
+    sub SendLocal {
+        my ($request, $file) = @_;
+        if($request->{'qs'}{'gapless'}) {
+            $request->SendFile($file);    
+        }
+        else {
+             $request->SendLocalFile($file);
+        }
     }
 
     sub BuildLibraries {
@@ -1391,7 +1434,7 @@ package MusicLibrary {
                     my ($request, $file) = @_;
                     return undef if(! -e $file);
                     return undef if(-d $file); #we can't handle directories right now
-                    $request->SendLocalFile($file);
+                    SendLocal($request, $file);
                     return 1;
                 };      
             }
@@ -1467,6 +1510,7 @@ package MusicLibrary {
             } 
         }
         say "SendFromLibrary: did not find in library, 404ing";
+        say "name: " . $request->{'qs'}{'name'};
         $request->Send404;
     }
     
@@ -1484,14 +1528,19 @@ package MusicLibrary {
                 return $self->SendLibrary($request);        
             }],
             [ '/music_force', sub {
-        my ($request) = @_;
-            $self->BuildLibraries($settings->{'MUSICLIBRARY'}{'sources'}); 
-            return $self->SendLibrary($request);
-        }],
+                my ($request) = @_;
+                $self->BuildLibraries($settings->{'MUSICLIBRARY'}{'sources'}); 
+                return $self->SendLibrary($request);
+            }],
+            [ '/music_gapless', sub {
+               my ($request) = @_;
+               $request->SendLocalBuf($self->{'html_gapless'}, "text/html; charset=utf-8");
+            
+            }],
             [ '/music_dl', sub {
-        my ($request) = @_;
-        return $self->SendFromLibrary($request);
-        }], 
+                my ($request) = @_;
+                return $self->SendFromLibrary($request);
+            }], 
         ];
         
         return $self;
