@@ -1223,7 +1223,8 @@ package GDRIVE {
                         say "\$request undef, ignoring CB";
                         return undef;
                     }                                       
-                    if(! -e $gdrivefile) {                 
+                    if(! -e $gdrivefile) {
+                        say "extending time for gdrive";                    
                         $request->{'client'}{'time'} = clock_gettime(CLOCK_MONOTONIC);
                         return 1;
                     }
