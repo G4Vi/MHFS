@@ -1091,6 +1091,7 @@ package GDRIVE {
     use File::stat;
     use File::Basename;
     use Scalar::Util qw(looks_like_number weaken);
+    use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
     HTTP::BS::Server::Util->import();
     
     sub gdrive_add_tmp_rec {
