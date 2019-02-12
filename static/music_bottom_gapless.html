@@ -169,6 +169,7 @@
             Tracks[CurrentTrack].source.onended = onTrackEnd;
             console.log(Tracks[CurrentTrack].trackname + ' (' + CurrentTrack + ') should now be playing');  
             if(! Tracks[CurrentTrack+1]) {
+                SetNextText('');
                 DLImmediately = true;
                 console.log('DLImmediately set to true');
                 return;
@@ -390,14 +391,7 @@
             clearTrackSource(Tracks[CurrentTrack+1]); 
         }
         
-        // if the desired track is downloading don't abort it, but abort any other potential download
-        var dtrack = Tracks[CurrentTrack+direction];
-        if(dtrack && (!dtrack.downloading)) {                    
-            if(request){                
-                request.PleaseSTAHP();
-                request = null;
-            }            
-        }      
+            
         
         function setTracks(track) {
             NextBufferTime = MainAudioContext.currentTime + BUFFER_S;                        
@@ -418,6 +412,15 @@
             Tracks[CurrentTrack].timeskipped = 0;            
             Tracks[CurrentTrack].buf = null;                
         }
+        
+        // abort downloads
+        var dtrack = Tracks[CurrentTrack+direction];
+        if(dtrack && (!dtrack.downloading)) {                    
+            if(request){                
+                request.PleaseSTAHP();
+                request = null;
+            }            
+        } 
             
        
         // NEXT
@@ -446,9 +449,15 @@
         }
         
         //update the viewable text
+        
         if(Tracks[CurrentTrack-1]) SetPrevText(Tracks[CurrentTrack-1].trackname);
-        if(Tracks[CurrentTrack]) SetPrevText(Tracks[CurrentTrack].trackname + ' {![LOADING]!}');
-        if(Tracks[CurrentTrack+1]) SetPrevText(Tracks[CurrentTrack+1].trackname);
+        if(Tracks[CurrentTrack]) SetPlayText(Tracks[CurrentTrack].trackname + ' {![LOADING]!}');
+        if(Tracks[CurrentTrack+1]) {
+            SetNextText(Tracks[CurrentTrack+1].trackname);
+        }
+        else {
+           SetNextText('');
+        }        
     }  
     
     window.onload = function(){ 
