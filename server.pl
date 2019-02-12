@@ -1222,7 +1222,10 @@ package GDRIVE {
                         say "\$request undef, ignoring CB";
                         return undef;
                     }                                       
-                    return 1 if(! -e $gdrivefile);
+                    if(! -e $gdrivefile) {                 
+                        $request->{'client'}{'time'} = clock_gettime(CLOCK_MONOTONIC);
+                        return 1;
+                    }
                     
                     say "gdrivefile found";
                     my $url = read_file($gdrivefile);
