@@ -1227,8 +1227,11 @@ package GDRIVE {
                        return undef;
                    }                                       
                    if(! -e $gdrivefile) {
-                       say "extending time for gdrive";                    
-                       $request->{'client'}{'time'} = clock_gettime(CLOCK_MONOTONIC);
+                       my $current_time = clock_gettime(CLOCK_MONOTONIC);                                              
+                       if(($current_time - $request->{'client'}{'time'}) < 6) {
+                           say "extending time for gdrive";                    
+                           $request->{'client'}{'time'} -= 6;
+                       }
                        return 1;
                    }
                    

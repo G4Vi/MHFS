@@ -534,20 +534,20 @@
     };
     
      function _BuildPTrack() {
-            PTrackUrlParams = new URLSearchParams();
-            if(MAX_SAMPLE_RATE) PTrackUrlParams.append('max_sample_rate', MAX_SAMPLE_RATE);
-            Tracks.forEach(function(track) {
-                PTrackUrlParams.append('ptrack', track); 
-            });                  
+         PTrackUrlParams = new URLSearchParams();
+         if(MAX_SAMPLE_RATE) PTrackUrlParams.append('max_sample_rate', MAX_SAMPLE_RATE);
+         Tracks.forEach(function(track) {
+             PTrackUrlParams.append('ptrack', track); 
+         });                  
      }
         
-        function BuildPTrack() {
-            _BuildPTrack();
-            var urlstring = PTrackUrlParams.toString();
-            if(urlstring != '') {
-                window.history.replaceState('playlist', 'Title', 'music_gapless?' + urlstring);
-            }
-        }
+     function BuildPTrack() {
+         _BuildPTrack();
+         var urlstring = PTrackUrlParams.toString();
+         if(urlstring != '') {
+             window.history.replaceState('playlist', 'Title', 'music_gapless?' + urlstring);
+         }
+     }
         
         _BuildPTrack();        
         var orig_ptracks = urlParams.getAll('ptrack');

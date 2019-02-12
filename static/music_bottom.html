@@ -226,7 +226,10 @@
         
         function BuildPTrack() {
             _BuildPTrack();
-            window.history.replaceState('playlist', 'Title', 'music?' + PTrackUrlParams.toString()); 
+            var urlstring = PTrackUrlParams.toString();
+            if(urlstring != '') {
+                window.history.replaceState('playlist', 'Title', 'music_gapless?' + urlstring);
+            }
         }
         
         _BuildPTrack();        
