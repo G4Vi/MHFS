@@ -86,7 +86,7 @@ sub gdrive_create_upload_session {
 
 sub gdrive_upload {
     my ($session, $file) = @_;    
-    my $pid = open(my $stdout, '-|', 'curl', '-s', '-X', 'PUT', '-H', "Authorization: Bearer $ACCESS_TOKEN", '-T', $file, $session) or die "upload failed";
+    my $pid = open(my $stdout, '-|', 'curl', '-s', '-g', '-X', 'PUT', '-H', "Authorization: Bearer $ACCESS_TOKEN", '-T', $file, $session) or die "upload failed";
     local $/;
     my $res = <$stdout>;
     waitpid($pid, 0); 
