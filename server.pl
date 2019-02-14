@@ -123,7 +123,7 @@ package EventLoop::Poll {
             }
             else {
                 say "Poll ERROR";
-                return undef;
+                #return undef;
             }  
         }
     
@@ -200,11 +200,20 @@ package HTTP::BS::Server {
         if(! $csock) {
             say "server: cannot accept client";
             return undef;        
-        }       
+        }
+        my $peerhost = $csock->peerhost();
+        if(! $peerhost) {
+            say "server: no peerhost";
+            return undef;        
+        }
+        my $peerport = $csock->peerport();
+        if(! $peerport) {
+            say "server no peerport";
+            return undef;
+        }        
         
         say "-------------------------------------------------";
-        say "NEW CONN " . $csock->peerhost() . ':' . $csock->peerport();                   
-        
+        say "NEW CONN " . $peerhost . ':' . $peerport;        
         my $MAX_TIME_WITHOUT_SEND = 30; #600;
         my $cref = HTTP::BS::Server::Client->new($csock, $server);
                
@@ -285,7 +294,7 @@ package HTTP::BS::Server::Util {
     use Exporter 'import';
     use File::Find;
     use Cwd qw(abs_path getcwd);
-    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC_ARR', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'ASYNC', 'shell_stdout', 'shell_escape', 'ssh_stdout');
+    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'shell_stdout', 'shell_escape', 'ssh_stdout');
     sub LOCK_GET_LOCKDATA {
         my ($filename) = @_;
         my $lockname = "$filename.lock";    
@@ -373,23 +382,17 @@ package HTTP::BS::Server::Util {
         UNLOCK_WRITE($fullpath);
     }
 
-    sub ASYNC_ARR {
-        my $func = shift;
-        $SIG{CHLD} = "IGNORE";
-        if(fork() == 0) {
+    sub ASYNC {
+        my $func = shift;        
+        my $pid = fork();
+        if($pid == 0) {
             $func->(@_);
             exit 0;
         }
-    }
-    
-    sub ASYNC {
-        my ($func, $arg) = @_;
-        $SIG{CHLD} = "IGNORE";
-        if(fork() == 0) {
-        $func->($arg);
-        exit 0;
-        }    
-    }
+        else {
+            say "PID $pid ASYNC";
+        }
+    }    
 
     sub space2us {
         my ($string) = @_;
@@ -420,14 +423,16 @@ package HTTP::BS::Server::Util {
         print "shell_stdout: ";
         print "$_ " foreach @_;
         print "\n";
-        open(my $cmdh, '-|', @_) or die("shell_stdout $!");
+        my $pid = open(my $cmdh, '-|', @_);
+        $pid or die("shell_stdout $!");
+        say "PID $pid shell_stdout";        
         <$cmdh>;
         }
     }
 
     sub ssh_stdout {
         my $source = shift;
-    return shell_stdout('ssh', $source->{'userhost'}, '-p', $source->{'port'}, @_);
+        return shell_stdout('ssh', $source->{'userhost'}, '-p', $source->{'port'}, @_);
     }
     
     sub shell_escape {
@@ -756,11 +761,22 @@ package HTTP::BS::Server::Client::Request {
         }
         say "Making request via proxy:";        
         $newrequest .= "\r\n";        
-        my $pid = open3(my $in, my $out, my $err = gensym, ('nc', $host, $proxy->{'httpport'})) or die "BAD NC";
-        print $in $newrequest;
-        my $size = $node->[1] if $node;
-        my %fileitem = ('fh' => $out);
-        $self->_SendResponse(\%fileitem);        
+        $self->{'process'} = HTTP::BS::Server::Process->new(['nc', $host, $proxy->{'httpport'}], $self->{'client'}{'server'}{'evp'}, 
+        {'STDIN' => sub {
+            my ($in) = @_;
+            say "proxy sending request";
+            print $in $newrequest; #this could block, but probably wont                 
+            return 0;
+        },
+        'STDOUT' => sub {
+            my($out) = @_;
+            say "proxy sending response";
+            my %fileitem = ('fh' => $out);
+            $self->_SendResponse(\%fileitem); 
+            return 0;
+        }
+        });       
+             
         return 1;
     }
 
@@ -873,8 +889,9 @@ package HTTP::BS::Server::Client {
     sub onWriteReady {
         my ($client) = @_;
 
-        # send the response
+        # send the response        
         if(defined $client->{'request'}{'response'}) {
+            # TODO only TrySendResponse if there is data in buf or to be read
             my $tsrRet = $client->TrySendResponse;
             if(!defined($tsrRet)) {
                 say "-------------------------------------------------";                               
@@ -891,11 +908,12 @@ package HTTP::BS::Server::Client {
             }            
         }
         else {             
-            say "response not defined, probably going to be set by a timer";                     
+            say "response not defined, probably set later by a timer or poll";                     
         }        
         return 1;        
     }    
 
+    # TODO not block on read
     sub TrySendResponse {
         my ($client) = @_;
         my $csock = $client->{'sock'};        
@@ -1033,54 +1051,163 @@ package HTTP::BS::Server::Client {
     1;  
 }
 
-package HTTP::BS::Server::Process{
+package HTTP::BS::Server::FD::Reader{
     use strict; use warnings;
     use feature 'say';
-    use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
-    use IO::Socket::INET;
-    use Errno qw(EINTR EIO :POSIX);
-    use Fcntl qw(:seek :mode);
-    use File::stat;
+    use Time::HiRes qw( usleep clock_gettime CLOCK_MONOTONIC);
     use IO::Poll qw(POLLIN POLLOUT POLLHUP);
     use Scalar::Util qw(looks_like_number weaken);
-    use Data::Dumper;
-    use Carp;
-    $SIG{ __DIE__ } = sub { Carp::confess( @_ ) };
-    
     sub new {
-        my ($class, $owner, $torun, $fddispatch) = @_;        
-        my %self = ('time' => clock_gettime(CLOCK_MONOTONIC), 'owner' => $owner);        
-        weaken($self{'owner'});
-        #, 'onReadReady' => $methods->{'onReadReady'}, 'onWriteReady' => $methods->{'onWriteReady'}, 'onHangUp' => $methods->{'onHangUp'});        
+        my ($class, $process, $fd, $func) = @_;        
+        my %self = ('time' => clock_gettime(CLOCK_MONOTONIC), 'process' => $process, 'fd' => $fd, 'onReadReady' => $func); 
+        #weaken($self{'process'});
         return bless \%self, $class;
     }
     
     sub onReadReady {
         my ($self) = @_;
-        return $self->{'onReadReady'}();   
-    }
-    
-    sub onWriteReady {
-        my ($self) = @_;
-        return $self->{'onWriteReady'}();    
+        my $ret = $self->{'onReadReady'}($self->{'fd'});  
+        if($ret == 0) {
+            $self->{'process'}->remove($self->{'fd'});
+            return 1;
+        }
+        if($ret == -1) {
+            return undef;
+        }
+        if($ret == 0) {
+            return 1;
+        }
     }
     
     sub onHangUp {
-        my ($self) = @_;
-        return $self->{'onHangUp'}();   
+    
     }
     
     sub DESTROY {
         my $self = shift;
-        foreach my $fditem (@{$self->{'fddispatch'}}) {
-            close($fditem->{'fd'});        
-        }          
+        print say "PID " . $self->{'process'}{'pid'} . ' ' if($self->{'process'});
+        say 'reader DESTROY called';                        
+    }
+    
+    1;
+ }
+ 
+ package HTTP::BS::Server::FD::Writer {
+    use strict; use warnings;
+    use feature 'say';
+    use Time::HiRes qw( usleep clock_gettime CLOCK_MONOTONIC);
+    use IO::Poll qw(POLLIN POLLOUT POLLHUP);
+    use Scalar::Util qw(looks_like_number weaken);
+    sub new {
+        my ($class, $process, $fd, $func) = @_;        
+        my %self = ('time' => clock_gettime(CLOCK_MONOTONIC), 'process' => $process, 'fd' => $fd, 'onWriteReady' => $func); 
+        #weaken($self{'process'});
+        return bless \%self, $class;
+    }
+    
+    sub onWriteReady {
+        my ($self) = @_;
+        my $ret = $self->{'onWriteReady'}($self->{'fd'});
+        if($ret == 0) {
+            $self->{'process'}->remove($self->{'fd'});
+            return 1;
+        }
+        if($ret == -1) {
+            return undef;
+        }
+        if($ret == 0) {
+            return 1;
+        }
+    }
+    
+    sub onHangUp {
+    
+    }
+
+    sub DESTROY {
+        my $self = shift;
+        say "PID " . $self->{'process'}{'pid'} . ' writer DESTROY called';                    
+    }
+    
+    1;
+ }
+
+package HTTP::BS::Server::Process {
+    use strict; use warnings;
+    use feature 'say';
+    use Symbol 'gensym'; 
+    use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
+    use POSIX ":sys_wait_h";
+    use IO::Socket::INET;
+    use IO::Poll qw(POLLIN POLLOUT POLLHUP);
+    use Errno qw(EINTR EIO :POSIX);
+    use Fcntl qw(:seek :mode);
+    use File::stat;
+    use IPC::Open3;
+    use Scalar::Util qw(looks_like_number weaken);
+    use Data::Dumper;
+    use Carp;
+    $SIG{ __DIE__ } = sub { Carp::confess( @_ ) };
+    
+    my %CHILDREN;
+    $SIG{CHLD} = sub {
+        while((my $child = waitpid(-1, WNOHANG)) > 0) {
+            if(defined $CHILDREN{$child}) {
+                say "PID $child reaped (func)"; 
+                $CHILDREN{$child}->();
+                $CHILDREN{$child} = undef;
+            }
+            else {
+                say "PID $child reaped (No func)"; 
+            }        
+        }    
+    };
+    
+    sub new {
+        my ($class, $torun, $evp, $fddispatch) = @_;        
+        my %self = ('time' => clock_gettime(CLOCK_MONOTONIC), 'evp' => $evp);             
+        my $pid = open3(my $in, my $out, my $err = gensym, @$torun) or die "BAD process";
+        if($fddispatch->{'SIGCHLD'}) {
+            say "PID $pid custom SIGCHLD handler";
+            $CHILDREN{$pid} = $fddispatch->{'SIGCHLD'};            
+        }
+        $self{'pid'} = $pid;
+        say 'PID '. $pid . ' NEW PROCESS: ' . $torun->[0];    
+        if($fddispatch->{'STDIN'}) {            
+            $self{'fd'}{'stdin'} = HTTP::BS::Server::FD::Writer->new(\%self, $in, $fddispatch->{'STDIN'});
+            $evp->set($in, $self{'fd'}{'stdin'}, POLLOUT | $EventLoop::Poll::ALWAYSMASK);
+        }
+        if($fddispatch->{'STDOUT'}) {        
+            $self{'fd'}{'stdout'} = HTTP::BS::Server::FD::Reader->new(\%self, $out, $fddispatch->{'STDOUT'}); 
+            $evp->set($out, $self{'fd'}{'stdout'}, POLLIN | $EventLoop::Poll::ALWAYSMASK);            
+        }
+        if($fddispatch->{'STDERR'}) {
+            $self{'fd'}{'stderr'} = HTTP::BS::Server::FD::Reader->new(\%self, $err, $fddispatch->{'STDERR'});
+            $evp->set($err, $self{'fd'}{'stderr'}, POLLIN | $EventLoop::Poll::ALWAYSMASK);       
+        }
+               
+        return bless \%self, $class;
+    } 
+
+    sub remove {
+        my ($self, $fd) = @_;
+        $self->{'evp'}->remove($fd);
+        foreach my $key (keys %{$self->{'fd'}}) {
+            if(defined($self->{'fd'}{$key}{'fd'}) && ($fd == $self->{'fd'}{$key}{'fd'})) {
+                $self->{'fd'}{$key} = undef;
+                last;                
+            }
+        }       
+    }    
+    
+    
+    sub DESTROY {
+        my $self = shift;
+        say "PID " . $self->{'pid'} . ' DESTROY called';              
     }
     
     1;    
 }
-
-
 
 package GDRIVE {
     use strict; use warnings;
@@ -1188,7 +1315,7 @@ package GDRIVE {
             open(my $tmpfile, ">>", $fnametmp) or die;
             close($tmpfile);
         }
-        ASYNC_ARR(\&_gdrive_upload, $file, $settings);
+        ASYNC(\&_gdrive_upload, $file, $settings);
     }
     
     
@@ -1196,55 +1323,56 @@ package GDRIVE {
         my($request, $requestfile) = @_;
         my $handled;
         
-        # only send it by gdrive, if it was uploaded in time
+        # if the file isn't in the tempdir, create a symlink to it in th tmpdir
+        my $tmpdir = $request->{'client'}{'server'}{'settings'}{'TMPDIR'};        
+        my $qmtmpdir = quotemeta $tmpdir;
+        if($requestfile !~ /^$qmtmpdir/) {
+             my $reqbase = basename($requestfile);
+             my $tmpfile = $tmpdir . '/' . $reqbase;
+             if(! -e $tmpfile) {
+                 symlink($requestfile, $tmpfile);
+             }
+             $requestfile = $tmpfile;
+        }
+                        
+        # send if it was uploaded in time
         my $gdrivefile = should_gdrive($requestfile);       
         if(defined($gdrivefile) && looks_like_number($gdrivefile) && ($gdrivefile == 0)) {
             $handled = 1;
             my $url = read_file($requestfile . '_gdrive');
             $request->Send307($url);
-        } 
-
+        }
         
         my @togdrive;
-        my $tmpdir = $request->{'client'}{'server'}{'settings'}{'TMPDIR'};
-        if((! $handled) && ($request->{'qs'}{'gdriveforce'})) {
-           if(defined($gdrivefile) && ($gdrivefile ne '')) { 
-               say 'forcing gdrive';           
-               $handled = 1;
-               my $reqbase = basename($requestfile);
-               my $tmpfile = $tmpdir . '/' . $reqbase;
-               $gdrivefile = $tmpdir . '/' . $reqbase . '_gdrive';
-               if(! -e $tmpfile) {
-                   symlink($requestfile, $tmpfile);
-               }
-              
-               
-               push @togdrive, $tmpfile;
-               weaken($request); # the only one who should be keeping $request alive is $client                    
-               $request->{'client'}{'server'}{'evp'}->add_timer(0, 0, sub {
-                   if(! defined $request) {
-                       say "\$request undef, ignoring CB";
-                       return undef;
-                   }                                       
-                   if(! -e $gdrivefile) {
-                       my $current_time = clock_gettime(CLOCK_MONOTONIC);                                              
-                       if(($current_time - $request->{'client'}{'time'}) < 6) {
-                           say "extending time for gdrive";                    
-                           $request->{'client'}{'time'} -= 6;
-                       }
-                       return 1;
-                   }
-                   
-                   say "gdrivefile found";
-                   my $url = read_file($gdrivefile);
-                   $request->Send307($url);
-                   return undef;                    
-               });               
-           }
-        }        
+        # if gdrive force was set and should_gdrive, still gdrive it 
+        if(((! $handled) && ($request->{'qs'}{'gdriveforce'})) &&
+        (defined($gdrivefile) && ($gdrivefile ne ''))) {        
+            say 'forcing gdrive';           
+            $handled = 1;
+            $gdrivefile = $requestfile . '_gdrive';          
+            push @togdrive, $requestfile;
+            weaken($request); # the only one who should be keeping $request alive is $client                    
+            $request->{'client'}{'server'}{'evp'}->add_timer(0, 0, sub {
+                if(! defined $request) {
+                    say "\$request undef, ignoring CB";
+                    return undef;
+                }                                       
+                if(! -e $gdrivefile) {
+                    my $current_time = clock_gettime(CLOCK_MONOTONIC);                                              
+                    if(($current_time - $request->{'client'}{'time'}) < 6) {
+                        say "extending time for gdrive";                    
+                        $request->{'client'}{'time'} -= 6;
+                    }
+                    return 1;
+                }                
+                say "gdrivefile found";
+                my $url = read_file($gdrivefile);
+                $request->Send307($url);
+                return undef;                    
+            });            
+        }                
         
-        # queue up future hls files
-        
+        # queue up future hls files        
         if( $requestfile =~ /^(.+[^\d])(\d+)\.ts$/) {
             my ($start, $num) = ($1, $2);
             # no more than 3 uploads should be occurring at a time
@@ -1421,13 +1549,114 @@ package MusicLibrary {
     }
     
     sub SendLocal {
-        my ($request, $file) = @_;
-        if($request->{'qs'}{'gapless'}) {
-            $request->SendFile($file);    
+        my ($request, $file) = @_; 
+        
+        my $filebase = basename($file);
+        my $tmpdir = $request->{'client'}{'server'}{'settings'}{'TMPDIR'};            
+        my @fourtyeightK_rates = (192000, 96000, 48000);
+        my @fourtyfourK_rates = (88200, 44100);
+        my $max_sample_rate = $request->{'qs'}{'max_sample_rate'};  
+        
+        my $isSendable = sub  {             
+            if( ! defined $max_sample_rate) {
+                return 1;
+            }           
+            
+            my @desiredsamplerates = ($max_sample_rate);
+            my @rates = (@fourtyeightK_rates, @fourtyfourK_rates);
+            foreach my $rate (@rates) {
+                if($rate <= $max_sample_rate) {
+                    push @desiredsamplerates, $rate;
+                }                
+            }           
+            # if we altready transcoded, don't waste time doing it again
+            foreach my $asamplerate (@desiredsamplerates) {
+                my $tmpfile = $tmpdir . '/' . $asamplerate . '_' . $filebase;
+                if(-e $tmpfile) {
+                    say "No need to resample $tmpfile exists";
+                    $file = $tmpfile;
+                    return 1;
+                }                
+            }
+            return 0;
+        };
+        
+        if($isSendable->()) {
+            if($request->{'qs'}{'gapless'}) {
+                $request->SendFile($file);    
+            }
+            else {
+                $request->SendLocalFile($file);
+            }
+            return;
+        
         }
-        else {
-             $request->SendLocalFile($file);
-        }
+            
+        
+        my $evp = $request->{'client'}{'server'}{'evp'};                    
+        $request->{'process'} = HTTP::BS::Server::Process->new(['ffmpeg', '-i', $file], $evp,
+        { 'STDERR' => sub {
+            my ($err) = @_;
+            my $buf;
+            if((! read($err, $buf, 4096)) || ($buf !~ /Audio:\s[^\s]+\s(\d+)\sHz/)) {
+                say "unable to read ffmpeg err";
+                say $buf if($buf);
+                $request->{'qs'}{'max_sample_rate'} = undef;
+                SendLocal($request, $file);
+                return -1;
+            }
+            my $samplerate = $1;
+            say "samplerate $samplerate";
+            if($samplerate <= $max_sample_rate) {
+                say "samplerate is <= max_sample_rate";
+                $request->{'qs'}{'max_sample_rate'} = undef;
+                SendLocal($request, $file);                    
+            }
+            else { 
+                # choose the sample rate                
+                my $desiredrate;
+                if(($samplerate % 48000) == 0) {
+                    foreach my $rate (@fourtyeightK_rates) {
+                        if(($rate <= $samplerate) && ($rate <= $max_sample_rate)) {
+                            $desiredrate = $rate;
+                            last;
+                        }
+                    }                    
+                }
+                elsif(($samplerate % 44100) == 0) {
+                    foreach my $rate (@fourtyfourK_rates) {
+                        if(($rate <= $samplerate) && ($rate <= $max_sample_rate)) {
+                            $desiredrate = $rate;
+                            last;
+                        }
+                    }                    
+                }
+                else {
+                    $desiredrate = $max_sample_rate; 
+                }
+                say "desired rate: $desiredrate";
+                # build the ffmpeg command                   
+                my ($ext) = $file =~ /\.([^.]+)$/;
+                my @ffcmd = ('ffmpeg', '-i', $file, '-c:a', $ext);
+                push @ffcmd, ('-sample_fmt', 's16');
+                push @ffcmd, ('-ar', $desiredrate);
+                $file = $tmpdir . '/' . $desiredrate . '_' . $filebase;
+                push @ffcmd, $file;
+                $request->{'process'} = HTTP::BS::Server::Process->new(\@ffcmd, $evp, 
+                { 'SIGCHLD' => sub {
+                   $request->{'qs'}{'max_sample_rate'} = undef;
+                   SendLocal($request, $file);                    
+                },                    
+                'STDERR' => sub {
+                    my ($terr) = @_;
+                    read($terr, $buf, 4096);
+                    #say $buf;                    
+                }});                  
+            }
+            return -1;
+            
+        }});     
+       
     }
 
     sub BuildLibraries {
@@ -1822,7 +2051,7 @@ sub get_video {
             elsif($fmt eq 'dash') {
                 $video{'on_exists'} = \&video_dash_check_ready;
             }            
-            ASYNC_ARR(\&shellcmd_unlock, \@cmd, $video{'out_filepath'});            
+            ASYNC(\&shellcmd_unlock, \@cmd, $video{'out_filepath'});            
         }           
         else {
             $request->Send404;

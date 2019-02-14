@@ -175,14 +175,18 @@
                 return;
             }
             SetNextText(Tracks[CurrentTrack+1].trackname);
-            if(! Tracks[CurrentTrack+1].downloading) {
+            if(Tracks[CurrentTrack+1].buf){
+                console.log('buf present, aqueue');
+                aqueue(Tracks[CurrentTrack+1]);
+            }
+            else if(! Tracks[CurrentTrack+1].downloading) {
                 downloadAndQueue(Tracks[CurrentTrack+1]);
             }
             else {
                 //next track is already downloading               
                 if(Tracks[CurrentTrack+1].timeskipped != 0) {
-                    alert('timeskipped not cleared ' + CurrentTrack+1 + ' ' + Tracks[CurrentTrack+1]);
                     console.log('timeskipped value: ' + Tracks[CurrentTrack+1].timeskipped);
+                    alert('timeskipped not cleared ' + CurrentTrack+1 + ' ' + Tracks[CurrentTrack+1]);                    
                     Tracks[CurrentTrack+1].timeskipped = 0;
                 }
                 console.log('next track is already downloading?');               
@@ -249,7 +253,8 @@
     }    
     
     function downloadAndQueue(track) {          
-        track.downloading = true;       
+        track.downloading = true;
+        track.timeskipped = 0;          
         request = new XMLHttpRequest();
 		request.open('get', geturl(track.trackname), true);
 		request.responseType = 'arraybuffer';       
@@ -265,8 +270,7 @@
                     NextBufferTime = MainAudioContext.currentTime + BUFFER_S;                       
                     OnStartTimer();
                 }                
-                track.buf = incomingBuffer;
-                track.timeskipped = 0;                 
+                track.buf = incomingBuffer;                               
                 aqueue(track);
                 track.downloading = false;
                 console.log('downloaded ' + track.trackname);
