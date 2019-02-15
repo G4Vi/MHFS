@@ -1414,7 +1414,6 @@ package GDRIVE {
     1;
 }
 
-
 package MusicLibrary {
     use strict; use warnings;
     use feature 'say';
@@ -1432,9 +1431,10 @@ package MusicLibrary {
     use IPC::Open3;
     use Storable;
     use Fcntl ':mode';  
-
+    use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
+    
     sub BuildLibrary {
-    my ($path) = @_;        
+        my ($path) = @_;        
         my $statinfo = stat($path);
         return undef if(! $statinfo);       
         if(!S_ISDIR($statinfo->mode)){
@@ -1548,116 +1548,125 @@ package MusicLibrary {
         return $request->SendLocalBuf($self->{'html'}, "text/html; charset=utf-8");
     }
     
-    sub SendLocal {
-        my ($request, $file) = @_; 
-        
-        my $filebase = basename($file);
-        my $tmpdir = $request->{'client'}{'server'}{'settings'}{'TMPDIR'};            
-        my @fourtyeightK_rates = (192000, 96000, 48000);
-        my @fourtyfourK_rates = (88200, 44100);
-        my $max_sample_rate = $request->{'qs'}{'max_sample_rate'};  
-        
-        my $isSendable = sub  {             
-            if( ! defined $max_sample_rate) {
-                return 1;
-            }           
-            
-            my @desiredsamplerates = ($max_sample_rate);
-            my @rates = (@fourtyeightK_rates, @fourtyfourK_rates);
-            foreach my $rate (@rates) {
-                if($rate <= $max_sample_rate) {
-                    push @desiredsamplerates, $rate;
-                }                
-            }           
-            # if we altready transcoded, don't waste time doing it again
-            foreach my $asamplerate (@desiredsamplerates) {
-                my $tmpfile = $tmpdir . '/' . $asamplerate . '_' . $filebase;
-                if(-e $tmpfile) {
-                    say "No need to resample $tmpfile exists";
-                    $file = $tmpfile;
-                    return 1;
-                }                
-            }
-            return 0;
-        };
-        
-        if($isSendable->()) {
-            if($request->{'qs'}{'gapless'}) {
-                $request->SendFile($file);    
+    sub SendLocalTrack {
+        my ($request, $file) = @_;    
+        my $gapless = $request->{'qs'}{'gapless'};
+        my $SendFile = sub {
+            my($tosend) = @_;
+            if($gapless) {
+                $request->SendFile($tosend);
             }
             else {
-                $request->SendLocalFile($file);
-            }
-            return;
-        
-        }
+                $request->SendLocalFile($tosend);
+            }        
+        };        
             
-        
+        my $max_sample_rate = $request->{'qs'}{'max_sample_rate'};
+        if(! $max_sample_rate) {
+            $SendFile->($file);
+            return;            
+        }
+        my $bitdepth = $request->{'qs'}{'bitdepth'};    
+        if(! $bitdepth) {
+            $bitdepth = $max_sample_rate > 48000 ? 24 : 16;        
+        }
+        say "using bitdepth $bitdepth";
+        my %rates = (
+            '48000' => [192000, 96000, 48000],
+            '44100' => [176400, 88200, 44100]        
+        );              
+        my @acceptable_settings = ( [24, 192000], [24, 96000], [24, 48000], [24, 176400],  [24, 88200], [16, 48000], [16, 44100]);        
+        my $filebase = basename($file);
+        my $tmpdir = $request->{'client'}{'server'}{'settings'}{'TMPDIR'};       
+        my @desired = ([$bitdepth, $max_sample_rate]);           
+        foreach my $setting (@acceptable_settings) {
+            if(($setting->[0] <= $bitdepth) && ($setting->[1] <= $max_sample_rate)) {
+                push @desired, $setting;
+            }                
+        }           
+        # if we altready transcoded, don't waste time doing it again
+        foreach my $setting (@desired) {
+            my $tmpfile = $tmpdir . '/' . $setting->[0] . '_' . $setting->[1] . '_' . $filebase;
+            if(-e $tmpfile) {
+                say "No need to resample $tmpfile exists";
+                $SendFile->($tmpfile);
+                return;
+            }                
+        }
+         # HACK
+        say "client time was: " . $request->{'client'}{'time'};
+        $request->{'client'}{'time'} += 30;
+        say "HACK client time extended to " . $request->{'client'}{'time'};
+        # have ffmpeg determine the input file parameters and act accordingly
         my $evp = $request->{'client'}{'server'}{'evp'};                    
-        $request->{'process'} = HTTP::BS::Server::Process->new(['ffmpeg', '-i', $file], $evp,
-        { 'STDERR' => sub {
+        $request->{'process'} = HTTP::BS::Server::Process->new(['ffmpeg', '-i', $file], $evp, {
+        'STDERR' => sub {
             my ($err) = @_;
             my $buf;
-            if((! read($err, $buf, 4096)) || ($buf !~ /Audio:\s[^\s]+\s(\d+)\sHz/)) {
-                say "unable to read ffmpeg err";
-                say $buf if($buf);
-                $request->{'qs'}{'max_sample_rate'} = undef;
-                SendLocal($request, $file);
+            my $samplerate;
+            my $inbitdepth;
+            my $rfailed = ! read($err, $buf, 4096);
+            if($rfailed || ($buf !~ /Audio:\s[^\s]+\s(\d+)\sHz,\s[a-z]+,\s(?:(?:s(16))|(?:s32\s\((24)\sbit\)))/)) {
+                say "regex or ffmpeg failed";
+                say $buf if($buf);                
+                $SendFile->($file);
                 return -1;
             }
-            my $samplerate = $1;
-            say "samplerate $samplerate";
-            if($samplerate <= $max_sample_rate) {
+            else {
+                $samplerate = $1;
+                $inbitdepth = $2;
+                $inbitdepth = $3 if(! $inbitdepth);               
+            }                          
+            say "input: samplerate $samplerate bitdepth $inbitdepth";                        
+            if(($samplerate <= $max_sample_rate) && ($inbitdepth <= $bitdepth)) {
                 say "samplerate is <= max_sample_rate";
-                $request->{'qs'}{'max_sample_rate'} = undef;
-                SendLocal($request, $file);                    
-            }
-            else { 
-                # choose the sample rate                
-                my $desiredrate;
-                if(($samplerate % 48000) == 0) {
-                    foreach my $rate (@fourtyeightK_rates) {
+                $SendFile->($file);
+                return -1;                
+            }            
+            # choose the sample rate                
+            my $desiredrate;
+            RATE_FACTOR: foreach my $key (keys %rates) {
+                if(($samplerate % $key) == 0) {
+                    foreach my $rate (@{$rates{$key}}) {
                         if(($rate <= $samplerate) && ($rate <= $max_sample_rate)) {
                             $desiredrate = $rate;
-                            last;
-                        }
-                    }                    
-                }
-                elsif(($samplerate % 44100) == 0) {
-                    foreach my $rate (@fourtyfourK_rates) {
-                        if(($rate <= $samplerate) && ($rate <= $max_sample_rate)) {
-                            $desiredrate = $rate;
-                            last;
-                        }
-                    }                    
-                }
-                else {
-                    $desiredrate = $max_sample_rate; 
-                }
-                say "desired rate: $desiredrate";
-                # build the ffmpeg command                   
-                my ($ext) = $file =~ /\.([^.]+)$/;
-                my @ffcmd = ('ffmpeg', '-i', $file, '-c:a', $ext);
-                push @ffcmd, ('-sample_fmt', 's16');
-                push @ffcmd, ('-ar', $desiredrate);
-                $file = $tmpdir . '/' . $desiredrate . '_' . $filebase;
-                push @ffcmd, $file;
-                $request->{'process'} = HTTP::BS::Server::Process->new(\@ffcmd, $evp, 
-                { 'SIGCHLD' => sub {
-                   $request->{'qs'}{'max_sample_rate'} = undef;
-                   SendLocal($request, $file);                    
-                },                    
-                'STDERR' => sub {
-                    my ($terr) = @_;
-                    read($terr, $buf, 4096);
-                    #say $buf;                    
-                }});                  
+                            last RATE_FACTOR;
+                        }                      
+                    }
+                }                
             }
+            $desiredrate //= $max_sample_rate;                
+            say "desired rate: $desiredrate";
+            # build the command                   
+            my ($ext) = $file =~ /\.([^.]+)$/;
+            my $outfile = $tmpdir . '/' . $bitdepth . '_' . $desiredrate . '_' . $filebase;
+            my @cmd;
+            if($ext ne 'flac') {
+                @cmd = ('ffmpeg', '-i', $file, '-c:a', $ext);
+                push @cmd, ('-sample_fmt', 's16');
+                push @cmd, ('-ar', $desiredrate);
+                push @cmd, $outfile;
+            }
+            else {
+                @cmd = ('sox', $file, '-G', '-b', $bitdepth, $outfile, 'rate', '-v', '-L', $desiredrate, 'dither');
+                say "cmd: " . join(' ', @cmd);                     
+            }                             
+            $request->{'process'} = HTTP::BS::Server::Process->new(\@cmd, $evp, {
+            'SIGCHLD' => sub {
+                # HACK
+                $request->{'client'}{'time'} = clock_gettime(CLOCK_MONOTONIC); 
+                $SendFile->($outfile);                                      
+            },                    
+            'STDERR' => sub {
+                my ($terr) = @_;
+                read($terr, $buf, 4096);                                     
+            }});                  
+            
             return -1;
             
-        }});     
-       
-    }
+        }});   
+    }    
+   
 
     sub BuildLibraries {
         my ($self, $sources) = @_;
@@ -1672,7 +1681,7 @@ package MusicLibrary {
                     my ($request, $file) = @_;
                     return undef if(! -e $file);
                     return undef if(-d $file); #we can't handle directories right now
-                    SendLocal($request, $file);
+                    SendLocalTrack($request, $file);
                     return 1;
                 };      
             }

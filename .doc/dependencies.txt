@@ -1,4 +1,4 @@
-perl:
+perl modules:
 Any::URI::Escape 
 apt-get install libany-uri-escape-perl
 htmml escape?
@@ -7,4 +7,6 @@ Storable
 
 binaries:
 ffmpeg
+sox
+stunnel
 

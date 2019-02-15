@@ -93,7 +93,8 @@
         });
 
 		const urlParams = new URLSearchParams(window.location.search);
-        const MAX_SAMPLE_RATE = urlParams.get('max_sample_rate');        
+        const MAX_SAMPLE_RATE = urlParams.get('max_sample_rate');
+        const BITDEPTH = urlParams.get('bitdepth');        
         var PTrackUrlParams;
         var TrackQueue = []; 
         var QueueIndex = 0;       
@@ -132,7 +133,8 @@
             QueueIndex = track_index;
             if(track != '') {   
                 var url = 'music_dl?name=' +  encodeURIComponent(track);
-                if(MAX_SAMPLE_RATE) url += '&max_sample_rate=' + MAX_SAMPLE_RATE;                
+                if(MAX_SAMPLE_RATE) url += '&max_sample_rate=' + MAX_SAMPLE_RATE; 
+                if(BITDEPTH) url += '&bitdepth=' + BITDEPTH;                
 	            document.getElementById('audio_src').src = url;	            
                 finished = false;                
             }
@@ -219,6 +221,7 @@
         function _BuildPTrack() {
             PTrackUrlParams = new URLSearchParams();
             if(MAX_SAMPLE_RATE) PTrackUrlParams.append('max_sample_rate', MAX_SAMPLE_RATE);
+            if(BITDEPTH) PTrackUrlParams.append('bitdepth', BITDEPTH);
             TrackQueue.forEach(function(track) {
                 PTrackUrlParams.append('ptrack', track); 
             });                  
@@ -234,8 +237,9 @@
         
         _BuildPTrack();        
         var orig_ptracks = urlParams.getAll('ptrack');
-        queueTracks(orig_ptracks);     
-    
+        if(orig_ptracks.length > 0) {
+            queueTracks(orig_ptracks);
+        }    
  
         
     </script>   
