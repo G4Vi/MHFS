@@ -195,21 +195,21 @@ package HTTP::BS::Server {
     
     sub onReadReady {
         my ($server) = @_;
-        #create a client 
+        #try to create a client 
         my $csock = $server->{'sock'}->accept();
         if(! $csock) {
             say "server: cannot accept client";
-            return undef;        
+            return 1;        
         }
         my $peerhost = $csock->peerhost();
         if(! $peerhost) {
             say "server: no peerhost";
-            return undef;        
+            return 1;        
         }
         my $peerport = $csock->peerport();
         if(! $peerport) {
-            say "server no peerport";
-            return undef;
+            say "server: no peerport";
+            return 1;
         }        
         
         say "-------------------------------------------------";
