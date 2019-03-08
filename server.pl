@@ -92,6 +92,7 @@ package EventLoop::Poll {
                         #say "readyReady";                                                                  
                         if(! defined($obj->onReadReady)) {
                             $self->remove($handle);
+                            say "poll has " . scalar ( $self->{'poll'}->handles) . " handles";  
                             next;
                         }                      
                     }
@@ -100,14 +101,16 @@ package EventLoop::Poll {
                         #say "writeReady";                        
                         if(! defined($obj->onWriteReady)) {
                             $self->remove($handle);
+                             say "poll has " . scalar ( $self->{'poll'}->handles) . " handles";  
                             next;
                         }                                  
                     }
                     
                     if($revents & (POLLHUP | $POLLRDHUP )) { 
-                        say "Hangup";                   
+                        say "Hangup $handle";                   
                         $obj->onHangUp();
-                        $self->remove($handle);                        
+                        $self->remove($handle);
+                        say "poll has " . scalar ( $self->{'poll'}->handles) . " handles";                        
                     }                   
 
                     #if(! looks_like_number($revents ) ) {
@@ -230,7 +233,6 @@ package HTTP::BS::Server {
             if($time_elapsed > $MAX_TIME_WITHOUT_SEND) {
                 say "\$MAX_TIME_WITHOUT_SEND ($MAX_TIME_WITHOUT_SEND) exceeded, closing CONN";
                 say "-------------------------------------------------";               
-                say "poll has " . scalar ( $server->{'evp'}{'poll'}->handles) . " handles";
                 $server->{'evp'}->remove($cref->{'sock'});
                 say "poll has " . scalar ( $server->{'evp'}{'poll'}->handles) . " handles";                             
                 return undef;                
@@ -583,7 +585,9 @@ package HTTP::BS::Server::Client::Request {
         }
         $headtext .=   "Content-Type: $mime\r\n";
         $headtext .=   'Content-Disposition: inline; filename="' . $filename . "\"\r\n" if ($filename);
-        $headtext .=   "Accept-Ranges: bytes\r\n";
+        if($datalength ne '*') {
+            $headtext .= "Accept-Ranges: bytes\r\n";
+        }
         #$headtext .=   "Accept-Ranges: none\r\n";
         $headtext .=   "Connection: keep-alive\r\n";    
         $headtext .= "\r\n";  
@@ -793,6 +797,15 @@ package HTTP::BS::Server::Client::Request {
         $fileitem{'buf'} = $$headtext . $buf;
         $self->_SendResponse(\%fileitem);
     }
+    
+    sub StartSendingBuf {
+        my ($self, $buf, $mime) = @_;
+        my $headtext;   
+        my %fileitem;        
+        ($fileitem{'length'}, $headtext) = $self->_BuildHeaders(99999999999, $mime);    
+        $fileitem{'buf'} = $$headtext . $buf;
+        $self->_SendResponse(\%fileitem);   
+    }
 
     # TODO, check plugins for SendOption
     sub SendFile {
@@ -813,6 +826,7 @@ package HTTP::BS::Server::Client {
     use feature 'say';
     use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
     use IO::Socket::INET;
+    use Socket qw(IPPROTO_TCP TCP_NODELAY);
     use Errno qw(EINTR EIO :POSIX);
     use Fcntl qw(:seek :mode);
     use File::stat;
@@ -891,7 +905,7 @@ package HTTP::BS::Server::Client {
 
         # send the response        
         if(defined $client->{'request'}{'response'}) {
-            # TODO only TrySendResponse if there is data in buf or to be read
+            # TODO only TrySendResponse if there is data in buf or to be read           
             my $tsrRet = $client->TrySendResponse;
             if(!defined($tsrRet)) {
                 say "-------------------------------------------------";                               
@@ -903,12 +917,30 @@ package HTTP::BS::Server::Client {
                     say "-------------------------------------------------";                               
                     return undef;              
                 }
+                elsif($client->{'request'}{'header'}{'Infinite'} && ($client->{'request'}{'header'}{'Infinite'} eq 'true')) {
+                    say "Infinite, not moving on";
+                    $client->SetEvents($EventLoop::Poll::ALWAYSMASK ); 
+                    #setsockopt($client->{'sock'}, IPPROTO_TCP, TCP_NODELAY, 1);
+                    #return undef;                    
+                    return 1;
+                }
+                elsif($client->{'request'}{'header'}{'Infinite'}) {
+                    say "debugging buffering";
+                    $client->SetEvents($EventLoop::Poll::ALWAYSMASK ); 
+                    #$client->{'sock'}->autoflush(1);
+                    #say "-------------------------------------------------";                               
+                    #return undef;
+                    #$client->{'sock'}->flush();
+                    #setsockopt($client->{'sock'}, IPPROTO_TCP, TCP_NODELAY, 1);
+                    #$| = 1;                    
+                    return 1;                    
+                }
                 $client->SetEvents(POLLIN | $EventLoop::Poll::ALWAYSMASK );
                 $client->onReadReady;
             }            
         }
         else {             
-            say "response not defined, probably set later by a timer or poll";                     
+            #say "response not defined, probably set later by a timer or poll";                     
         }        
         return 1;        
     }    
@@ -946,7 +978,7 @@ package HTTP::BS::Server::Client {
                     $dataitem->{'buf'} = $remdata;                                        
                     return '';
                 }
-                #we sent the full buf                
+                #we sent the full buf                             
                 $buf = undef;                
             }
             
@@ -1029,7 +1061,7 @@ package HTTP::BS::Server::Client {
             return $data;   
         }
         else {
-            # success we sent everything
+            # success we sent everything            
             return '';      
         }   
     }
@@ -1059,8 +1091,9 @@ package HTTP::BS::Server::FD::Reader{
     use Scalar::Util qw(looks_like_number weaken);
     sub new {
         my ($class, $process, $fd, $func) = @_;        
-        my %self = ('time' => clock_gettime(CLOCK_MONOTONIC), 'process' => $process, 'fd' => $fd, 'onReadReady' => $func); 
-        #weaken($self{'process'});
+        my %self = ('time' => clock_gettime(CLOCK_MONOTONIC), 'process' => $process, 'fd' => $fd, 'onReadReady' => $func);
+        say "PID " . $self{'process'}{'pid'} . 'FD ' . $self{'fd'};
+        weaken($self{'process'});
         return bless \%self, $class;
     }
     
@@ -1074,7 +1107,7 @@ package HTTP::BS::Server::FD::Reader{
         if($ret == -1) {
             return undef;
         }
-        if($ret == 0) {
+        if($ret == 1) {
             return 1;
         }
     }
@@ -1085,7 +1118,8 @@ package HTTP::BS::Server::FD::Reader{
     
     sub DESTROY {
         my $self = shift;
-        print say "PID " . $self->{'process'}{'pid'} . ' ' if($self->{'process'});
+        print "PID " . $self->{'process'}{'pid'} . ' ' if($self->{'process'});
+        print "FD " . $self->{'fd'};
         say 'reader DESTROY called';                        
     }
     
@@ -1101,7 +1135,7 @@ package HTTP::BS::Server::FD::Reader{
     sub new {
         my ($class, $process, $fd, $func) = @_;        
         my %self = ('time' => clock_gettime(CLOCK_MONOTONIC), 'process' => $process, 'fd' => $fd, 'onWriteReady' => $func); 
-        #weaken($self{'process'});
+        weaken($self{'process'});
         return bless \%self, $class;
     }
     
@@ -1115,7 +1149,7 @@ package HTTP::BS::Server::FD::Reader{
         if($ret == -1) {
             return undef;
         }
-        if($ret == 0) {
+        if($ret == 1) {
             return 1;
         }
     }
@@ -1125,8 +1159,9 @@ package HTTP::BS::Server::FD::Reader{
     }
 
     sub DESTROY {
-        my $self = shift;
-        say "PID " . $self->{'process'}{'pid'} . ' writer DESTROY called';                    
+        my $self = shift;        
+        say "PID " . $self->{'process'}{'pid'} . ' writer DESTROY called' .  " FD " . $self->{'fd'};
+                  
     }
     
     1;
@@ -1161,7 +1196,7 @@ package HTTP::BS::Server::Process {
                 say "PID $child reaped (No func)"; 
             }        
         }    
-    };
+    };    
     
     sub new {
         my ($class, $torun, $evp, $fddispatch) = @_;        
@@ -1175,15 +1210,24 @@ package HTTP::BS::Server::Process {
         say 'PID '. $pid . ' NEW PROCESS: ' . $torun->[0];    
         if($fddispatch->{'STDIN'}) {            
             $self{'fd'}{'stdin'} = HTTP::BS::Server::FD::Writer->new(\%self, $in, $fddispatch->{'STDIN'});
-            $evp->set($in, $self{'fd'}{'stdin'}, POLLOUT | $EventLoop::Poll::ALWAYSMASK);
+            $evp->set($in, $self{'fd'}{'stdin'}, POLLOUT | $EventLoop::Poll::ALWAYSMASK);                       
+        }
+        else {                       
+            $self{'fd'}{'stdin'}{'fd'} = $in;        
         }
         if($fddispatch->{'STDOUT'}) {        
             $self{'fd'}{'stdout'} = HTTP::BS::Server::FD::Reader->new(\%self, $out, $fddispatch->{'STDOUT'}); 
             $evp->set($out, $self{'fd'}{'stdout'}, POLLIN | $EventLoop::Poll::ALWAYSMASK);            
         }
+        else {
+            $self{'fd'}{'stdout'}{'fd'} = $out;        
+        }
         if($fddispatch->{'STDERR'}) {
             $self{'fd'}{'stderr'} = HTTP::BS::Server::FD::Reader->new(\%self, $err, $fddispatch->{'STDERR'});
             $evp->set($err, $self{'fd'}{'stderr'}, POLLIN | $EventLoop::Poll::ALWAYSMASK);       
+        }
+        else {
+            $self{'fd'}{'stderr'}{'fd'} = $err;
         }
                
         return bless \%self, $class;
@@ -1192,6 +1236,7 @@ package HTTP::BS::Server::Process {
     sub remove {
         my ($self, $fd) = @_;
         $self->{'evp'}->remove($fd);
+        say "poll has " . scalar ( $self->{'evp'}{'poll'}->handles) . " handles";
         foreach my $key (keys %{$self->{'fd'}}) {
             if(defined($self->{'fd'}{$key}{'fd'}) && ($fd == $self->{'fd'}{$key}{'fd'})) {
                 $self->{'fd'}{$key} = undef;
@@ -1801,6 +1846,7 @@ package App::MHFS; #Media Http File Server
 unless (caller) {
 use strict; use warnings;
 use feature 'say';
+use feature 'state';
 use Data::Dumper;
 use IO::Socket::INET;
 use File::Basename;
@@ -1935,6 +1981,165 @@ my @routes = (
             my $buf = '<video controls autoplay src="get_video?' . $request->{'qs'}{'querystring'} . '">Terrible</video>';            
             $request->SendLocalBuf($buf, 'text/html');
         }
+    ],
+    [
+        '/radio', sub {
+            my ($request) = @_;
+            $request->{'qs'}{'action'} //= 'listen';                      
+            state $abuf;
+            state $asegtime = 15;
+            
+            $request->{'header'}{'Infinite'} = 'true';
+            if( $request->{'qs'}{'action'} eq 'broadcast') {
+                my $atbuf; 
+                $abuf = undef;
+                my $evp = $request->{'client'}{'server'}{'evp'};                
+                my $file = $SETTINGS->{'MUSIC_ROOT'} . '/Alphaville - Forever Young (1984) [FLAC24-192] {P-13065}/02 - Summer in Berlin.flac';
+                my $bitdepth = 16;
+                my $desiredrate = 48000;
+                my $atime = 0;              
+                my $afmt = 'flac';
+                
+                state $processSegmentProcess;                
+                my $processSegment = sub {
+                    my ($onSegment) = @_;
+                    my @cmd = ('sox', '-t', 'sox', '-', '-V3', '-G', '-R', '-b', $bitdepth, '-t', $afmt, '-', 'rate', '-v', '-L', $desiredrate, 'dither');
+                    say "cmd: " . join(' ', @cmd);
+                    $atbuf = undef;                    
+                    $processSegmentProcess = HTTP::BS::Server::Process->new(\@cmd, $evp, {
+                    #'STDIN' => sub {
+                    #    my ($in) = @_;
+                    #    print $in $data;
+                    #    return 0;
+                    #},
+                    'SIGCHLD' => sub {                       
+                        my $buf;
+                        # dump stderr                        
+                        my $stderr = $processSegmentProcess->{'fd'}{'stderr'}{'fd'};
+                        while(read($stderr, $buf, 65536)) {
+                            print $buf;
+                        }                                               
+                        my $stdout = $processSegmentProcess->{'fd'}{'stdout'}{'fd'};
+                        while(read($stdout, $buf, 65536)) {
+                            say 'sigchld read';
+                            $atbuf .= $buf;
+                        }                                               
+                                             
+                        # don't write the meta, only frames (inc header)
+                        sub getNthByte {
+                            my ($pos, $sbuf) = @_;                            
+                            return ord(substr( $sbuf, $pos, 1));
+                        }                       
+                        for(my $pos = 0;;$pos++) {
+                            my $bytea = getNthByte($pos, $atbuf);
+                            my $byteb = getNthByte($pos+1, $atbuf);
+                            my $val = ($bytea << 8) + $byteb;                            
+                            if( ($val & 0xFFFE) == 0xFFF8) {
+                                say sprintf "synccode bytes: %x%x %c%c", $bytea, $byteb , $bytea, $byteb;
+                                $atbuf = substr $atbuf, $pos;
+                                last;
+                            } 
+                            elsif($pos == length($atbuf)) {
+                                use bytes;
+                                say "no synccode found, length" . length($atbuf);
+                                last;
+                            }                                          
+                        }
+                        undef  $processSegmentProcess; 
+                        say "processSegment done, executing onSegment";
+                        $onSegment->();                        
+                        $request->{'process'} = undef;                        
+                    },
+                   'STDOUT' => sub {
+                        my ($output) = @_;
+                        my $buf;                       
+                        if(my $bytes = read($output, $buf, 65536*2)) {
+                            $atbuf .= $buf;                                                       
+                        }                                               
+                        return 1;
+                   }                 
+                   });
+                };
+                state $getSegmentProcess;
+                my $getSegment = sub {
+                    my ($onSegment) = @_;                 
+                    my @cmd = ('sox', $file, '-t', 'sox', '-', 'trim', $atime, $asegtime);
+                    $atime +=  $asegtime;
+                    say "cmd: " . join(' ', @cmd);
+                    my $segment;                    
+                    $getSegmentProcess = HTTP::BS::Server::Process->new(\@cmd, $evp, {
+                    'SIGCHLD' => sub {                        
+                        my $buf;
+                        my $stdout = $getSegmentProcess->{'fd'}{'stdout'}{'fd'};
+                        binmode($stdout, ":bytes");
+                        while(read($stdout, $buf, 65536)) {
+                            say 'sigchld read';
+                            $segment .= $buf;
+                        }                      
+                        my $dfd = $processSegmentProcess->{'fd'}{'stdin'}{'fd'};
+                        print $dfd $segment;
+                        close($dfd);# so the other end pipe knows we are done writing                       
+                        undef  $getSegmentProcess;
+                        say "getSegment first proc done";
+                    },
+                    'STDOUT' => sub {
+                        my ($output) = @_;
+                        binmode($output, ":bytes");
+                        my $buf;                        
+                        if(my $bytes = read($output, $buf, 65536*2)) {
+                           $segment .= $buf;                                                       
+                        }                                               
+                        return 1;
+                    },                
+                    'STDERR' => sub {
+                        my ($terr) = @_;                       
+                        my $buf;                    
+                        read($terr, $buf, 1);
+                        say "stderr: $buf";                    
+                    }});                                      
+                };
+                weaken($request); # the only one who should be keeping $request alive is $client    
+                $getSegment->();
+                $processSegment->( sub {                   
+                    {
+                        use bytes;
+                        say "atbuf length " . length($atbuf);                    
+                    }
+                    $request->StartSendingBuf($atbuf, 'audio/flac');
+                    $abuf = $atbuf;                                     
+                    #$afmt = 'raw';                                     
+                    my $setSegTimer = sub {
+                        my ($self, $when) = @_;                                     
+                        $evp->add_timer($when, 0, sub {
+                            if(! defined $request) {
+                                say "\$request undef, ignoring CB";
+                                return undef;
+                            }
+                            $getSegment->();
+                            $processSegment->(
+                            sub {                               
+                                return if(! $atbuf);
+                                {
+                                    use bytes;
+                                    say "atbuf length " . length($atbuf);                    
+                                }
+                                $request->{'response'}{'buf'} .= $atbuf;
+                                $request->{'client'}->SetEvents(POLLOUT | $EventLoop::Poll::ALWAYSMASK );                                 
+                                $abuf = $atbuf; 
+                                $request->{'header'}{'Infinite'} = 'false';                            
+                                $self->($self, 0);#$asegtime);
+                                
+                            });                                                       
+                            return undef;
+                        });                                                                     
+                    };                    
+                    $setSegTimer->($setSegTimer, 0);                                    
+                });                           
+            }
+            else {
+                $request->StartSendingBuf($abuf, 'audio/flac');            
+            }        
+        }   
     ],
     # otherwise attempt to send a file from droot
     sub {
