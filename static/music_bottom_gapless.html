@@ -100,7 +100,8 @@
      
     const urlParams = new URLSearchParams(window.location.search);
     const MAX_SAMPLE_RATE = urlParams.get('max_sample_rate');
-    const BITDEPTH = urlParams.get('bitdepth');     
+    const BITDEPTH = urlParams.get('bitdepth');
+    const USESEGMENTS = urlParams.get('segments');
     var PTrackUrlParams;
     
     function AddPTrack(track) {
@@ -124,6 +125,32 @@
     }
     
     
+Number.prototype.toHHMMSS = function () {
+    var sec_num = Math.floor(this); //parseInt(this, 10); // don't forget the second param
+    var hours   = Math.floor(sec_num / 3600);
+    var minutes = Math.floor((sec_num - (hours * 3600)) / 60);
+    var seconds = sec_num - (hours * 3600) - (minutes * 60);
+    var str;
+    if(hours > 0) {
+        if (hours   < 10) {hours   = "0"+hours;}
+        str = hours+':'
+    }
+    else {
+        str = '';
+    }
+    //if (minutes < 10) {minutes = "0"+minutes;}
+    if (seconds < 10) {seconds = "0"+seconds;}
+    return  str+minutes+':'+seconds;   
+}
+    
+    function SetCurtimeText(seconds) {
+        var curtime = document.getElementById("curtime");    
+        curtime.value = seconds.toHHMMSS() ;
+    }
+    function SetEndtimeText(seconds) {
+        var endtime = document.getElementById("endtime");
+        endtime.value = seconds.toHHMMSS() ;
+    }
     
     function SetNextText(text) {
         document.getElementById('next_text').innerHTML = '<span>' + text + '</span>';    
@@ -136,9 +163,13 @@
     function SetPlayText(text) {    
         document.getElementById('play_text').innerHTML = '<span>' + text + '</span>';
     }
+    
+    function CreateAudioContext() {
+        return (window.hasWebKit) ? new webkitAudioContext() : (typeof AudioContext != "undefined") ? new AudioContext() : null;    
+    }
         
    
-    var MainAudioContext = (window.hasWebKit) ? new webkitAudioContext() : (typeof AudioContext != "undefined") ? new AudioContext() : null;
+    var MainAudioContext = CreateAudioContext();
     const BUFFER_MS = 300; //in MS
     const BUFFER_S = (BUFFER_MS/1000);
     var State = 'IDLE';
@@ -195,8 +226,7 @@
         
         
         if( Tracks[CurrentTrack].source) {
-            SetPlayText(Tracks[CurrentTrack].trackname);
-        
+            SetPlayText(Tracks[CurrentTrack].trackname);        
             var seekbar = document.getElementById("seekbar");
             seekbar.min = 0;       
             seekbar.max = Tracks[CurrentTrack].duration;        
@@ -226,6 +256,27 @@
                 console.log('next track is already downloading?');               
             }
         }
+        else if(Tracks[CurrentTrack].curseg && (Tracks[CurrentTrack].curseg >= 1)) {
+            SetPlayText(Tracks[CurrentTrack].trackname);        
+            var seekbar = document.getElementById("seekbar");
+            seekbar.min = 0;       
+            seekbar.max = Tracks[CurrentTrack].duration;        
+           
+            console.log(Tracks[CurrentTrack].trackname + ' (' + CurrentTrack + ') should now be playing with duration ' + Tracks[CurrentTrack].duration); 
+            if(! Tracks[CurrentTrack+1]) {
+                SetNextText(''); 
+                if(Tracks[CurrentTrack].numsegments == Tracks[CurrentTrack].curseg) {
+                    DLImmediately = true;
+                }                    
+                return;
+            }
+            SetNextText(Tracks[CurrentTrack+1].trackname);   
+            if(Tracks[CurrentTrack].numsegments == Tracks[CurrentTrack].curseg) {
+                if(! Tracks[CurrentTrack+1].downloading) {
+                    downloadAndQueue(Tracks[CurrentTrack+1]);
+                }           
+            }           
+        }
         else if(Tracks[CurrentTrack].downloading) {
             UpdateState('IDLE');        
         }
@@ -235,24 +286,41 @@
     }
     
     function clearTrackSource(track) {
-        track.source.onended = function(){};                
-        track.source.stop();  
-        track.source.disconnect();
-        track.source = null;   
+        if(track.source) {
+            track.source.onended = function(){};                
+            track.source.stop();  
+            track.source.disconnect();
+            track.source = null;
+        }
+        else if(track.sources){
+            track.sources.forEach(function(source) {
+                if(! source) return;
+                source.onended = function(){};    
+                source.stop();
+                source.disconnect();                              
+            });
+            track.sources = [];
+            track.curseg = null;
+            Tracks[CurrentTrack].SKIPNOW = null;            
+        }       
     }
     
     function onTrackEnd(event) {
+        var time = MainAudioContext.currentTime - Tracks[CurrentTrack].astart  +  Tracks[CurrentTrack].timeskipped;          
+        console.log('track time: ' + time + ' duration ' + Tracks[CurrentTrack].duration);
+        
         //if there's still a start timer, we likely seeked to the end
         if(StartTimer) {        
             console.log('starttimer present, running it now instead');
             clearTimeout(StartTimer);
             onTrackStart();
             play();
-        }       
-        
+        }
+      
         // free memory
         clearTrackSource(Tracks[CurrentTrack]); 
         Tracks[CurrentTrack].buf = null;
+        Tracks[CurrentTrack].bufs = null;
         Tracks[CurrentTrack].timeskipped = 0;  
         
         CurrentTrack++;        
@@ -281,6 +349,48 @@
         NextBufferTime += timeleft;         
     }
     
+    function aqueueSeg(track, segment) {
+        var source = MainAudioContext.createBufferSource();                    
+		source.connect(MainAudioContext.destination);
+		source.buffer = segment;        
+        if(track.curseg == 1) {        
+            track.astart = NextBufferTime;                        
+            console.log('Scheduled ' + track.trackname + ' for ' + NextBufferTime); 
+        }
+        else {
+            console.log('Scheduled ' + track.trackname + ' for ' + NextBufferTime + 'part: ' + track.curseg); 
+            
+            // after the last segment is downloaded, apply the end hook
+            if(track.curseg == track.numsegments) {
+                source.onended = onTrackEnd; 
+                console.log('last segment dled');                                
+            }
+            else if(track.numsegments == 0) {
+                console.log('notqueuing track.numsegments is 0');
+                return;
+            }
+            else
+            {
+                console.log('curseg ' + track.curseg + ' numsegments ' + track.numsegments);
+            }
+        }
+        var starttime = 0;
+        if(Tracks[CurrentTrack].SKIPNOW) {
+            Tracks[CurrentTrack].SKIPNOW = null;
+            var segmenttimeskipped = (track.timeskipped % track.maxsegduration);       
+            console.log('segment timeskipped ' + segmenttimeskipped); 
+            starttime += segmenttimeskipped;
+            track.astart = NextBufferTime;
+        }        
+               
+        source.start(NextBufferTime, starttime);        
+        var timeleft = source.buffer.duration - starttime;         
+        NextBufferTime += timeleft;
+        track.bufs[track.curseg - 1] = segment;
+        track.sources[track.curseg - 1] = source;        
+    }    
+    
+    
     function OnStartTimer() {
         StartTimer = setTimeout( function() {
            onTrackStart();
@@ -289,28 +399,77 @@
     }    
     
     function downloadAndQueue(track) {          
-        track.downloading = true;
-        track.timeskipped = 0;          
+        track.downloading = true;                  
         request = new XMLHttpRequest();
-		request.open('get', geturl(track.trackname), true);
+        var toDL = geturl(track.trackname);
+        if(USESEGMENTS) {
+            track.curseg = track.curseg || 1;
+            track.sources = track.sources || [];
+            track.bufs = track.bufs || [];
+            toDL += '&part=' + track.curseg;
+            track.timeskipped = track.timeskipped || 0;
+        }
+        else {
+            track.timeskipped = 0;        
+        }
+		request.open('get', toDL, true);
 		request.responseType = 'arraybuffer';       
-		request.onload = function () {       
+		request.onload = function () {    
+            if(! request) return;       
 			MainAudioContext.decodeAudioData(request.response, function(incomingBuffer) {
                 if(! track.downloading) {
                     console.log('STAHPed ' + track.trackname);
                     track.downloading = false;
                     return;  
+                }   
+                if(USESEGMENTS && !track.curseg) {
+                    console.log('STAHPed 2' + track.trackname);
+                    return;
                 }
+                
+                if(USESEGMENTS) {
+                    track.duration =  Number(request.getResponseHeader('X-MHFS-TRACKDURATION')); 
+                    track.numsegments = Number(request.getResponseHeader('X-MHFS-NUMSEGMENTS'));
+                    if(track.numsegments == 0) {
+                        console.log('track.numsegments is 0');
+                    }                    
+                    track.maxsegduration = Number(request.getResponseHeader('X-MHFS-MAXSEGDURATION'));                
+                }
+                
                 // setup a callback to update the UI, if we aren't running, normally we'll update on source.onended
-                if(State == 'IDLE') {                    
-                    NextBufferTime = MainAudioContext.currentTime + BUFFER_S;                       
-                    OnStartTimer();
+                if((State == 'IDLE')) {     
+
+                    if(USESEGMENTS && (NextBufferTime > MainAudioContext.currentTime)) {
+                         console.log('nextbuffertime not changed ' + NextBufferTime);
+                    }
+                    else {
+                        console.log('nextbuffertime changed');
+                        NextBufferTime = MainAudioContext.currentTime + BUFFER_S;                       
+                        OnStartTimer();
+                    }
+                }
+                track.downloading = false;
+                
+                request = null; 
+                if(USESEGMENTS) {
+                    console.log('downloaded ' + track.trackname + ' part ' + track.curseg);
+                    aqueueSeg(track, incomingBuffer);
+                    if(track.curseg == track.numsegments) {  
+                        if(! Tracks[CurrentTrack+1] || Tracks[CurrentTrack+1].curseg) {
+                            DLImmediately = true;
+                            return;
+                        }                            
+                        downloadAndQueue(Tracks[CurrentTrack+1]);
+                        return;
+                    }
+                    track.curseg++;
+                    downloadAndQueue(track);
+                    return;            
                 }                
                 track.buf = incomingBuffer;                               
-                aqueue(track);
-                track.downloading = false;
+                aqueue(track);                
                 console.log('downloaded ' + track.trackname);
-                request = null;              
+                            
 			});
 		};
         request.onabort = function() {
@@ -341,7 +500,7 @@
     }
       
     function _queueTrack(_trackname) {               
-        var track = {trackname: _trackname};        
+        var track = {trackname: _trackname};               
         Tracks.push(track);
         if(DLImmediately) {
             DLImmediately = false;
@@ -349,13 +508,12 @@
             downloadAndQueue(track);                    
         }
         else {
-            console.log('queued track for later dl');
-            if(CurrentTrack < (Tracks.length-1)) {
-                SetNextText(Tracks[Tracks.length-1].trackname);
-            }
+            console.log('queued track for later dl');            
         } 
-
-        if(CurrentTrack == (Tracks.length -1)) {
+        if((CurrentTrack+1) == (Tracks.length-1)) {
+            SetNextText(Tracks[Tracks.length-1].trackname);
+        }
+        else if(CurrentTrack == (Tracks.length -1)) {
             SetPlayText(Tracks[CurrentTrack].trackname + ' {![LOADING]!}');
         }        
     }
@@ -382,57 +540,63 @@
         StartTimer = null;        
     }
     
-    function stop() {
-        var curtime = document.getElementById("curtime");
-        var endtime = document.getElementById("endtime");
-        var ppbtn = document.getElementById("ppbtn"); 
-        UpdateState('IDLE');      
-        curtime.value = 0;
-        endtime.value = 0;
+    function stop() {              
+        SetCurtimeText(0);
         seekbar.value = 0;
+        SetEndtimeText(0);       
+        UpdateState('IDLE');        
         pause();
+        var ppbtn = document.getElementById("ppbtn"); 
         ppbtn.textContent = 'IDLE';
     }
     
-    
+
+    var SBAR_UPDATING = 0;    
     function Tick(tickMS) {
+        //console.log('tick event');
         if(! Tracks[CurrentTrack]) {
             TickTimer = null;
             console.log('TickTimer null');
             return;        
         }
-        else if(Tracks[CurrentTrack].astart <= MainAudioContext.currentTime) {                      
-            var curtime = document.getElementById("curtime");
-            var endtime = document.getElementById("endtime");
-            var seekbar = document.getElementById("seekbar");           
-            var time = MainAudioContext.currentTime - Tracks[CurrentTrack].astart  +  Tracks[CurrentTrack].timeskipped;                            
-            curtime.value = time;            
-            endtime.value = Tracks[CurrentTrack].duration;
-            seekbar.value = curtime.value; 
-            console.log(Tracks[CurrentTrack].trackname + ' (' + CurrentTrack + '): updating progress'); 
+        else if(Tracks[CurrentTrack].astart <= MainAudioContext.currentTime) { 
+            var seekbar = document.getElementById("seekbar");        
+            console.log('sbar value ' + seekbar.value);
+            if(SBAR_UPDATING) {
+                console.log('Not updating SBAR, SBAR_UPDATING');
+                return;
+            }          
+            console.log('MAC ' + MainAudioContext.currentTime + ' astart ' + Tracks[CurrentTrack].astart +  ' timeskipped ' + Tracks[CurrentTrack].timeskipped);            
+            var time = MainAudioContext.currentTime - Tracks[CurrentTrack].astart  +  Tracks[CurrentTrack].timeskipped;   
+            SetCurtimeText(time);             
+            seekbar.value = time;        
+            SetEndtimeText(Tracks[CurrentTrack].duration);                       
+            console.log(Tracks[CurrentTrack].trackname + ' (' + CurrentTrack + '): updating progress');                     
         }
         else {            
             console.log(Tracks[CurrentTrack].trackname + ' (' + CurrentTrack + '): not updating seekbar');
         }
  
         TickTimer =  setTimeout(function () { Tick(tickMS); }, tickMS);       
-    } 
+    }
+    
+    function track_getTimeskippedSegment(track) {
+        var segment = Math.floor(track.timeskipped / track.maxsegduration) + 1; //1 based
+        console.log('timeskipped ' + track.timeskipped + 'maxsegduration ' + track.maxsegduration + ' segment ' + segment);
+        return segment;
+    }
 
     function switchTrackNow(direction) {
         //anything here is going to take time so stop the ticktimer
         pause();
         
-        //stop the current track        
-        if(Tracks[CurrentTrack] && Tracks[CurrentTrack].source) {
-            clearTrackSource(Tracks[CurrentTrack]);           
-        }
+        //stop the current and next track if they exist       
+        if(Tracks[CurrentTrack]) clearTrackSource(Tracks[CurrentTrack]);
+        if(Tracks[CurrentTrack+1]) clearTrackSource(Tracks[CurrentTrack+1]);
         
-        //stop the next track
-        if(Tracks[CurrentTrack+1] && Tracks[CurrentTrack+1].source) {
-            clearTrackSource(Tracks[CurrentTrack+1]); 
-        }
-        
-            
+        if(USESEGMENTS) {            
+            NextBufferTime = MainAudioContext.currentTime; //bad hack                      
+        }           
         
         function setTracks(track) {
             NextBufferTime = MainAudioContext.currentTime + BUFFER_S;                        
@@ -442,8 +606,29 @@
         
         // if the desired current track is the same we don't need to download again (seeking)
         if(direction == 0) {
-            console.log('probably a seek operation');
-            setTracks(Tracks[CurrentTrack]);
+            console.log('seek operation');
+            if(! USESEGMENTS) {
+                setTracks(Tracks[CurrentTrack]);
+            }
+            else {
+                var desiredseg = track_getTimeskippedSegment(Tracks[CurrentTrack]);
+                Tracks[CurrentTrack].curseg = desiredseg;
+                Tracks[CurrentTrack].SKIPNOW = 1;
+                //if(! Tracks[CurrentTrack].bufs[desiredseg-1]) {
+                if(1) {
+                    console.log('segment not avaialble, downloading ' + desiredseg);
+                    if(request){                
+                        request.PleaseSTAHP();
+                        request = null;
+                    } 
+                    
+                    UpdateState('IDLE');
+                    downloadAndQueue(Tracks[CurrentTrack]);
+                    return;                    
+                }
+                NextBufferTime = MainAudioContext.currentTime + BUFFER_S;                        
+                aqueueSeg(Tracks[CurrentTrack], Tracks[CurrentTrack].bufs[desiredseg-1]);                                
+            }
             OnStartTimer();
             return;
             
@@ -451,7 +636,8 @@
         //free memory
         else if(Tracks[CurrentTrack]) {
             Tracks[CurrentTrack].timeskipped = 0;            
-            Tracks[CurrentTrack].buf = null;                
+            Tracks[CurrentTrack].buf = null;
+            Tracks[CurrentTrack].bufs = null;
         }
         
         // abort downloads
@@ -491,15 +677,19 @@
         
         //update the viewable text
         
-        if(Tracks[CurrentTrack-1]) SetPrevText(Tracks[CurrentTrack-1].trackname);
+        if(Tracks[CurrentTrack-1]) {
+            SetPrevText(Tracks[CurrentTrack-1].trackname);
+        }
+        else {
+            SetPrevText('');        
+        }
         if(Tracks[CurrentTrack]) {
-            SetPlayText(Tracks[CurrentTrack].trackname + ' {![LOADING]!}');
-            var curtime = document.getElementById("curtime");
-            var endtime = document.getElementById("endtime");
-            var seekbar = document.getElementById("seekbar");                                      
-            curtime.value = Tracks[CurrentTrack].timeskipped || 0;         
-            endtime.value = Tracks[CurrentTrack].duration || 0;
-            seekbar.value = curtime.value; 
+            SetPlayText(Tracks[CurrentTrack].trackname + ' {![LOADING]!}');                                                
+            var current_time = Tracks[CurrentTrack].timeskipped || 0;
+            SetCurtimeText(current_time);
+            var seekbar = document.getElementById("seekbar");  
+            seekbar.value = current_time;            
+            SetEndtimeText(Tracks[CurrentTrack].duration || 0);             
         }
         if(Tracks[CurrentTrack+1]) {
             SetNextText(Tracks[CurrentTrack+1].trackname);            
@@ -509,10 +699,7 @@
         }        
     }  
     
-    window.onload = function(){ 
-        
-        var curtime = document.getElementById("curtime");
-        var endtime = document.getElementById("endtime");
+    window.onload = function() {        
         var prevbtn = document.getElementById("prevbtn");
         var sktxt = document.getElementById("seekfield");
         var seekbar = document.getElementById("seekbar");
@@ -531,21 +718,28 @@
             else if(State == 'IDLE') {
                 
             }            
-        });
+        });        
         
-        seekbar.addEventListener('change', function(e) {        
-            do {
-            
+        seekbar.addEventListener('mousedown', function(e) {        
+            do {            
                 if(State == 'PLAY') {                   
                     break;
                 }
                 if(State == 'PAUSE') break;               
                 return;           
-            } while(0);
+            } while(0);    
+
+            console.log('BEGIN SBAR UPDATE');
+            SBAR_UPDATING = 1;                    
+        });
+        
+        seekbar.addEventListener('change', function(e) {
             console.log( Tracks[CurrentTrack].trackname + ' (' + CurrentTrack + ') ' + ' seeking to ' + seekbar.value);
-            Tracks[CurrentTrack].timeskipped = Number(seekbar.value); 
-            switchTrackNow(0);          
-            curtime.value = Tracks[CurrentTrack].timeskipped;                            
+            Tracks[CurrentTrack].timeskipped = Number(seekbar.value);           
+            switchTrackNow(0);            
+            SetCurtimeText( Tracks[CurrentTrack].timeskipped );
+            console.log('END SBAR UPDATE');
+            SBAR_UPDATING = 0;             
         });
         
         prevbtn.addEventListener('click', function(e) {
@@ -562,8 +756,8 @@
             } while(0);
             if((CurrentTrack-1) < 0) return;
             switchTrackNow(-1);   
-            curtime.value = 0;
-            if(Tracks[CurrentTrack].duration) endtime.value = Tracks[CurrentTrack].duration;  
+            SetCurtimeText(0);
+            if(Tracks[CurrentTrack].duration) SetEndtimeText(Tracks[CurrentTrack].duration);  
             console.log('prevtrack?');            
         });
         
@@ -577,8 +771,8 @@
             } while(0);
             if(! Tracks[CurrentTrack+1]) return;
             switchTrackNow(1);   
-            curtime.value = 0;
-            if(Tracks[CurrentTrack].duration) endtime.value = Tracks[CurrentTrack].duration;            
+            SetCurtimeText(0);
+            if(Tracks[CurrentTrack].duration) SetEndtimeText(Tracks[CurrentTrack].duration);            
         });            
     };
     
@@ -586,6 +780,7 @@
          PTrackUrlParams = new URLSearchParams();
          if(MAX_SAMPLE_RATE) PTrackUrlParams.append('max_sample_rate', MAX_SAMPLE_RATE);
          if(BITDEPTH) PTrackUrlParams.append('bitdepth', BITDEPTH);
+         if(USESEGMENTS) PTrackUrlParams.append('segments', USESEGMENTS);
          Tracks.forEach(function(track) {
              PTrackUrlParams.append('ptrack', track.trackname); 
          });                  

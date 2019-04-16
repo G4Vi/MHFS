@@ -520,7 +520,7 @@ package HTTP::BS::Server::Client::Request {
                          $self{'path'} = \%pathStruct;
                          $self{'qs'} = \%qsStruct;
                          $self{'header'} = \%headerStruct;
-             $self{'request'} = $$indataRef;
+                         $self{'request'} = $$indataRef;
                          _Handle(\%self);
                          return \%self;              
                      }              
@@ -589,9 +589,14 @@ package HTTP::BS::Server::Client::Request {
             $headtext .= "Accept-Ranges: bytes\r\n";
         }
         #$headtext .=   "Accept-Ranges: none\r\n";
-        $headtext .=   "Connection: keep-alive\r\n";    
-        $headtext .= "\r\n";  
+        $headtext .=   "Connection: keep-alive\r\n";
+
+        # serialize the outgoing headers
+        foreach my $header (keys %{$self->{'outheaders'}}) {
+            $headtext .= "$header: " . $self->{'outheaders'}{$header} . "\r\n";
+        }       
         
+        $headtext .= "\r\n";        
         return ($retlength, \$headtext);
     }
 
@@ -1477,6 +1482,8 @@ package MusicLibrary {
     use Storable;
     use Fcntl ':mode';  
     use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
+    use Scalar::Util qw(looks_like_number weaken);
+    use POSIX qw/ceil/;
     
     sub BuildLibrary {
         my ($path) = @_;        
@@ -1593,13 +1600,75 @@ package MusicLibrary {
         return $request->SendLocalBuf($self->{'html'}, "text/html; charset=utf-8");
     }
     
+    my $SEGMENT_DURATION = 5;
+    sub SendLocalTrackSegment {
+        my ($request, $file) = @_;
+        my $filebase = basename($file);
+        $filebase =~ s/\.flac//i;
+        my $tmpdir = $request->{'client'}{'server'}{'settings'}{'TMPDIR'}; 
+        my $tosend = sprintf "$tmpdir/$filebase%03u.flac", $request->{'qs'}{'part'};
+        if(-e $tosend) {
+            $request->SendLocalFile($tosend);
+            return;
+        }
+        my $evp = $request->{'client'}{'server'}{'evp'}; 
+        $request->{'process'} = HTTP::BS::Server::Process->new(['sox', $file, "$tmpdir/$filebase.flac", 'trim', '0', $SEGMENT_DURATION, ':', 'newfile', ':', 'restart'], $evp, { 
+            'SIGCHLD' => sub {
+                $request->SendLocalFile($tosend);            
+            }       
+        });   
+        
+        #say "creating timer to watch for $tosend";
+        #weaken($request); # the only one who should be keeping $request alive is $client                    
+        #$evp->add_timer(0, 0, sub {
+        #    if(! defined $request) {
+        #        say "\$request undef, ignoring CB";
+        #        return undef;
+        #    }            
+        #    if(! -e $tosend) {
+        #        return 1;
+        #    }
+        #    #my $minsize = $VIDEOFORMATS{$fmt}->{'minsize'};
+        #    #if(defined($minsize) && ((-s $filename) < $minsize)) {                      
+        #    #    return 1;
+        #    #}            
+        #    say "SendLocalTrackSegment timer is destructing";
+        #    $request->SendLocalFile($tosend);
+        #    return undef;          
+        #});   
+    }
+    
     sub SendLocalTrack {
         my ($request, $file) = @_;    
-        my $gapless = $request->{'qs'}{'gapless'};
+        my $evp = $request->{'client'}{'server'}{'evp'}; 
         my $SendFile = sub {
-            my($tosend) = @_;
-            if($gapless) {
-                $request->SendFile($tosend);
+            my($tosend) = @_;    
+
+            #my $gapless = $request->{'qs'}{'gapless'};            
+            #if($gapless) {
+            #    $request->SendFile($tosend);
+            #}
+            my $part = $request->{'qs'}{'part'};
+            if(defined $part) {
+                $request->{'process'} = HTTP::BS::Server::Process->new(['soxi', '-D', $tosend], $evp, {
+                    'STDOUT' => sub {
+                        my ($stdout) = @_;
+                        my $buf;
+                        if(!read($stdout, $buf, 4096)) {
+                            say "failed to read soxi";
+                            $request->Send404;
+                        }
+                        else {
+                            my ($duration) = $buf =~ /^(.+)$/;
+                            $request->{'outheaders'}{'X-MHFS-NUMSEGMENTS'} = ceil($duration / $SEGMENT_DURATION);
+                            $request->{'outheaders'}{'X-MHFS-TRACKDURATION'} = $duration;
+                            $request->{'outheaders'}{'X-MHFS-MAXSEGDURATION'} = $SEGMENT_DURATION;
+                            
+                            SendLocalTrackSegment($request, $tosend);
+                        }
+                        return -1;                        
+                    },                
+                });
             }
             else {
                 $request->SendLocalFile($tosend);
@@ -1607,12 +1676,12 @@ package MusicLibrary {
         };        
             
         my $max_sample_rate = $request->{'qs'}{'max_sample_rate'};
+        my $bitdepth = $request->{'qs'}{'bitdepth'}; 
         if(! $max_sample_rate) {
             $SendFile->($file);
             return;            
-        }
-        my $bitdepth = $request->{'qs'}{'bitdepth'};    
-        if(! $bitdepth) {
+        }           
+        elsif(! $bitdepth) {
             $bitdepth = $max_sample_rate > 48000 ? 24 : 16;        
         }
         say "using bitdepth $bitdepth";
@@ -1642,8 +1711,7 @@ package MusicLibrary {
         say "client time was: " . $request->{'client'}{'time'};
         $request->{'client'}{'time'} += 30;
         say "HACK client time extended to " . $request->{'client'}{'time'};
-        # have ffmpeg determine the input file parameters and act accordingly
-        my $evp = $request->{'client'}{'server'}{'evp'};                    
+        # have ffmpeg determine the input file parameters and act accordingly                           
         $request->{'process'} = HTTP::BS::Server::Process->new(['ffmpeg', '-i', $file], $evp, {
         'STDERR' => sub {
             my ($err) = @_;
@@ -1811,7 +1879,7 @@ package MusicLibrary {
         my $self =  {'settings' => $settings};
         bless $self, $class;  
 
-    say "building music library";
+        say "building music library";
         $self->BuildLibraries($settings->{'MUSICLIBRARY'}{'sources'});
         say "done build libraries";
         $self->{'routes'} = [
@@ -1837,6 +1905,161 @@ package MusicLibrary {
         
         return $self;
     }
+
+    1;
+}
+
+package Youtube {
+    use strict; use warnings;
+    use feature 'say';
+    use Data::Dumper;
+    use feature 'state';
+    use Encode;
+    use Any::URI::Escape;
+    HTTP::BS::Server::Util->import();
+    BEGIN {
+        if( ! (eval "use JSON; 1")) {
+            eval "use JSON::PP; 1" or die "No implementation of JSON available, see .doc/dependencies.txt";
+            warn "Youtube: Using PurePerl version of JSON (JSON::PP), see .doc/dependencies.txt about installing faster version";
+        }
+    }
+
+    sub searchbox {
+        my ($self, $request) = @_;
+        my $html = '<form  name="searchbox" action="' . $request->{'path'}{'basename'} . '">';
+        $html .= '<input type="text" width="50%" name="q" ';
+        my $query = $request->{'qs'}{'q'};
+        if($query) {
+            $query =~ s/\+/ /g;
+            my $escaped = escape_html($query);
+            $html .= 'value="' . $$escaped . '"';            
+        }        
+        $html .=  '>';
+        $html .= '<input type="submit" value="Search">';
+        $html .= '</form>';
+        return $html;
+    }
+
+    sub sendAsHTML {
+        my ($self, $request, $response) = @_;
+        my $json = decode_json($response);
+        if(! $json){
+            $request->Send404;
+            return;
+        }
+        my $html = $self->searchbox($request);
+        foreach my $item (@{$json->{'items'}}) {
+            my $id = $item->{'id'}{'videoId'};
+            next if (! defined $id);         
+            $html .= '<div>';
+            my $mediaurl = 'ytplayer?fmt=yt&id=' . $id;
+            my $media =  $request->{'qs'}{'media'};
+            $mediaurl .= '&media=' . $media if(defined $media);
+            $html .= '<a href="' . $mediaurl . '">' . $item->{'snippet'}{'title'} . '</a>';
+            $html .= '<br>';
+            $html .= '<a href="' . $mediaurl . '"><img src="' . $item->{'snippet'}{'thumbnails'}{'default'}{'url'} . '" alt="Excellent image loading"></a>';
+            $html .= '<p>' . $item->{'snippet'}{'description'} . '</p>';
+            $html .= '<br>-----------------------------------------------';
+            $html .= '</div>'
+        }
+        
+        $request->SendLocalBuf(encode_utf8($html), "text/html; charset=utf-8");        
+    }
+
+    sub onYoutube {
+        my ($self, $request) = @_;         
+        my $evp = $request->{'client'}{'server'}{'evp'};        
+        my $youtubequery = 'q=' . (uri_escape($request->{'qs'}{'q'}) // '') . '&maxResults=' . ($request->{'qs'}{'maxResults'} // '25') . '&part=snippet&key=' . $self->{'settings'}{'YOUTUBE'}{'key'};
+        $youtubequery .= '&type=video'; # playlists not supported yet
+        my $tosend = '';
+        my @curlcmd = ('curl', '-G', '-d', $youtubequery, 'https://www.googleapis.com/youtube/v3/search');
+        print "$_ " foreach @curlcmd;
+        print "\n";       
+        state $tprocess;
+        $tprocess = HTTP::BS::Server::Process->new(\@curlcmd, $evp, {
+            #'STDOUT' => sub {
+            #    my ($stdout) = @_;
+            #    my $buf;
+            #    if(read($stdout, $buf, 100000)) {  
+            #        say "did read stdout";             
+            #        $tosend .= $buf;
+            #    }
+            #    return 1;   
+            #},
+            'SIGCHLD' => sub {
+                my $stdout = $tprocess->{'fd'}{'stdout'}{'fd'};
+                my $buf;
+                while(length($tosend) == 0) {
+                    while(read($stdout, $buf, 24000)) {
+                        say "did read sigchld";
+                        $tosend .= $buf;
+                    }                    
+                }
+                undef $tprocess;
+                $request->{'qs'}{'fmt'} //= 'html';
+                if($request->{'qs'}{'fmt'} eq 'json'){
+                    $request->SendLocalBuf($tosend, "text/json; charset=utf-8");
+                }
+                else {
+                    $self->sendAsHTML($request, $tosend);
+                }               
+            },
+        });
+        $request->{'process'} = $tprocess;
+        return -1;
+    }
+
+    sub new {
+        my ($class, $settings) = @_;
+        my $self =  {'settings' => $settings};
+        bless $self, $class;       
+
+        $self->{'routes'} = [ 
+        ['/youtube', sub {
+            my ($request) = @_;
+            $self->onYoutube($request);
+        }],
+
+        ['/yt', sub {
+            my ($request) = @_;
+            $self->onYoutube($request);
+        }],
+
+        ['/ytmusic', sub {
+            my ($request) = @_;
+            $request->{'qs'}{'media'} //= 'music';
+            $self->onYoutube($request);
+        }],
+
+        ['/ytaudio', sub {
+            my ($request) = @_;
+            $request->{'qs'}{'media'} //= 'music';
+            $self->onYoutube($request);
+        }],
+        ['/ytplayer', sub {
+            my ($request) = @_;
+
+            
+            my $html .= '<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0" /><iframe src="static/250ms_silence.mp3" allow="autoplay" id="audio" style="display:none"></iframe>';
+            my $url = 'get_video?fmt=yt&id=' . uri_escape($request->{'qs'}{'id'});
+            $url .= '&media=' . uri_escape($request->{'qs'}{'media'});
+            if($request->{'qs'}{'media'} eq 'music') {
+                $request->{'path'}{'basename'} = 'ytaudio';
+                $html .= '<audio controls autoplay src="' . $url . '">Great Browser</audio>';
+            }
+            else {
+                $request->{'path'}{'basename'} = 'yt';
+                $html .= '<video controls autoplay src="' . $url . '">Great Browser</video>';
+            } 
+            $html = $self->searchbox($request) . $html;          
+            $request->SendLocalBuf($html, "text/html; charset=utf-8");
+        }],
+        
+        ];
+
+        return $self;
+    }
+
 
     1;
 }
@@ -1913,6 +2136,7 @@ if(defined $SETTINGS->{'GDRIVE'}) {
     say "GDRIVE plugin Enabled";
 }
 push @plugins, MusicLibrary->new($SETTINGS);
+push @plugins, Youtube->new($SETTINGS);
 my $EXT_SOURCE_SITES = $SETTINGS->{'EXT_SOURCE_SITES'};
 
 # make the temp dirs
@@ -1985,6 +2209,8 @@ my @routes = (
     [
         '/radio', sub {
             my ($request) = @_;
+            $request->Send404; 
+            return;
             $request->{'qs'}{'action'} //= 'listen';                      
             state $abuf;
             state $asegtime = 15;
