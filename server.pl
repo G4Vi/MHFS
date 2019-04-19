@@ -1591,8 +1591,8 @@ package MusicLibrary {
         }
         
         $self->{'html'} = $buf .  read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_bottom.html');         
-        $self->{'html_gapless'} = $buf . read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_bottom_gapless.html');
-        
+        #$self->{'html_gapless'} = $buf . read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_bottom_gapless.html');
+        $self->{'html_gapless'} = $buf . read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_bottom_better.html');
     }
 
     sub SendLibrary {
@@ -1883,7 +1883,7 @@ package MusicLibrary {
         $self->BuildLibraries($settings->{'MUSICLIBRARY'}{'sources'});
         say "done build libraries";
         $self->{'routes'} = [
-            [ '/music', sub {
+            [ '/music_legacy', sub {
                 my ($request) = @_;
                 return $self->SendLibrary($request);        
             }],
@@ -1896,6 +1896,15 @@ package MusicLibrary {
                my ($request) = @_;
                $request->SendLocalBuf($self->{'html_gapless'}, "text/html; charset=utf-8");
             
+            }],
+            ['/music', sub {
+                my ($request) = @_;
+                foreach my $route (@{$self->{'routes'}}) {
+                    if($route->[0] eq '/music_gapless') {
+                        $route->[1]->($request);
+                        last;
+                    }
+                }                
             }],
             [ '/music_dl', sub {
                 my ($request) = @_;

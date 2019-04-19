@@ -15,7 +15,7 @@
     <iframe src="static/250ms_silence.mp3" allow="autoplay" id="audio" style="display:none"></iframe>
 </div>
 
-<script type="text/javascript"><!--
+<script type="text/javascript">
   
     function GetItemPath(elm) {
             var els = [];
@@ -399,7 +399,7 @@ Number.prototype.toHHMMSS = function () {
     }    
     
     function downloadAndQueue(track) {          
-        track.downloading = true;                  
+                         
         request = new XMLHttpRequest();
         var toDL = geturl(track.trackname);
         if(USESEGMENTS) {
@@ -412,33 +412,30 @@ Number.prototype.toHHMMSS = function () {
         else {
             track.timeskipped = 0;        
         }
+        track.busy = true;
+        track.downloading = true;
+        request.track = track;
 		request.open('get', toDL, true);
 		request.responseType = 'arraybuffer';       
-		request.onload = function () {    
-            if(! request) return;       
-			MainAudioContext.decodeAudioData(request.response, function(incomingBuffer) {
-                if(! track.downloading) {
-                    console.log('STAHPed ' + track.trackname);
-                    track.downloading = false;
-                    return;  
-                }   
-                if(USESEGMENTS && !track.curseg) {
-                    console.log('STAHPed 2' + track.trackname);
+		track.mission = function () {           
+            if(USESEGMENTS) {
+                track.duration =  Number(request.getResponseHeader('X-MHFS-TRACKDURATION')); 
+                track.numsegments = Number(request.getResponseHeader('X-MHFS-NUMSEGMENTS'));
+                track.maxsegduration = Number(request.getResponseHeader('X-MHFS-MAXSEGDURATION')); 
+                if(track.numsegments == 0) console.log('track.numsegments is 0');                              
+            }
+            track.decoding = true;      
+            track.mission =  function(incomingBuffer) {                
+                track.decoding = false;
+                track.busy = false;                
+                request = null;
+                track.mission = null;                             
+                if(! incomingBuffer) {
+                    console.log('incomingBuffer is null, decode failed');
                     return;
                 }
-                
-                if(USESEGMENTS) {
-                    track.duration =  Number(request.getResponseHeader('X-MHFS-TRACKDURATION')); 
-                    track.numsegments = Number(request.getResponseHeader('X-MHFS-NUMSEGMENTS'));
-                    if(track.numsegments == 0) {
-                        console.log('track.numsegments is 0');
-                    }                    
-                    track.maxsegduration = Number(request.getResponseHeader('X-MHFS-MAXSEGDURATION'));                
-                }
-                
                 // setup a callback to update the UI, if we aren't running, normally we'll update on source.onended
-                if((State == 'IDLE')) {     
-
+                if((State == 'IDLE')) {
                     if(USESEGMENTS && (NextBufferTime > MainAudioContext.currentTime)) {
                          console.log('nextbuffertime not changed ' + NextBufferTime);
                     }
@@ -447,14 +444,13 @@ Number.prototype.toHHMMSS = function () {
                         NextBufferTime = MainAudioContext.currentTime + BUFFER_S;                       
                         OnStartTimer();
                     }
-                }
-                track.downloading = false;
+                }              
                 
-                request = null; 
+                // queue the decoded data
                 if(USESEGMENTS) {
                     console.log('downloaded ' + track.trackname + ' part ' + track.curseg);
                     aqueueSeg(track, incomingBuffer);
-                    if(track.curseg == track.numsegments) {  
+                    if(track.curseg == track.numsegments) {                        
                         if(! Tracks[CurrentTrack+1] || Tracks[CurrentTrack+1].curseg) {
                             DLImmediately = true;
                             return;
@@ -463,32 +459,46 @@ Number.prototype.toHHMMSS = function () {
                         return;
                     }
                     track.curseg++;
-                    downloadAndQueue(track);
-                    return;            
-                }                
-                track.buf = incomingBuffer;                               
-                aqueue(track);                
-                console.log('downloaded ' + track.trackname);
-                            
-			});
+                    downloadAndQueue(track);                             
+                }
+                else{                                   
+                    track.buf = incomingBuffer;                               
+                    aqueue(track);                
+                    console.log('downloaded ' + track.trackname);
+                }                           
+			};
+
+            MainAudioContext.decodeAudioData(request.response, function(incomingBuffer) {
+                track.decoding = false;
+                track.busy = false;   
+                track.mission(incomingBuffer);
+            }, function() {
+                track.decoding = false;
+                track.busy = false;   
+                track.mission();
+            });
+            
 		};
+
+        request.onload = function () {
+            track.downloading = false;
+            track.decoding = false;
+            track.mission();
+        };
         request.onabort = function() {
-            console.log('aborted ' + track.trackname);
-            track.downloading = false;        
+            console.log('req aborted ' + track.trackname);
+            track.downloading = false;
+            track.decoding = false;
+            track.mission();      
         };
         request.onerror = function() {
-            track.downloading = false;         
-        };   
-
-        request.PleaseSTAHP = function() {            
-            console.log('PleaseSTAHP track ' + track.trackname);
+            console.log('req error ' + track.trackname);
             track.downloading = false;
-            request.abort();            
-        };        
-		request.send(); 
-    
-    
-    
+            track.decoding = false;
+            track.mission();         
+        }; 
+
+		request.send();    
     }   
     
     function geturl(trackname) {
@@ -561,17 +571,17 @@ Number.prototype.toHHMMSS = function () {
         }
         else if(Tracks[CurrentTrack].astart <= MainAudioContext.currentTime) { 
             var seekbar = document.getElementById("seekbar");        
-            console.log('sbar value ' + seekbar.value);
+            //console.log('sbar value ' + seekbar.value);
             if(SBAR_UPDATING) {
                 console.log('Not updating SBAR, SBAR_UPDATING');
                 return;
             }          
-            console.log('MAC ' + MainAudioContext.currentTime + ' astart ' + Tracks[CurrentTrack].astart +  ' timeskipped ' + Tracks[CurrentTrack].timeskipped);            
+            //console.log('MAC ' + MainAudioContext.currentTime + ' astart ' + Tracks[CurrentTrack].astart +  ' timeskipped ' + Tracks[CurrentTrack].timeskipped);            
             var time = MainAudioContext.currentTime - Tracks[CurrentTrack].astart  +  Tracks[CurrentTrack].timeskipped;   
             SetCurtimeText(time);             
             seekbar.value = time;        
             SetEndtimeText(Tracks[CurrentTrack].duration);                       
-            console.log(Tracks[CurrentTrack].trackname + ' (' + CurrentTrack + '): updating progress');                     
+            //console.log(Tracks[CurrentTrack].trackname + ' (' + CurrentTrack + '): updating progress');                     
         }
         else {            
             console.log(Tracks[CurrentTrack].trackname + ' (' + CurrentTrack + '): not updating seekbar');
@@ -616,14 +626,18 @@ Number.prototype.toHHMMSS = function () {
                 Tracks[CurrentTrack].SKIPNOW = 1;
                 //if(! Tracks[CurrentTrack].bufs[desiredseg-1]) {
                 if(1) {
-                    console.log('segment not avaialble, downloading ' + desiredseg);
+                    console.log('segment not available, downloading ' + desiredseg);
+                    var toDo = function() {
+                        UpdateState('IDLE');
+                        downloadAndQueue(Tracks[CurrentTrack]);
+                    };
                     if(request){                
-                        request.PleaseSTAHP();
-                        request = null;
+                        request.track.mission = toDo;
+                        request.abort();                      
                     } 
-                    
-                    UpdateState('IDLE');
-                    downloadAndQueue(Tracks[CurrentTrack]);
+                    else {
+                        toDo();
+                    }                    
                     return;                    
                 }
                 NextBufferTime = MainAudioContext.currentTime + BUFFER_S;                        
@@ -640,12 +654,13 @@ Number.prototype.toHHMMSS = function () {
             Tracks[CurrentTrack].bufs = null;
         }
         
-        // abort downloads
+        // abort download, if the desired track is not downloading
         var dtrack = Tracks[CurrentTrack+direction];
         if(dtrack && (!dtrack.downloading)) {                    
             if(request){                
-                request.PleaseSTAHP();
-                request = null;
+                request.track.mission = function() {                    
+                };
+                request.abort();                
             }            
         } 
             
@@ -801,5 +816,5 @@ Number.prototype.toHHMMSS = function () {
         }
    
 
-  --></script>
+    </script>
 </body>
