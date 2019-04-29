@@ -133,7 +133,7 @@ function STAHPPossibleDownloads() {
         console.log('STAHPing ' + CurrentTrack+1) ; 
         Tracks[CurrentTrack+1].currentDownload.stop();
         Tracks[CurrentTrack+1].currentDownload = null;
-    }
+    }    
 };
 
 function TrackDownload(track, onDownloaded, seg) {
@@ -237,6 +237,7 @@ function Track(trackname) {
         //Set up the next track
         if (Tracks[CurrentTrack + 1]) { 
             if(this.isDownloaded &&  !this.queuednext) {
+                console.log('theres another track and its not downloaded,DLImmediately' );
                 DLImmediately = true;
                 Tracks[CurrentTrack + 1].queue(0);                
             }   
@@ -244,7 +245,10 @@ function Track(trackname) {
             this.queuednext = false;
         }
         else {
-            DLImmediately = true;
+            if(this.isDownloaded) {
+                console.log('no next track and this.isDownloaded, DLImmediately');
+                DLImmediately = true;
+            }
             SetNextText('');
         }
         StartTimer = null;
@@ -283,8 +287,8 @@ function Track(trackname) {
 
         // free memory
         this.clearSources();
-        this.buf = null;
-        this.bufs = [];
+        //this.clearCache();
+        if((CurrentTrack-1) >= 0) Tracks[CurrentTrack-1].clearCache();
         
         SetPrevText(this.trackname);
         
@@ -348,11 +352,15 @@ function Track(trackname) {
         NextBufferTime = start + timeleft;
         if(isLastPart) {
             this.isDownloaded = true;           
-            if((this ===  Tracks[CurrentTrack]) && (Tracks[CurrentTrack + 1])) {
+            if(this ===  Tracks[CurrentTrack]) {
+                console.log('last part of current track downloaded, DLImediately');
                 DLImmediately = true;
-                this.queuednext = true;
-                Tracks[CurrentTrack + 1].queue(0);
-            }                   
+                if (Tracks[CurrentTrack + 1]) {
+                    console.log('Track.queueBuffer, queue');                
+                    this.queuednext = true;
+                    Tracks[CurrentTrack + 1].queue(0);
+                }
+            }                              
         }
     };
 
@@ -394,6 +402,12 @@ function Track(trackname) {
                 return true;
             }, seg);            
         }
+        DLImmediately = false;  
+    };
+
+    this.clearCache = function() {
+        this.buf = null;
+        this.bufs = [];
     };
 }
 
@@ -482,6 +496,7 @@ function playTrackNow(track) {
         queueTrack(track);
     }
     else {
+        STAHPPossibleDownloads(); 
         var toadd = new Track(track);
         Tracks.splice(CurrentTrack + 1, 0, toadd);
         nextbtn.click();
@@ -493,7 +508,8 @@ function playTracksNow(tracks) {
     if(! Tracks[CurrentTrack]) {
         queueTracks(tracks);
     }
-    else {       
+    else {
+        STAHPPossibleDownloads();       
         var i = 1;
         tracks.forEach(function (track) {
             Tracks.splice(CurrentTrack + i, 0, new Track(track));
@@ -517,8 +533,7 @@ function _queueTrack(_trackname) {
     Tracks.push(track);
     if (DLImmediately) {
         console.log('downloading immediately');
-        track.queue(0);
-        DLImmediately = false;        
+        track.queue(0);             
     }
     else {
         console.log('queued track for later dl');
@@ -578,22 +593,25 @@ window.onload = function () {
     });
 
     prevbtn.addEventListener('click', function (e) {
-       if(ppbtn.textContent == "PLAY") {
-           MainAudioContext.resume();
-       }
-       if ((CurrentTrack - 1) < 0) return;
-       if(Tracks[CurrentTrack]) Tracks[CurrentTrack].clearSources();
-       if(Tracks[CurrentTrack+1]) {           
-           Tracks[CurrentTrack+1].clearSources();
-       }
-       STAHPPossibleDownloads();
-       clearTimeout(StartTimer);
-       StartTimer = null;
-       console.log('prevtrack');
-       CurrentTrack--;
-       Tracks[CurrentTrack].queue(0, MainAudioContext.currentTime);  
-       SetCurtimeText(0);
-       if (Tracks[CurrentTrack].duration) SetEndtimeText(Tracks[CurrentTrack].duration);  
+        if ((CurrentTrack - 1) < 0) return;
+        if(ppbtn.textContent == "PLAY") {
+            MainAudioContext.resume();
+        }
+       
+        if(Tracks[CurrentTrack]) Tracks[CurrentTrack].clearSources();
+        if(Tracks[CurrentTrack+1]) {           
+            Tracks[CurrentTrack+1].clearSources();
+        }
+        STAHPPossibleDownloads();
+        if(Tracks[CurrentTrack+1]) Tracks[CurrentTrack+1].clearCache();
+        clearTimeout(StartTimer);
+        StartTimer = null;
+        console.log('prevtrack');
+        DLImmediately = true;
+        CurrentTrack--;
+        Tracks[CurrentTrack].queue(0, MainAudioContext.currentTime);  
+        SetCurtimeText(0);
+        if (Tracks[CurrentTrack].duration) SetEndtimeText(Tracks[CurrentTrack].duration);  
     });
 
     nextbtn.addEventListener('click', function (e) {        
@@ -601,14 +619,17 @@ window.onload = function () {
         if(ppbtn.textContent == "PLAY") {
             MainAudioContext.resume();
         }
-        if(Tracks[CurrentTrack]) Tracks[CurrentTrack].clearSources();
+        if(Tracks[CurrentTrack]) {
+            Tracks[CurrentTrack].clearSources();            
+        }
         Tracks[CurrentTrack+1].clearSources();        
         STAHPPossibleDownloads();
+        if((CurrentTrack-1) >= 0) Tracks[CurrentTrack-1].clearCache();       
         clearTimeout(StartTimer);
         StartTimer = null;
         console.log('nexttrack');
-        CurrentTrack++;
         DLImmediately = true;
+        CurrentTrack++;       
         Tracks[CurrentTrack].queue(0, MainAudioContext.currentTime);       
         SetCurtimeText(0);
         if (Tracks[CurrentTrack].duration) SetEndtimeText(Tracks[CurrentTrack].duration);
