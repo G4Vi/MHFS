@@ -811,6 +811,39 @@ package HTTP::BS::Server::Client::Request {
         $fileitem{'buf'} = $$headtext . $buf;
         $self->_SendResponse(\%fileitem);   
     }
+    
+    sub SendAsTar {
+        my ($self, $requestfile) = @_;
+        my $tarsize = $self->{'client'}{'server'}{'settings'}{'BINDIR'} . '/tarsize/tarsize.sh';
+        say "tarsize $requestfile";
+        my @taropt = ('-C', dirname($requestfile), basename($requestfile), '-c', '--owner=0', '--group=0');
+        $self->{'process'} =  HTTP::BS::Server::Process->new([$tarsize, @taropt], $self->{'client'}{'server'}{'evp'}, { 
+            'SIGCHLD' => sub {
+                my $out = $self->{'process'}{'fd'}{'stdout'}{'fd'};
+                my $size;
+                read($out, $size, 50);
+                chomp $size;                
+                say "size: $size";
+                $self->{'process'} = HTTP::BS::Server::Process->new(['tar', @taropt], $self->{'client'}{'server'}{'evp'}, { 
+                    'STDOUT' => sub {
+                        my($out) = @_;
+                        say "tar sending response";
+                        my $header = "HTTP/1.1 200 OK\r\n";
+                        $header .= "Accept-Ranges: none\r\n";
+                        $header .= "Content-Length: $size\r\n";
+                        $header .= "Content-Type: application/x-tar\r\n";
+                        $header .= "Connection: keep-alive\r\n";
+                        $header .= 'Content-Disposition: inline; filename="' . basename($requestfile) . ".tar\"\r\n";
+                        $header .= "\r\n";
+                        my %fileitem = ('fh' => $out, 'buf' => $header);
+                        $self->_SendResponse(\%fileitem); 
+                        return 0;
+                    }                
+                });
+            },                      
+        });
+    
+    }
 
     # TODO, check plugins for SendOption
     sub SendFile {
@@ -1563,7 +1596,7 @@ package MusicLibrary {
             $buf .= '<tbody>';
             $buf .= '<tr class="track">';
             $buf .= '<th>' . $name . '</th>';            
-            $buf .= '<th><a href="#">Play</a></th><th><a href="#">Queue</a></th>';
+            $buf .= '<th><a href="#">Play</a></th><th><a href="#">Queue</a></th><th><a href="music_dl?action=dl&name=' . uri_escape_utf8($where.$name_unencoded) . '">DL</a></th>';
             $buf .= '</tr>'; 
             $where .= $name_unencoded . '/';            
             foreach my $file (@{$files->[2]}) {                
@@ -1793,8 +1826,13 @@ package MusicLibrary {
                 $source->{'SendFile'} //= sub   {
                     my ($request, $file) = @_;
                     return undef if(! -e $file);
-                    return undef if(-d $file); #we can't handle directories right now
-                    SendLocalTrack($request, $file);
+                    #return undef if(-d $file); #we can't handle directories right now
+                    if( ! -d $file) {
+                        SendLocalTrack($request, $file);
+                    }
+                    else {
+                        $request->SendAsTar($file);
+                    }
                     return 1;
                 };      
             }

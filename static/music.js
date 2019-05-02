@@ -130,7 +130,7 @@ function STAHPPossibleDownloads() {
         Tracks[CurrentTrack].currentDownload = null;
     }
     if(Tracks[CurrentTrack+1]&& Tracks[CurrentTrack+1].currentDownload){
-        console.log('STAHPing ' + CurrentTrack+1) ; 
+        console.log('STAHPing ' + (CurrentTrack+1)) ; 
         Tracks[CurrentTrack+1].currentDownload.stop();
         Tracks[CurrentTrack+1].currentDownload = null;
     }    
@@ -496,6 +496,7 @@ function playTrackNow(track) {
         queueTrack(track);
     }
     else {
+        if(Tracks[CurrentTrack+1]) Tracks[CurrentTrack+1].clearSources();      
         STAHPPossibleDownloads(); 
         var toadd = new Track(track);
         Tracks.splice(CurrentTrack + 1, 0, toadd);
@@ -509,6 +510,7 @@ function playTracksNow(tracks) {
         queueTracks(tracks);
     }
     else {
+        if(Tracks[CurrentTrack+1]) Tracks[CurrentTrack+1].clearSources();    
         STAHPPossibleDownloads();       
         var i = 1;
         tracks.forEach(function (track) {
