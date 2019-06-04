@@ -2169,8 +2169,9 @@ $SETTINGS->{'HOST'} ||= "127.0.0.1";
 $SETTINGS->{'PORT'} ||= 8000;     
 $SETTINGS->{'TMPDIR'} ||= $SETTINGS->{'DOCUMENTROOT'} . '/tmp';
 $SETTINGS->{'VIDEO_TMPDIR'} ||= $SETTINGS->{'TMPDIR'};
-$SETTINGS->{'VIDEO_ROOT'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/video", 
-$SETTINGS->{'MUSIC_ROOT'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/music",
+$SETTINGS->{'MEDIALIBRARIES'}{'movies'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/movies", 
+$SETTINGS->{'MEDIALIBRARIES'}{'tv'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/tv", 
+$SETTINGS->{'MEDIALIBRARIES'}{'music'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/music", 
 $SETTINGS->{'BINDIR'} ||= $SCRIPTDIR . '/.bin';
 $SETTINGS->{'TOOLDIR'} ||= $SCRIPTDIR . '/.tool';
 $SETTINGS->{'DOCDIR'} ||= $SCRIPTDIR . '/.doc';
@@ -2267,7 +2268,7 @@ my @routes = (
                 my $atbuf; 
                 $abuf = undef;
                 my $evp = $request->{'client'}{'server'}{'evp'};                
-                my $file = $SETTINGS->{'MUSIC_ROOT'} . '/Alphaville - Forever Young (1984) [FLAC24-192] {P-13065}/02 - Summer in Berlin.flac';
+                my $file = $SETTINGS->{'MEDIALIBRARIES'}{'music'} . '/Alphaville - Forever Young (1984) [FLAC24-192] {P-13065}/02 - Summer in Berlin.flac';
                 my $bitdepth = 16;
                 my $desiredrate = 48000;
                 my $atime = 0;              
@@ -2441,9 +2442,7 @@ my $server = HTTP::BS::Server->new($SETTINGS, \@routes, \@plugins);
 
 sub get_video {
     my ($request) = @_;
-    my ($client, $qs, $header) =  ($request->{'client'}, $request->{'qs'}, $request->{'header'});
-    my $droot = $SETTINGS->{'DOCUMENTROOT'};
-    my $vroot = $SETTINGS->{'VIDEO_ROOT'};
+    my ($client, $qs, $header) =  ($request->{'client'}, $request->{'qs'}, $request->{'header'});       
     say "/get_video ---------------------------------------";
     my %video = ('out_fmt' => video_get_format($qs->{'fmt'}));
     if(defined($qs->{'name'})) {        
@@ -2582,7 +2581,7 @@ sub video_get_format {
 
 sub video_file_lookup {
     my ($filename) = @_; 
-    my @locations = ($SETTINGS->{'VIDEO_ROOT'}, $SETTINGS->{'MUSIC_ROOT'});    
+    my @locations = ($SETTINGS->{'MEDIALIBRARIES'}{'movies'}, $SETTINGS->{'MEDIALIBRARIES'}{'tv'}, $SETTINGS->{'MEDIALIBRARIES'}{'music'});    
     
     my $filepath;
     foreach my $location (@locations) {
@@ -2705,7 +2704,7 @@ sub media_filepath_to_src_file {
 
 sub media_file_search {
     my ($filename) = @_;
-    my @locations = ($SETTINGS->{'VIDEO_ROOT'}, $SETTINGS->{'MUSIC_ROOT'});
+    my @locations = ($SETTINGS->{'MEDIALIBRARIES'}{'movies'}, $SETTINGS->{'MEDIALIBRARIES'}{'tv'}, $SETTINGS->{'MEDIALIBRARIES'}{'music'});
 
     say "basename: " . basename($filename) . " dirname: " . dirname($filename);
     my $dir = dirname($filename);
@@ -2741,8 +2740,27 @@ sub player_video {
     $buf .= "</head>";
     $buf .= "<body>";   
     $buf .= '<div id="medialist">';
-    $temp = output_dir($SETTINGS->{'VIDEO_ROOT'}, $fmt);
-    $buf .= $$temp;
+    $qs->{'library'} //= 'all';
+    $qs->{'library'} = lc($qs->{'library'});
+    my @libraries = ('movies', 'tv', 'other');
+    if($qs->{'library'} ne 'all') {
+        @libraries = ($qs->{'library'});    
+    }
+    my %libraryprint = ( 'movies' => 'Movies', 'tv' => 'TV', 'other' => 'Other');
+    foreach my $library (@libraries) {
+        my $dir = $SETTINGS->{'MEDIALIBRARIES'}{$library};
+        (-d $dir) or next;
+        $buf .= "<h1>" . $libraryprint{$library} . "</h1>\n";        
+        $temp = output_dir($dir, {
+            'root' => $dir,
+            'file_item_text' => \&video_file_item_text,
+            'file_item_text_opt' => [$fmt],
+            'min_file_size' => 100000          
+        });
+        $buf .= $$temp;   
+    }
+    
+   
     $buf .= '</div>';
     $temp = GetResource($VIDEOFORMATS{$fmt}->{'player_html'});
     $buf .= $$temp; 
@@ -2766,29 +2784,46 @@ sub player_video {
     $request->SendLocalBuf($buf, "text/html"); 
 }
 
+# returns the text of a video file item
+sub video_file_item_text {
+    my ($safe_item_basename, $item_path, $fmt) = @_;
+    return '<a href="video?name=' . $item_path . '&fmt=' . $fmt . '" data-file="'. $item_path . '">' . $safe_item_basename . '</a>    <a href="get_video?name=' . $item_path . '&fmt=' . $fmt . '">DL</a>';
+}
+
 sub output_dir {
-    my ($path, $fmt) = @_;
+    my ($path, $options) = @_;
+    # get the list of files and sort
     my $dir;
     if(! opendir($dir, $path)) {
         warn "outputdir: Cannot open directory: $path $!";
         return \"";
-    }
-    #my @files = sort(readdir $dir);
+    }   
     my @files = sort { uc($a) cmp uc($b)} (readdir $dir);
     closedir($dir);
-    my $vroot = $SETTINGS->{'VIDEO_ROOT'};
+    # hide the root path if desired
+    my $root = $options->{'root'};   
+    my $unsafeDir = $path;    
+    if($root) {
+        #say "removing root : $root";    
+        $unsafeDir =~ s/^$root(\/)?//;
+        #say "dir after $unsafeDir";
+    }
+    # set what to do for each file
+    $options->{'file_item_text'} //= sub {
+        my ($safe_item_basename, $item_path) = @_;
+        return '<a href="' . $item_path . '">' . $safe_item_basename . '</a>';     
+    };
+    $options->{'min_file_size'} //= 0;
+    # finally generate the html
     my $buf =  "<ul>";    
     foreach my $file (@files) {
         if($file !~ /^..?$/) {
-        my $safename = escape_html($file);
-            
-            if(!(-d "$path/$file")) {   
-                #$buf .= "<li><a href=\"javascript:SetVideo('$path/$file');\">$file</a></li>";
-                my $unsafePath = "$path/$file";
-                
-                $unsafePath =~ s/^$vroot\///;
+        my $safename = escape_html($file);            
+            if(!(-d "$path/$file")) { 
+                next if( (-s "$path/$file") < $options->{'min_file_size'});            
+                my $unsafePath = $unsafeDir ? "$unsafeDir/$file" : $file;                
                 my $data_file = escape_html($unsafePath);
-                $buf .= '<li><a href="video?name=' . $$data_file . '&fmt=' . $fmt . '" data-file="'. $$data_file . '">' . $$safename . '</a>    <a href="get_video?name=' . $$data_file . '&fmt=' . $fmt . '">DL</a></li>';
+                $buf .= '<li>' . $options->{'file_item_text'}->($$safename, $$data_file, @{$options->{'file_item_text_opt'}}) . '</li>';
             }
             else {
                 $buf .= '<li>';
@@ -2796,7 +2831,7 @@ sub output_dir {
                 $buf .= '<a href="#' . $$safename . '_hide" class="hide" id="' . $$safename . '_hide">' . "$$safename</a>";
                 $buf .= '<a href="#' . $$safename . '_show" class="show" id="' . $$safename . '_show">' . "$$safename</a>";                
                 $buf .= '<div class="list">';
-                my $tmp = output_dir("$path/$file", $fmt);              
+                my $tmp = output_dir("$path/$file", $options);              
                 $buf .= $$tmp;
                 $buf .= '</div></div>';
                 $buf .= '</li>';
@@ -2805,6 +2840,75 @@ sub output_dir {
     }
     $buf .= "</ul>";
     return \$buf;
+}
+
+sub output_dir_nonrecurse {
+    my ($path, $options) = @_;
+    
+    # hide the root path if desired
+    my $root = $options->{'root'};   
+    
+    
+    # set what to do for each file
+    $options->{'file_item_text'} //= sub {
+        my ($safe_item_basename, $item_path) = @_;
+        return '<a href="' . $item_path . '">' . $safe_item_basename . '</a>';     
+    };
+    $options->{'min_file_size'} //= 0;
+    
+    my $buf =  "<ul>"; 
+    my @files;
+    ON_DIR:    
+    # get the list of files and sort
+    my $dir;
+    if(! opendir($dir, $path)) {
+        warn "outputdir: Cannot open directory: $path $!";
+        return \"";
+    }  
+    my @newfiles = sort { uc($a) cmp uc($b)} (readdir $dir); 
+    closedir($dir); 
+    my @newpaths = ();
+    foreach my $file (@newfiles) {
+        next if($file =~ /^..?$/);
+        push @newpaths, "$path/$file";        
+    }    
+    @files = @files ? (@newpaths, undef, @files) : @newpaths;      
+    while(@files)
+    {        
+        $path = shift @files;          
+        if(! defined $path) {            
+            $buf .= "</ul>";
+            $buf .= '</div></div>';
+            $buf .= '</li>';            
+            next;
+        }        
+        my $file = basename($path);       
+        my $safename = escape_html($file);                 
+        if(-d $path) {            
+            $buf .= '<li>';
+            $buf .= '<div class="row">';
+            $buf .= '<a href="#' . $$safename . '_hide" class="hide" id="' . $$safename . '_hide">' . "$$safename</a>";
+            $buf .= '<a href="#' . $$safename . '_show" class="show" id="' . $$safename . '_show">' . "$$safename</a>";                
+            $buf .= '<div class="list">';
+            $buf .= '<ul>';
+            goto ON_DIR;
+        }
+        my $unsafePath = $path;    
+        if($root) {            
+            $unsafePath =~ s/^$root(\/)?//;            
+        }
+        my $size = -s $path;
+        if(! defined $size) {
+            say "size  not defined path $path file $file";
+            next;
+        }
+        next if( $size < $options->{'min_file_size'});   
+        my $data_file = escape_html($unsafePath);
+        $buf .= '<li>' . $options->{'file_item_text'}->($$safename, $$data_file, @{$options->{'file_item_text_opt'}}) . '</li>';    
+    }    
+    $buf .= "</ul>";
+    return \$buf;    
+ 
 }
 
 
