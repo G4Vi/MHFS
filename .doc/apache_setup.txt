@@ -1,0 +1,9 @@
+https://serverfault.com/questions/438773/ssl-proxy-forwarding-without-the-encryption
+<VirtualHost *:443>
+    ServerName www.example.com
+    SSLEngine On
+    SSLCertificateFile /path/to/cert.pem
+    SSLCertificateKeyFile /path/to/cert.key
+    ProxyPass / http://localhost:9091/
+    ProxyPassReverse / http://localhost:9091/
+</VirtualHost>

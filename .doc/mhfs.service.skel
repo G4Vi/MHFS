@@ -1,0 +1,15 @@
+[Unit]
+Description=MHFS server
+After=network.target
+
+[Service]
+Type=forking
+# Another Type option: forking
+User=AAA
+WorkingDirectory=/home/AAA/MHFS
+ExecStart=/usr/bin/tmux new -d 'perl server.pl'
+Restart=on-failure
+# Other Restart options: or always, on-abort, etc
+
+[Install]
+WantedBy=multi-user.target

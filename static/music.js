@@ -553,6 +553,17 @@ window.onload = function () {
     var sktxt = document.getElementById("seekfield");
     var seekbar = document.getElementById("seekbar");
     var ppbtn = document.getElementById("ppbtn");
+    var rptrackbtn = document.getElementById("repeattrack");
+    
+    rptrackbtn.addEventListener('change', function(e) {         
+       if(e.target.checked) {
+           console.log("checked");
+           if (!Tracks[CurrentTrack]) return;
+       }
+       else {
+           console.log("unchecked");
+       }           
+    });
 
     ppbtn.addEventListener('click', function (e) {
         if (ppbtn.textContent == 'PAUSE') {
