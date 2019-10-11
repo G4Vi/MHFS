@@ -296,7 +296,7 @@ package HTTP::BS::Server::Util {
     use Exporter 'import';
     use File::Find;
     use Cwd qw(abs_path getcwd);
-    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'shell_stdout', 'shell_escape', 'ssh_stdout');
+    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'shell_stdout', 'shell_escape', 'ssh_stdout', 'pid_running');
     sub LOCK_GET_LOCKDATA {
         my ($filename) = @_;
         my $lockname = "$filename.lock";    
@@ -393,6 +393,7 @@ package HTTP::BS::Server::Util {
         }
         else {
             say "PID $pid ASYNC";
+            return $pid;
         }
     }    
 
@@ -435,6 +436,10 @@ package HTTP::BS::Server::Util {
     sub ssh_stdout {
         my $source = shift;
         return shell_stdout('ssh', $source->{'userhost'}, '-p', $source->{'port'}, @_);
+    }
+    
+    sub pid_running {
+        return kill 0, shift;    
     }
     
     sub shell_escape {
@@ -1607,9 +1612,19 @@ package MusicLibrary {
                         
         }
         else {
+            if($where eq '') {
+                 $buf .= '<table border="1" class="tbl_track">';
+                 $buf .= '<tbody>';
+            }
             $buf .= '<tr class="track">';        
             $buf .= '<td>' . $name . '</td>';             
-            $buf .= '<td><a href="#">Play</a></td><td><a href="#">Queue</a></td><td><a href="music_dl?action=dl&name=' . uri_escape_utf8($where.$name_unencoded).'">DL</a></td>';                       
+            $buf .= '<td><a href="#">Play</a></td><td><a href="#">Queue</a></td><td><a href="music_dl?action=dl&name=' . uri_escape_utf8($where.$name_unencoded).'">DL</a></td>'; 
+            if($where eq '') {
+                 $buf .= '</tr>';
+                 $buf .= '</tbody></table>';
+                 return $buf;              
+            }
+              
         }
         $buf .= '</tr>';     
         return $buf;   
@@ -1687,6 +1702,7 @@ package MusicLibrary {
                     'STDOUT' => sub {
                         my ($stdout) = @_;
                         my $buf;
+                        $request->{'process'} = undef;
                         if(!read($stdout, $buf, 4096)) {
                             say "failed to read soxi";
                             $request->Send404;
@@ -1708,67 +1724,106 @@ package MusicLibrary {
             }        
         };        
             
+        
+        my $tmpdir = $request->{'client'}{'server'}{'settings'}{'TMPDIR'};  
+        my $filebase = basename($file);
+        # determine if we need to convert to flac or to search for lossy flacs       
+        my $is_flac = $file =~ /\.flac$/i;
+        if(!$is_flac) {
+            $filebase =~ s/\.[^.]+$/.lossy.flac/;
+            my $tlossy = $tmpdir . '/' . $filebase;
+            if(-e $tlossy ) {
+                $is_flac = 1;
+                $file = $tlossy;
+            }            
+        }
         my $max_sample_rate = $request->{'qs'}{'max_sample_rate'};
-        my $bitdepth = $request->{'qs'}{'bitdepth'}; 
+        # bitdepth only makes sense with PCM audio
+        # however we do all processing in PCM (in flac)
+        my $bitdepth = $request->{'qs'}{'bitdepth'};                
         if(! $max_sample_rate) {
             $SendFile->($file);
             return;            
         }           
         elsif(! $bitdepth) {
             $bitdepth = $max_sample_rate > 48000 ? 24 : 16;        
-        }
+        }        
         say "using bitdepth $bitdepth";
         my %rates = (
             '48000' => [192000, 96000, 48000],
             '44100' => [176400, 88200, 44100]        
         );              
-        my @acceptable_settings = ( [24, 192000], [24, 96000], [24, 48000], [24, 176400],  [24, 88200], [16, 48000], [16, 44100]);        
-        my $filebase = basename($file);
-        my $tmpdir = $request->{'client'}{'server'}{'settings'}{'TMPDIR'};       
+        my @acceptable_settings = ( [24, 192000], [24, 96000], [24, 48000], [24, 176400],  [24, 88200], [16, 48000], [16, 44100]);            
         my @desired = ([$bitdepth, $max_sample_rate]);           
-        foreach my $setting (@acceptable_settings) {
-            if(($setting->[0] <= $bitdepth) && ($setting->[1] <= $max_sample_rate)) {
+        foreach my $setting (@acceptable_settings) {            
+            if(($setting->[0] <= $bitdepth) && ($setting->[1] <= $max_sample_rate)) {                
                 push @desired, $setting;
             }                
-        }           
-        # if we altready transcoded, don't waste time doing it again
+        }
+                
+        # if we already transcoded/resampled, don't waste time doing it again        
         foreach my $setting (@desired) {
             my $tmpfile = $tmpdir . '/' . $setting->[0] . '_' . $setting->[1] . '_' . $filebase;
             if(-e $tmpfile) {
                 say "No need to resample $tmpfile exists";
                 $SendFile->($tmpfile);
                 return;
-            }                
+            }                      
         }
-         # HACK
+        
+        # HACK
         say "client time was: " . $request->{'client'}{'time'};
         $request->{'client'}{'time'} += 30;
         say "HACK client time extended to " . $request->{'client'}{'time'};
+        
+        # convert to pcm (flac) and retry if not already
+        if(!$is_flac) {
+            my $outfile = $tmpdir . '/' . $filebase;          
+            #my @cmd = ('ffmpeg', '-i', $file, $outfile);
+            my @cmd = ('ffmpeg', '-i', $file, '-c:a', 'flac', '-sample_fmt', 's16', $outfile);
+            my $buf;
+            $request->{'process'} = HTTP::BS::Server::Process->new(\@cmd, $evp, {
+            'SIGCHLD' => sub {
+                # HACK
+                $request->{'client'}{'time'} = clock_gettime(CLOCK_MONOTONIC);
+                SendLocalTrack($request,$outfile);                
+            },                    
+            'STDERR' => sub {
+                my ($terr) = @_;
+                read($terr, $buf, 4096);                                     
+            }}); 
+            return;                     
+        }
+        
         # have ffmpeg determine the input file parameters and act accordingly                           
         $request->{'process'} = HTTP::BS::Server::Process->new(['ffmpeg', '-i', $file], $evp, {
         'STDERR' => sub {
             my ($err) = @_;
             my $buf;
-            my $samplerate;
-            my $inbitdepth;
+            my $samplerate;                      
             my $rfailed = ! read($err, $buf, 4096);
-            if($rfailed || ($buf !~ /Audio:\s[^\s]+\s(\d+)\sHz,\s[a-z]+,\s(?:(?:s(16))|(?:s32\s\((24)\sbit\)))/)) {
+            while(1) {
+                if($rfailed) {                
+                }                
+                elsif($buf =~ /Audio:\s[^\s]+\s(\d+)\sHz,\s[a-z]+,\s(?:(?:s(16))|(?:s32\s\((24)\sbit\)))/) {
+                    $samplerate = $1;
+                    my $inbitdepth = $2 || $3;
+                    #$inbitdepth = $3 if(! $inbitdepth);
+                    say "input: samplerate $samplerate inbitdepth $inbitdepth";
+                    say "maxsamplerate $max_sample_rate bitdepth $bitdepth";                    
+                    if(($samplerate <= $max_sample_rate) && ($inbitdepth <= $bitdepth)) {
+                        say "samplerate is <= max_sample_rate";
+                        $SendFile->($file);
+                        return -1;                
+                    }                    
+                    last;                
+                }               
                 say "regex or ffmpeg failed";
                 say $buf if($buf);                
                 $SendFile->($file);
-                return -1;
-            }
-            else {
-                $samplerate = $1;
-                $inbitdepth = $2;
-                $inbitdepth = $3 if(! $inbitdepth);               
-            }                          
-            say "input: samplerate $samplerate bitdepth $inbitdepth";                        
-            if(($samplerate <= $max_sample_rate) && ($inbitdepth <= $bitdepth)) {
-                say "samplerate is <= max_sample_rate";
-                $SendFile->($file);
-                return -1;                
-            }            
+                return -1;            
+            }                                     
+                        
             # choose the sample rate                
             my $desiredrate;
             RATE_FACTOR: foreach my $key (keys %rates) {
@@ -1783,20 +1838,11 @@ package MusicLibrary {
             }
             $desiredrate //= $max_sample_rate;                
             say "desired rate: $desiredrate";
-            # build the command                   
-            my ($ext) = $file =~ /\.([^.]+)$/;
+            # build the command                       
             my $outfile = $tmpdir . '/' . $bitdepth . '_' . $desiredrate . '_' . $filebase;
-            my @cmd;
-            if($ext ne 'flac') {
-                @cmd = ('ffmpeg', '-i', $file, '-c:a', $ext);
-                push @cmd, ('-sample_fmt', 's16');
-                push @cmd, ('-ar', $desiredrate);
-                push @cmd, $outfile;
-            }
-            else {
-                @cmd = ('sox', $file, '-G', '-b', $bitdepth, $outfile, 'rate', '-v', '-L', $desiredrate, 'dither');
-                say "cmd: " . join(' ', @cmd);                     
-            }                             
+            my @cmd = ('sox', $file, '-G', '-b', $bitdepth, $outfile, 'rate', '-v', '-L', $desiredrate, 'dither');
+            say "cmd: " . join(' ', @cmd);
+            
             $request->{'process'} = HTTP::BS::Server::Process->new(\@cmd, $evp, {
             'SIGCHLD' => sub {
                 # HACK
@@ -2136,6 +2182,7 @@ use File::stat;
 use File::Find;
 use File::Path qw(make_path);
 use File::Copy;
+use POSIX;
 use Encode qw(decode encode find_encoding);
 use Any::URI::Escape;
 use Scalar::Util qw(looks_like_number weaken);
@@ -2194,7 +2241,8 @@ our %VIDEOFORMATS = (
             'hlsold' => {'lock' => 0, 'create_cmd' => "ffmpeg -i '%s' -codec:v copy -bsf:v h264_mp4toannexb -strict experimental -acodec aac -f ssegment -segment_list '%s' -segment_list_flags +live -segment_time 10 '%s%%03d.ts'",  'create_cmd_args' => ['requestfile', 'outpathext', 'outpath'], 'ext' => 'm3u8', 
             'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/hls_player.html'},
 
-            'hls' => {'lock' => 0, 'create_cmd' => ['ffmpeg', '-i', '$video{"src_file"}{"filepath"}', '-codec:v', 'copy', '-strict', 'experimental', '-codec:a', 'aac', '-ac', '2', '-f', 'hls', '-hls_time', '5', '-hls_list_size', '0',  '-hls_segment_filename', '$video{"out_location"} . "/" . $video{"out_base"} . "%04d.ts"', '-master_pl_name', '$video{"out_base"} . ".m3u8"', '$video{"out_filepath"} . "_v"'], 'ext' => 'm3u8', 'desired_audio' => 'aac',
+            #'hls' => {'lock' => 0, 'create_cmd' => ['ffmpeg', '-i', '$video{"src_file"}{"filepath"}', '-codec:v', 'copy', '-strict', 'experimental', '-codec:a', 'aac', '-ac', '2', '-f', 'hls', '-hls_time', '5', '-hls_list_size', '0',  '-hls_segment_filename', '$video{"out_location"} . "/" . $video{"out_base"} . "%04d.ts"', '-master_pl_name', '$video{"out_base"} . ".m3u8"', '$video{"out_filepath"} . "_v"'], 'ext' => 'm3u8', 'desired_audio' => 'aac',
+            'hls' => {'lock' => 0, 'create_cmd' => ['ffmpeg', '-i', '$video{"src_file"}{"filepath"}', '-codec:v', 'libx264', '-strict', 'experimental', '-codec:a', 'aac', '-ac', '2', '-f', 'hls', '-hls_time', '5', '-hls_list_size', '0',  '-hls_segment_filename', '$video{"out_location"} . "/" . $video{"out_base"} . "%04d.ts"', '-master_pl_name', '$video{"out_base"} . ".m3u8"', '$video{"out_filepath"} . "_v"'], 'ext' => 'm3u8', 'desired_audio' => 'aac',
             'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/hls_player.html'},
 
             'dash' => {'lock' => 0, 'create_cmd' => #['ffmpeg', '-i', '$video{"src_file"}{"filepath"}', '-codec:v', 'copy', '-strict', 'experimental', '-codec:a', 'aac', '-ac', '2', '-map', 'v:0', '-map', 'a:0',  '-f', 'dash',  '$video{"out_filepath"}', '-flush_packets', '1', '-map', '0:2', '-f', 'webvtt', '$video{"out_filepath"} . ".vtt"']
@@ -2253,6 +2301,9 @@ my @routes = (
             my $buf = '<video controls autoplay src="get_video?' . $request->{'qs'}{'querystring'} . '">Terrible</video>';            
             $request->SendLocalBuf($buf, 'text/html');
         }
+    ],
+    [
+        '/torrent', \&torrent
     ],
     [
         '/radio', sub {
@@ -2440,10 +2491,12 @@ my @routes = (
         
 my $server = HTTP::BS::Server->new($SETTINGS, \@routes, \@plugins);
 
+# really acquire media file (with search) and convert
 sub get_video {
     my ($request) = @_;
     my ($client, $qs, $header) =  ($request->{'client'}, $request->{'qs'}, $request->{'header'});       
     say "/get_video ---------------------------------------";
+    $qs->{'fmt'} //= 'noconv';
     my %video = ('out_fmt' => video_get_format($qs->{'fmt'}));
     if(defined($qs->{'name'})) {        
         my $src_file;
@@ -2453,6 +2506,7 @@ sub get_video {
         }
         elsif($src_file = media_file_search($qs->{'name'})) {
             say "useragent: " . $header->{'User-Agent'};
+            # VLC 2 doesn't handle redirects? VLC 3 does
             if($header->{'User-Agent'} !~ /^VLC\/2\.\d+\.\d+\s/) {                
                 my $url = 'get_video?' . $qs->{'querystring'};
                 my $qname = uri_escape($src_file->{'qname'});
@@ -2537,7 +2591,7 @@ sub get_video {
             elsif($fmt eq 'dash') {
                 $video{'on_exists'} = \&video_dash_check_ready;
             }            
-            ASYNC(\&shellcmd_unlock, \@cmd, $video{'out_filepath'});            
+            $video{'pid'} = ASYNC(\&shellcmd_unlock, \@cmd, $video{'out_filepath'});            
         }           
         else {
             $request->Send404;
@@ -2550,21 +2604,31 @@ sub get_video {
             if(! defined $request) {
                 say "\$request undef, ignoring CB";
                 return undef;
-            }            
-            my $filename = $video{'out_filepath'};
-            if(! -e $filename) {
+            }
+            # test if its ready to send
+            while(1) {
+                 my $filename = $video{'out_filepath'};
+                 if(! -e $filename) {
+                     last;
+                 }
+                 my $minsize = $VIDEOFORMATS{$fmt}->{'minsize'};
+                 if(defined($minsize) && ((-s $filename) < $minsize)) {                      
+                     last;
+                 }
+                 if(defined $video{'on_exists'}) {
+                     last if (! $video{'on_exists'}->(\%video));              
+                 }
+                 say "get_video_timer is destructing";
+                 $request->SendLocalFile($filename);
+                 return undef;            
+            }
+            # 404, if we didn't send yet the process is not running
+            if(pid_running($video{'pid'})) {
                 return 1;
             }
-            my $minsize = $VIDEOFORMATS{$fmt}->{'minsize'};
-            if(defined($minsize) && ((-s $filename) < $minsize)) {                      
-                return 1;
-            }
-            if(defined $video{'on_exists'}) {
-                (return 1) if (! $video{'on_exists'}->(\%video));              
-            }
-            say "get_video_timer is destructing";
-            $request->SendLocalFile($filename);
-            return undef;          
+            say "pid not running: " . $video{'pid'} . " get_video_timer done with 404";
+            $request->Send404;
+            return undef;                   
         });
         say "get_video: added timer " . $video{'out_filepath'};                  
     }
@@ -2727,6 +2791,555 @@ sub GetResource {
     return \$RESOURCES{$filename};
 }
 
+
+
+sub output_process {
+    my ($evp, $cmd, $handler, $stdin) = @_;
+    my $stdout;
+    my $stderr;
+    my $process;
+    
+    my $prochandlers = {
+    'STDOUT' => sub {
+        my ($handle) = @_;
+        my $buf;
+        say "begin stdout read";
+        while(read($handle, $buf, 100)) {
+            $stdout .= $buf;        
+        }
+        say "broke out stdout";
+        return 1;        
+    },
+    'STDERR' => sub {
+        my ($handle) = @_;
+        my $buf;
+        say "begin stderr read";
+        while(read($handle, $buf, 100)) {
+            $stderr .= $buf;        
+        }
+        say "broke out stderr";
+        return 1;
+    },        
+    'SIGCHLD' => sub {
+        my $obuf;
+        my $handle = $process->{'fd'}{'stdout'}{'fd'};
+        while(read($handle, $obuf, 100000)) {
+            $stdout .= $obuf; 
+            say "stdout sigchld read";            
+        }
+        my $ebuf;
+        $handle = $process->{'fd'}{'stderr'}{'fd'};
+        while(read($handle, $ebuf, 100000)) {
+            $stderr .= $ebuf;
+            say "stderr sigchld read";              
+        }
+        $handler->($stdout, $stderr);         
+    },      
+    };
+    
+    if($stdin) {
+        $prochandlers->{'STDIN'} = sub {
+            # how to deadlock
+            my ($in) = @_;
+            say "output_process stdin";
+            print $in $stdin; # this could block               
+            return 0;        
+        };   
+    }
+    
+    $process =    HTTP::BS::Server::Process->new($cmd, $evp, $prochandlers);
+    
+    my $flags = 0;
+    my $handle = $process->{'fd'}{'stderr'}{'fd'};
+    return unless defined $handle ;
+    (0 == fcntl($handle, Fcntl::F_GETFL, $flags)) or return undef;
+    $flags |= Fcntl::O_NONBLOCK;
+    (0 == fcntl($handle, Fcntl::F_SETFL, $flags)) or return undef;
+    $handle = $process->{'fd'}{'stdout'}{'fd'};
+    return unless defined $handle ;
+    (0 == fcntl($handle, Fcntl::F_GETFL, $flags)) or return undef;
+    $flags |= Fcntl::O_NONBLOCK;
+    (0 == fcntl($handle, Fcntl::F_SETFL, $flags)) or return undef;
+    return $process;
+}
+
+sub ptp_request {
+    my ($evp, $url, $handler, $tried_login) = @_;
+    my $atbuf;
+    my @cmd = ('curl', '-s', '-v', '-b', '/tmp/ptp', '-c', '/tmp/ptp', 'https://xxxxxxx.domain/' . $url);
+    
+
+    my $process;
+    $process    = output_process($evp, \@cmd, sub {
+        my ($output, $error) = @_;
+        if($output) {
+            #say 'ptprequest output: ' . $output;
+            $handler->($output);
+        }
+        else {
+            say 'ptprequest error: ' . $error;
+            if($tried_login) {
+                $handler->(undef);
+                return;            
+            }
+            $tried_login = 1;
+            my $postdata = 'username=' . $SETTINGS->{'PTP'}{'username'} . '&password=' . $SETTINGS->{'PTP'}{'password'} . '&passkey=' . $SETTINGS->{'PTP'}{'passkey'};
+            my @logincmd = ('curl', '-s', '-v', '-b', '/tmp/ptp', '-c', '/tmp/ptp', '-d', $postdata,  'https://xxxxxxx.domain/ajax.php?action=login');
+            $process = output_process($evp, \@logincmd, sub {
+                 my ($output, $error) = @_;
+                 # todo error handling
+                 ptp_request($evp, $url, $handler, 1);            
+            
+            });
+                        
+        }
+    });
+    return $process;
+    
+    
+    
+
+        #if(!$atbuf) {
+        #    if($tried_login) {
+        #        $handler->(undef);
+        #        return;
+        #    }
+        #    $tried_login = 1;
+        #    @cmd = ('curl', '-s', '-v', '-b', '/tmp/ptp', '-c', '/tmp/ptp', '-d', $postdata,  'https://xxxxxxx.domain/ajax.php?action=login');
+        #    $process = HTTP::BS::Server::Process->new(\@cmd, $evp, {
+           
+}
+
+sub rtxmlrpc {
+    my ($evp, $params, $cb, $stdin) = @_;
+    my $process;
+    my @cmd = ('rtxmlrpc', @$params, '--config-dir', '~/MHFS/.conf/.pyroscope/');
+    $process    = output_process($evp, \@cmd, sub {
+        my ($output, $error) = @_;
+        chomp $output;
+        say 'rtxmlrpc output: ' . $output;
+        $cb->($output);   
+    }, $stdin);
+    return $process;
+}
+
+sub lstor {
+    my ($evp, $params, $cb) = @_;
+    my $process;
+    my @cmd = ('lstor', '-q', @$params);
+    $process    = output_process($evp, \@cmd, sub {
+        my ($output, $error) = @_;
+        chomp $output;
+        say 'lstor output: ' . $output;
+        $cb->($output);   
+    });
+    return $process;
+}
+
+sub torrent_file_hash {
+    my ($evp, $file, $cb) = @_;
+    lstor($evp, ['-o', '__hash__', $file], $cb);
+}
+
+sub torrent_d_bytes_done {
+    my ($evp, $infohash, $callback) = @_;
+    rtxmlrpc($evp, ['d.bytes_done', $infohash ], sub {
+        my ($output) = @_;
+        if($output =~ /ERROR/) {
+            $output = undef;           
+        }
+        $callback->($output);      
+    });
+}
+
+sub torrent_d_size_bytes {
+    my ($evp, $infohash, $callback) = @_;
+    rtxmlrpc($evp, ['d.size_bytes', $infohash ],sub {
+        my ($output) = @_;
+        if($output =~ /ERROR/) {
+            $output = undef;           
+        }
+        $callback->($output);       
+    });
+}
+
+# awful and broken
+sub torrent_load_raw_verbose {
+    my ($evp, $data, $callback) = @_;
+    rtxmlrpc($evp, ['load.raw_verbose', '@-' ],sub {
+        my ($output) = @_;
+        if($output =~ /ERROR/) {
+            $output = undef;           
+        }
+        $callback->($output);       
+    }, $data);
+}
+
+
+sub torrent_load_verbose {
+    my ($evp, $filename, $callback) = @_;
+    rtxmlrpc($evp, ['load.verbose', '', $filename], sub {
+        my ($output) = @_;
+        if($output =~ /ERROR/) {
+            $output = undef;           
+        }
+        $callback->($output);     
+    });
+}
+
+
+sub torrent_d_directory_set {
+    my ($evp, $infohash, $directory, $callback) = @_;
+    rtxmlrpc($evp, ['d.directory.set', $infohash, $directory], sub {
+        my ($output) = @_;
+        if($output =~ /ERROR/) {
+            $output = undef;           
+        }
+        $callback->($output);      
+    });
+}
+
+sub torrent_d_start {
+    my ($evp, $infohash, $callback) = @_;
+    rtxmlrpc($evp, ['d.start', $infohash], sub {
+        my ($output) = @_;
+        if($output =~ /ERROR/) {
+            $output = undef;           
+        }
+        $callback->($output);      
+    });
+}
+
+sub torrent_start {
+    my ($evp, $infohash, $callback) = @_;
+    rtxmlrpc($evp, ['d.stop', $infohash], sub {
+    my ($output) = @_;
+    if($output =~ /ERROR/) {
+        $callback->(undef);
+        return;            
+    }
+    torrent_d_start($evp, $infohash, $callback);    
+    });
+
+
+
+}
+
+sub torrent_d_delete_tied {
+    my ($evp, $infohash, $callback) = @_;
+    rtxmlrpc($evp, ['d.delete_tied', $infohash], sub {
+        my ($output) = @_;
+        if($output =~ /ERROR/) {
+            $output = undef;           
+        }
+        $callback->($output);    
+    });
+}
+
+
+sub torrent_d_name{
+    my ($evp, $infohash, $callback) = @_;
+    rtxmlrpc($evp, ['d.name', $infohash], sub {
+        my ($output) = @_;
+        if($output =~ /ERROR/) {
+            $output = undef;           
+        }
+        $callback->($output);    
+    });
+}
+
+sub torrent_d_is_multi_file {
+    my ($evp, $infohash, $callback) = @_;
+    rtxmlrpc($evp, ['d.is_multi_file', $infohash], sub {
+        my ($output) = @_;
+        if($output =~ /ERROR/) {
+            $output = undef;           
+        }
+        $callback->($output);    
+    });
+}
+
+
+sub torrent_set_priority {
+    my ($evp, $infohash, $priority, $callback) = @_;
+    rtxmlrpc($evp, ['f.multicall', $infohash, '', 'f.priority.set=' . $priority], sub {
+    my ($output) = @_;
+    if($output =~ /ERROR/) {
+        $callback->(undef);
+        return;        
+    }
+    rtxmlrpc($evp, ['d.update_priorities', $infohash], sub {
+    if($output =~ /ERROR/) {
+        $output = undef;          
+    }
+    $callback->($output);    
+    })});
+}
+
+
+# lookup the findex for the file and then set the priority on it
+# ENOTIMPLEMENTED
+sub torrent_set_file_priority {
+    my ($evp, $infohash, $file, $priority, $callback) = @_;
+    rtxmlrpc($evp, ['f.multicall', $infohash, '', 'f.path='], sub {
+    my ($output) = @_;
+    if($output =~ /ERROR/) {
+        $callback->(undef);
+        return;        
+    }
+    say "torrent_set_file_priority";
+    say $output;
+    die;
+    
+    $callback->($output);
+    });
+}
+
+
+sub get_SI_size {
+    my ($bytes) = @_;
+    my $mebibytes = ($bytes / 1048576);
+    if($mebibytes >= 1024) {
+        return  sprintf("%.2f GiB", $bytes / 1073741824);                       
+    }
+    else {
+        return sprintf("%.2f MiB", $mebibytes);                        
+    }
+}
+
+#sub torrent_information {
+#    my ($evp, $infohash, $cb) = @_;
+#    rtxmlrpc($evp, ['d.multicall2', $infohash, '', 'd.name=', 'd.size_bytes=', 'd.bytes_done='], sub {    
+#    my ($output) = @_;
+#    if($output =~ /ERROR/) {
+#        $output = undef;           
+#    }
+#    $callback->($output);    
+#    });
+#}
+
+sub torrent_file_information {
+    my ($evp, $infohash, $name, $cb) = @_;
+    rtxmlrpc($evp, ['f.multicall', $infohash, '', 'f.path=', 'f.size_bytes='], sub {    
+    my ($output) = @_;
+    if($output =~ /ERROR/) {
+        $output = undef;           
+    }
+    
+    my @pairs = split( /\]\n\[/, $output);    
+    my %files;
+    foreach my $pair (@pairs) {
+        #say "pair: $pair";
+        my ($file, $size) = $pair =~ /\[?'(.+)',\n?\s(\d+)/mg;
+        #say "file $file size $size";
+        if((! defined $file) || (!defined $size)) {
+            $cb->(undef);
+            return;        
+        }
+        $files{$file} = {'size' => $size};
+    }
+    my @fkeys = (keys %files);
+    if(@fkeys == 1) {
+        my $key = $fkeys[0];
+        torrent_d_is_multi_file($evp, $infohash, sub {
+        my ($res) = @_;
+        if(! defined $res) {
+            $cb->(undef);        
+        }
+        if($res == 1) {
+            %files = (   $name . '/' . $key => $files{$key});      
+        }
+        $cb->(\%files);
+        });
+        return;
+    }
+    my %newfiles;
+    foreach my $key (@fkeys) {
+        $newfiles{$name . '/' . $key} = $files{$key};
+    }    
+    $cb->(\%newfiles);      
+    });
+}
+
+sub is_video {
+    my ($name) = @_;
+    my ($ext) = $name =~ /\.(mkv|avi|mp4|webm|flv|ts|mpeg|mpg|m2t|m2ts|wmv)$/i;
+    return $ext;
+}
+
+# is supported by mhfs music
+sub is_mhfs_music_playable {
+    my ($name) = @_;
+    my ($ext) = $name =~ /\.(flac)$/i;
+    return $ext;
+}
+
+sub play_in_browser_link {
+    my ($file, $torrent_path) = @_;
+    return '<a href="video?name=' . $torrent_path . '&fmt=hls">HLS (Watch in browser)</a>' if(is_video($file));
+    return '<a href="music?ptrack=' . $torrent_path . '">Play in MHFS Music</a>' if(is_mhfs_music_playable($file));
+    return 'N/A';
+}
+
+# perform multiple async actions at the same time.
+# continue on with $result_func on failure or completion of all actions
+sub do_multiples{
+    my ($multiples, $result_func) = @_;    
+    my %data;
+    my @mkeys = keys %{$multiples};
+    foreach my $multiple (@mkeys) {
+        my $multiple_cb = sub {
+            my ($res) = @_;
+            $data{$multiple} = $res;
+            # return failure if this multiple failed
+            if(! defined $data{$multiple}) {
+                $result_func->(undef);
+                return;          
+            }
+            # yield if not all the results in             
+            foreach my $m2 (@mkeys) {
+                return if(! defined $data{$m2});            
+            }
+            # all results in we can continue
+            $result_func->(\%data);            
+        };
+        say "launching multiple key: $multiple";
+        $multiples->{$multiple}->($multiple_cb);  
+    }
+}
+
+sub torrent_on_contents {
+    my ($evp, $request, $result, $tname, $saveto) = @_;
+    if(! $result) {
+        say "failed to dl torrent";
+        $request->Send404;
+        return;                  
+    }
+    else {        
+        write_file($tname, $result);
+        torrent_file_hash($evp, $tname, sub {
+        # error handling bad hashes?
+        my ($asciihash) = @_;
+        say 'infohash ' . $asciihash;
+        
+        # see if the hash is already in rtorrent
+        torrent_d_bytes_done($evp, $asciihash, sub {
+        my ($bytes_done) = @_;
+        if(! defined $bytes_done) {                    
+        # load, set directory, and download it (race condition)           
+            torrent_load_verbose($evp, $tname, sub {                
+            if(! defined $_[0]) {
+                $request->Send404;
+                unlink($tname);
+                return;                
+            }     
+            
+            torrent_d_delete_tied($evp, $asciihash, sub {
+            unlink($tname);                
+            if(! defined $_[0]) { $request->Send404; return;}              
+            
+            torrent_d_directory_set($evp, $asciihash, $saveto, sub {
+            if(! defined $_[0]) { $request->Send404; return;}           
+            
+            torrent_d_start($evp, $asciihash, sub {
+            if(! defined $_[0]) { $request->Send404; return;}
+
+            say 'downloading ' . $asciihash;
+            $request->Send301('torrent?infohash=' . $asciihash);                    
+            })})})});
+        }
+        else {
+        # set the priority and download
+            torrent_set_priority($evp, $asciihash, '1', sub {
+            if(! defined $_[0]) { $request->Send404; return;}                    
+            
+            torrent_d_start($evp, $asciihash, sub {
+            if(! defined $_[0]) { $request->Send404; return;}
+            
+            say 'downloading (existing) ' . $asciihash;
+            $request->Send301('torrent?infohash=' . $asciihash);                                     
+            })});
+        }                
+        })});                                  
+    }
+}
+
+# if an infohash is provided and it exists in rtorrent it reports the status of it
+    # starting or stopping it if requested. 
+# if an id is provided, it downloads the torrent file to lookup the infohash and adds it to rtorrent if necessary
+    # by default it starts it. 
+sub torrent {
+    my ($request) = @_;
+    my $qs = $request->{'qs'};
+    my $evp = $request->{'client'}{'server'}{'evp'};
+    # dump out the status, if the torrent's infohash is provided
+    if(defined $qs->{'infohash'}) {
+        my $hash = $qs->{'infohash'};
+        do_multiples({
+        'bytes_done' => sub { torrent_d_bytes_done($evp, $hash, @_); },
+        'size_bytes' => sub { torrent_d_size_bytes($evp, $hash, @_); },
+        'name'       => sub { torrent_d_name($evp, $hash, @_); },  
+        }, sub {        
+        if( ! defined $_[0]) { $request->Send404; return;}        
+        my ($data) = @_;    
+        my $torrent_raw = $data->{'name'};
+        my $bytes_done  = $data->{'bytes_done'};
+        my $size_bytes  = $data->{'size_bytes'};
+        # print out the current torrent status
+        my $torrent_name = ${escape_html($torrent_raw)};        
+        my $size_print = get_SI_size($size_bytes);
+        my $done_print = get_SI_size($bytes_done); 
+        my $percent_print = (sprintf "%u%%", ($bytes_done/$size_bytes)*100);
+        my $buf = '<h1>Torrent</h1>';
+        $buf  .=  '<h3><a href="video?action=browsemovies">Browse Movies</a> | <a href="video">Video</a> | <a href="music">Music</a></h3>';
+        $buf   .= '<table border="1" >';
+        $buf   .= '<thead><tr><th>Name</th><th>Size</th><th>Done</th><th>Downloaded</th></tr></thead>';
+        $buf   .= "<tbody><tr><td>$torrent_name</td><td>$size_print</td><td>$percent_print</td><td>$done_print</td></tr></tbody>";
+        $buf   .= '</table>';       
+        
+        # Assume we are downloading, if the bytes don't match
+        if($bytes_done < $size_bytes) {
+            $buf   .= '<meta http-equiv="refresh" content="3">';   
+            $request->SendLocalBuf($buf , 'text/html');            
+        }
+        else {
+        # print out the files with usage options        
+            torrent_file_information($evp, $qs->{'infohash'}, $torrent_raw, sub {
+            if(! defined $_[0]){ $request->Send404; return; };
+            my ($tfi) = @_;
+            my @files = sort (keys %$tfi);
+            $buf .= '<br>';
+            $buf .= '<table border="1" >';
+            $buf .= '<thead><tr><th>File</th><th>Size</th><th>DL</th><th>Play in browser</th></tr></thead>';
+            $buf .= '<tbody';
+            foreach my $file (@files) {                
+                my $torrent_path = ${ escape_html($file)} ;
+                my $link = '<a href="get_video?name=' . $torrent_path . '&fmt=noconv">DL</a>';
+                my $playlink = play_in_browser_link($file, $torrent_path);
+                $buf .= "<tr><td>$torrent_path</td><td>" . get_SI_size($tfi->{$file}{'size'}) . "</td><td>$link</td><td>$playlink</td></tr>"; 
+            }
+            $buf .= '</tbody';
+            $buf .= '</table>';            
+                    
+            $request->SendLocalBuf($buf , 'text/html');
+            });                 
+        }
+        
+        });                
+    }
+    # convert id to infohash (by downloading it and adding it to rtorrent if necessary
+    elsif(defined $qs->{'ptpid'}) {
+        ptp_request($evp, 'torrents.php?action=download&id=' . $qs->{'ptpid'}, sub {  
+            my ($result) = @_;        
+            my $tname = '/tmp/ptp_' . $qs->{'ptpid'} . '.torrent';
+            torrent_on_contents($evp, $request, $result, $tname, $SETTINGS->{'MEDIALIBRARIES'}{'movies'});
+        });
+    }
+    else {
+        $request->Send404;
+    }
+}
+
 sub player_video {
     my ($request) = @_;
     my $qs = $request->{'qs'};   
@@ -2736,9 +3349,69 @@ sub player_video {
     $buf .= '<style type="text/css">';
     my $temp = GetResource($SETTINGS->{'DOCUMENTROOT'} . '/static/' . 'video_style.css');
     $buf .= $$temp;
+    $buf .= '.searchfield { width: 50%; margin: 30px;}';
     $buf .= '</style>';
     $buf .= "</head>";
     $buf .= "<body>";   
+    
+    $qs->{'action'} //= 'library';
+    if($qs->{'action'} eq 'browsemovies') {
+        my $evp = $request->{'client'}{'server'}{'evp'};    
+        $buf .= '<h1>Browse Movies</h1>';
+        $buf .= '<h3><a href="video">Video</a> | <a href="music">Music</a></h3>';        
+        $buf .= '<form action="video" method="GET">';
+        $buf .= '<input type="hidden" name="action" value="browsemovies">';
+        $buf .= '<input type="text" placeholder="Search" name="searchstr" class="searchfield">';
+        $buf .= '<button type="submit">Search</button>';
+        $buf .= '</form>';  
+        $qs->{'searchstr'} //= '';
+        my $url = 'torrents.php?searchstr=' . $qs->{'searchstr'} . '&json=noredirect';
+        $qs->{'page'} = int($qs->{'page'});
+        $url .= '&page=' . $qs->{'page'} if( $qs->{'page'});         
+        ptp_request($evp, $url, sub {        
+            my ($result) = @_;
+            if(! $result) {
+                $buf .= '<h2>Search Failed</h2>';              
+            }
+            else {                
+                #$request->SendLocalBuf($result, "text/json");
+                #return;
+                my $json = decode_json($result);
+                my $numresult = $json->{'TotalResults'};
+                my $numpages = ceil($numresult/50);
+                say "numresult $numresult pages $numpages";                
+                foreach my $movie (@{$json->{'Movies'}}) {
+                    $buf .= '<table class="tbl_movie" border="1"><tbody>';
+                    $buf .= '<tr><th>' . $movie->{'Title'} . ' [' . $movie->{'Year'} . ']</th><th>Time</th><th>Size</th><th>Snatches</th><th>Seeds</th><th>Leeches</th></tr>';
+                    foreach my $torrent ( @{$movie->{'Torrents'}}) {
+                        $buf .= '<tr><td>' . $torrent->{'Codec'} . ' / ' . $torrent->{'Container'} . ' / ' . $torrent->{'Source'} . ' / ' . $torrent->{'Resolution'};
+                        ($buf .= ' / ' . $torrent->{'Scene'}) if $torrent->{'Scene'} eq 'true';
+                        ($buf .= ' / ' . $torrent->{'RemasterTitle'}) if $torrent->{'RemasterTitle'};                        
+                        ($buf .= ' / ' . $torrent->{'GoldenPopcorn'}) if $torrent->{'GoldenPopcorn'} eq 'true';
+                        my $sizeprint = get_SI_size($torrent->{'Size'});                                              
+                        $buf .= '<a href="torrent?ptpid=' . $torrent->{'Id'} . '">[DL]</a></td><td>' . $torrent->{'UploadTime'} . '</td><td>' . $sizeprint . '</td><td>' . $torrent->{'Snatched'} . '</td><td>' .  $torrent->{'Seeders'} . '</td><td>' .  $torrent->{'Leechers'} . '</td></tr>';                    
+                    }
+                    $buf .= '<tbody></table><br>';                    
+                }
+                $qs->{'page'} ||= 1;
+                if( $qs->{'page'} > 1) {
+                    $buf .= '<a href="video?action=browsemovies&searchstr=' .  $qs->{'searchstr'} . '&page=1">' . ${escape_html('<<First')}  .'</a> |';
+                    $buf .= '<a href="video?action=browsemovies&searchstr=' .  $qs->{'searchstr'} . '&page=' . ($qs->{'page'} - 1) . '">' . ${escape_html('<Prev')} . '</a>';                
+                }
+                if ($qs->{'page'} < $numpages) {
+                    $buf .= '<a href="video?action=browsemovies&searchstr=' .  $qs->{'searchstr'} . '&page=' . ($qs->{'page'} + 1) . '">' . ${escape_html('Next>')} . '</a> |';                 
+                    $buf .= '<a href="video?action=browsemovies&searchstr=' .  $qs->{'searchstr'} . '&page=' . $numpages . '">' . ${escape_html('Last>>')} . '</a>';                                    
+                }
+            }           
+            $buf .= "</body>";
+            $buf .= "</html>";  
+            $request->SendLocalBuf($buf, "text/html");
+        
+        });   
+        return;
+    }   
+    
+    # action=library    
     $buf .= '<div id="medialist">';
     $qs->{'library'} //= 'all';
     $qs->{'library'} = lc($qs->{'library'});
