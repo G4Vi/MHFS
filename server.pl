@@ -270,7 +270,8 @@ package HTTP::BS::Server {
             'tar' => 'application/x-tar',
             'mpd' => 'application/dash+xml',
             'm3u8' => 'application/x-mpegURL',
-            'm3u8_v' => 'application/x-mpegURL');
+            'm3u8_v' => 'application/x-mpegURL',
+            'wasm'  => 'application/wasm');
     
         
     
@@ -1005,7 +1006,7 @@ package HTTP::BS::Server::Client {
             # Try to send the buf if set
             if(defined $buf) {                
                 use bytes;
-                #my $n = length($buf);
+                #my $n = length($buf);                
                 my $remdata = TrySendItem($csock, $buf, $bytesToSend);        
                 # critical conn error
                 if(! defined($remdata)) {
@@ -1044,8 +1045,7 @@ package HTTP::BS::Server::Client {
                         $readamt = $tmpsend if($tmpsend < $readamt);
                     }
                     # this is blocking, it shouldn't block for long but it could if it's a pipe especially
-                    $bytesToSend = read($FH, $buf, $readamt);
-                    
+                    $bytesToSend = read($FH, $buf, $readamt);                    
                     #$bytesToSend = sysread($FH, $buf, $readamt);
                     if(! defined($bytesToSend)) {
                         $buf = undef;
@@ -1061,7 +1061,7 @@ package HTTP::BS::Server::Client {
                             seek($FH, 0, 1);                       
                             return '';
                         }
-                    }                    
+                    }                                        
                 }
             }        
                   
@@ -1104,7 +1104,8 @@ package HTTP::BS::Server::Client {
             return $data;   
         }
         else {
-            # success we sent everything            
+            # success we sent everything
+            say "wrote $total bytes";           
             return '';      
         }   
     }
@@ -1623,8 +1624,7 @@ package MusicLibrary {
                  $buf .= '</tr>';
                  $buf .= '</tbody></table>';
                  return $buf;              
-            }
-              
+            }             
         }
         $buf .= '</tr>';     
         return $buf;   
@@ -1778,6 +1778,11 @@ package MusicLibrary {
         
         # convert to pcm (flac) and retry if not already
         if(!$is_flac) {
+            if(! $request->{'qs'}{'part'}) {
+                $SendFile->($file);
+                return;
+            }            
+            
             my $outfile = $tmpdir . '/' . $filebase;          
             #my @cmd = ('ffmpeg', '-i', $file, $outfile);
             my @cmd = ('ffmpeg', '-i', $file, '-c:a', 'flac', '-sample_fmt', 's16', $outfile);
@@ -2186,7 +2191,10 @@ use POSIX;
 use Encode qw(decode encode find_encoding);
 use Any::URI::Escape;
 use Scalar::Util qw(looks_like_number weaken);
+use HTML::Entities;
+use Encode;
 use Symbol 'gensym';
+binmode(STDOUT, ":utf8");
 HTTP::BS::Server::Util->import();
 
 $SIG{PIPE} = sub {
@@ -2590,7 +2598,64 @@ sub get_video {
             }
             elsif($fmt eq 'dash') {
                 $video{'on_exists'} = \&video_dash_check_ready;
-            }            
+            }
+            # elseif(0) {
+            elsif($fmt eq 'yt') {
+                # delete lock?
+                weaken($request);
+                my ($stdout, $done);
+                $request->{'process'} = HTTP::BS::Server::Process->new(\@cmd, $request->{'client'}{'server'}{'evp'}, {
+                'STDOUT' => sub {
+                    my($out) = @_;
+                    my $buf;
+                    while(read($out, $buf, 100)) {
+                        $stdout .= $buf;        
+                    }
+                    return 1 if($done);
+                    my $filename = $video{'out_filepath'};
+                    return 1 if(! (-e $filename));
+                    my $minsize = $VIDEOFORMATS{$fmt}->{'minsize'};
+                    if(defined($minsize) && ((-s $filename) < $minsize)) {                      
+                        return 1;
+                    }                    
+                    my ($cl) = $stdout =~ /^.*Content\-Length:\s(\d+)/s;
+                    return 1 if(! $cl);
+                    say "stdout $stdout";
+                    my ($cr) = $stdout =~ /^.*Content\-Range:\sbytes\s\d+\-\d+\/(\d+)/s;
+                    if($cr) {
+                        say "cr $cr";
+                        $cl = $cr if($cr > $cl);                        
+                    }                    
+                    say "cl is $cl";
+                    UNLOCK_WRITE($filename);
+                    LOCK_WRITE($filename, $cl);
+                    $request->SendLocalFile($filename);
+                    $done = 1;
+                    return 1;
+                },
+                'STDERR' => sub {                    
+                    my ($err) = @_;
+                    my $buf;
+                    while(read($err, $buf, 100)) { }
+                    return 1;
+                }
+                });
+                my $process = $request->{'process'}; 
+                my $flags = 0;
+                my $handle = $process->{'fd'}{'stderr'}{'fd'};
+                return unless defined $handle ;
+                (0 == fcntl($handle, Fcntl::F_GETFL, $flags)) or return undef;
+                $flags |= Fcntl::O_NONBLOCK;
+                (0 == fcntl($handle, Fcntl::F_SETFL, $flags)) or return undef;
+                $handle = $process->{'fd'}{'stdout'}{'fd'};
+                return unless defined $handle ;
+                (0 == fcntl($handle, Fcntl::F_GETFL, $flags)) or return undef;
+                $flags |= Fcntl::O_NONBLOCK;
+                (0 == fcntl($handle, Fcntl::F_SETFL, $flags)) or return undef;  
+
+                return 1;
+            }
+            # deprecated
             $video{'pid'} = ASYNC(\&shellcmd_unlock, \@cmd, $video{'out_filepath'});            
         }           
         else {
@@ -3095,6 +3160,17 @@ sub torrent_set_file_priority {
     });
 }
 
+sub torrent_list_torrents {
+    my ($evp, $callback) = @_;
+    rtxmlrpc($evp, ['d.multicall2', '', 'default', 'd.name=', 'd.hash=', 'd.size_bytes=', 'd.bytes_done='], sub {
+        my ($output) = @_;
+        if($output =~ /ERROR/) {
+            $output = undef;           
+        }
+        $callback->($output);    
+    });
+}
+
 
 sub get_SI_size {
     my ($bytes) = @_;
@@ -3160,6 +3236,8 @@ sub torrent_file_information {
     $cb->(\%newfiles);      
     });
 }
+
+
 
 sub is_video {
     my ($name) = @_;
@@ -3316,7 +3394,9 @@ sub torrent {
                 my $torrent_path = ${ escape_html($file)} ;
                 my $link = '<a href="get_video?name=' . $torrent_path . '&fmt=noconv">DL</a>';
                 my $playlink = play_in_browser_link($file, $torrent_path);
-                $buf .= "<tr><td>$torrent_path</td><td>" . get_SI_size($tfi->{$file}{'size'}) . "</td><td>$link</td><td>$playlink</td></tr>"; 
+                $buf .= "<tr><td>$torrent_path</td><td>" . get_SI_size($tfi->{$file}{'size'}) . "</td><td>$link</td>";
+                $buf .= "<td>$playlink</td>" if(!defined($qs->{'playinbrowser'}) || ($qs->{'playinbrowser'} == 1));
+                $buf .= "</tr>"; 
             }
             $buf .= '</tbody';
             $buf .= '</table>';            
@@ -3333,6 +3413,50 @@ sub torrent {
             my ($result) = @_;        
             my $tname = '/tmp/ptp_' . $qs->{'ptpid'} . '.torrent';
             torrent_on_contents($evp, $request, $result, $tname, $SETTINGS->{'MEDIALIBRARIES'}{'movies'});
+        });
+    }
+    elsif(defined $qs->{'list'}) {
+        torrent_list_torrents($evp, sub{
+            if(! defined $_[0]){ $request->Send404; return; };
+            my ($rtresponse) = @_;
+            my @lines = split( /\n/, $rtresponse);
+            my $buf = '<h1>Torrents</h1>';
+            $buf  .=  '<h3><a href="video?action=browsemovies">Browse Movies</a> | <a href="video">Video</a> | <a href="music">Music</a></h3>';
+            $buf   .= '<table border="1" >';
+            $buf   .= '<thead><tr><th>Name</th><th>Hash</th><th>Size</th><th>Done</th></tr></thead>';
+            $buf   .= "<tbody>";
+            my $curtor = '';
+            while(1) {               
+                if($curtor =~ /^\[(u?)['"](.+)['"],\s'(.+)',\s([0-9]+),\s([0-9]+)\]$/) {
+                    my %torrent;
+                    my $is_unicode = $1;
+                    $torrent{'name'} = $2;
+                    $torrent{'hash'} = $3;
+                    $torrent{'size_bytes'} = $4;
+                    $torrent{'bytes_done'} = $5;
+                    if($is_unicode) {
+                        say 'escaped unicode: ' . $torrent{'name'};
+                        $torrent{'name'} =~ s/\\u(.{4})/chr(hex($1))/eg;                                          
+                        $torrent{'name'} =~ s/\\x(.{2})/chr(hex($1))/eg;                        
+                        say $torrent{'name'};
+                        $torrent{'name'} = ${escape_html($torrent{'name'})};
+                        #$torrent{'name'} = encode_entities($torrent{'name'});                        
+                        say 'html name ' . $torrent{'name'};
+                    }
+                    $buf .= '<tr><td>' . $torrent{'name'} . '</td><td>' . $torrent{'hash'} . '</td><td>' . $torrent{'size_bytes'} . '</td><td>' . $torrent{'bytes_done'} . '</td></tr>';
+                    $curtor = '';                    
+                }
+                else {
+                    my $line = shift @lines;
+                    if(! $line) {
+                        say "end of lines";
+                        last;
+                    }                    
+                    $curtor .= $line;                   
+                }                
+            }            
+            $buf   .= '</tbody></table>';   
+            $request->SendLocalBuf(encode('UTF-8', $buf), 'text/html; charset=utf-8');
         });
     }
     else {

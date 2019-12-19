@@ -4,7 +4,7 @@ apt-get install libany-uri-escape-perl
 htmml escape?
 JSON
 Storable
-
+#Unicode::Escape - apt-get install libunicode-escape-perl
 binaries:
 ffmpeg
 sox

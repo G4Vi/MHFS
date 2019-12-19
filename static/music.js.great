@@ -24,7 +24,7 @@ const BUFFER_S = (BUFFER_MS / 1000);
 var State = 'IDLE';
 var CurrentTrack = 0;
 var Tracks = [];
-var DLImmediately = true; // controls when user track add operations (queue or play track) should download and enter the playback queue
+var DLImmediately = true;
 var StartTimer = null;
 var SBAR_UPDATING = 0;
 var RepeatTrack = 0;
@@ -329,11 +329,12 @@ function Track(trackname) {
     }; 
 
 
-    this.queueRepeat = function () {        
+    this.queueRepeat = function () {
+        //DLImmediately = true; // why
         if(Tracks[CurrentTrack+1]) Tracks[CurrentTrack+1].clearSources();      // remove the next track from the web audio queue         
         STAHPNextDownload();                                                   // stop the possible next track download so it doesn't enter the web audio queue
         RepeatAstart = Tracks[CurrentTrack].astart;                            // proper current time display            
-        DLImmediately = false;                                                 // we should never queue from user when repeat track is turned on
+        
         // queue the same track        
         if(this.isDownloaded) {
             // reset NextBufferTime in case repeatrack was just turned on           
@@ -343,7 +344,8 @@ function Track(trackname) {
             }
             // store the currently playing track end time for good            
             SaveNextBufferTime = NextBufferTime;
-            // queue up the repeat            
+            // queue up the repeat
+            DLImmediately = true;
             this.WantQueue = false;                         
             Tracks[CurrentTrack].queue(0);                
         }
@@ -357,7 +359,8 @@ function Track(trackname) {
     this.queueNext = function() {
         if (Tracks[CurrentTrack + 1]) { 
             if(this.isDownloaded &&  !this.queuednext) {
-                console.log('The next track is not queued, queueing');                
+                console.log('theres another track and its not downloaded,DLImmediately' );
+                DLImmediately = true;
                 this.queuednext = true;
                 Tracks[CurrentTrack + 1].queue(0);                
             }
@@ -574,19 +577,18 @@ function Track(trackname) {
                 if(RepeatTrack) {
                     if(this.WantQueue) {
                         this.WantQueue = false;
-                        console.log('wasntdownloaded');                       
+                        console.log('wasntdownloaded');                                   
+                        DLImmediately = true;
                         SaveNextBufferTime = NextBufferTime;                     
                         Tracks[CurrentTrack].queue(0);
                     }                    
                 }
-                else {                   
+                else {                
+                    DLImmediately = true;
                     if (Tracks[CurrentTrack + 1]) {
                         console.log('Track.queueBuffer, queue');                
                         this.queuednext = true;
                         Tracks[CurrentTrack + 1].queue(0);
-                    }
-                    else {                        
-                        DLImmediately = true;
                     }
                 }
             }                              
@@ -596,7 +598,6 @@ function Track(trackname) {
     // skiptime is the amount of time in the beginning segment to not play or skip over
     // set start to set a specific starttime; to reset NextBufferTime pass in a value <= MainAudioContext.currentTime
     this.queue = function (skiptime, start) {
-        DLImmediately = false;
         this.isDownloaded = false;
         this.queuednext = false;
         skiptime = skiptime || 0;
@@ -636,7 +637,8 @@ function Track(trackname) {
                 skiptime = 0;
                 return true;
             }, seg);            
-        }        
+        }
+        DLImmediately = false;  
     };
 
     this.clearCache = function() {
@@ -852,7 +854,8 @@ seekbar.addEventListener('change', function (e) {
     if(Tracks[CurrentTrack+1]) {           
         Tracks[CurrentTrack+1].clearSources();
     }
-    STAHPPossibleDownloads();    
+    STAHPPossibleDownloads();
+    DLImmediately = true;
     Tracks[CurrentTrack].queue(Number(seekbar.value), MainAudioContext.currentTime);               
     SetCurtimeText(Number(seekbar.value));          
     console.log('END SBAR UPDATE');        
@@ -872,7 +875,8 @@ prevbtn.addEventListener('click', function (e) {
     if(Tracks[CurrentTrack+1]) Tracks[CurrentTrack+1].clearCache();
     clearTimeout(StartTimer);
     StartTimer = null;
-    console.log('prevtrack');    
+    console.log('prevtrack');
+    DLImmediately = true;
     CurrentTrack--;
     Tracks[CurrentTrack].queue(0, MainAudioContext.currentTime);  
     SetCurtimeText(0);
@@ -892,7 +896,8 @@ nextbtn.addEventListener('click', function (e) {
     if((CurrentTrack-1) >= 0) Tracks[CurrentTrack-1].clearCache();       
     clearTimeout(StartTimer);
     StartTimer = null;
-    console.log('nexttrack');    
+    console.log('nexttrack');
+    DLImmediately = true;
     CurrentTrack++;       
     Tracks[CurrentTrack].queue(0, MainAudioContext.currentTime);       
     SetCurtimeText(0);
