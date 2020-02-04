@@ -2024,7 +2024,8 @@ package Youtube {
 
     sub searchbox {
         my ($self, $request) = @_;
-        my $html = '<form  name="searchbox" action="' . $request->{'path'}{'basename'} . '">';
+        #my $html = '<form  name="searchbox" action="' . $request->{'path'}{'basename'} . '">';
+        my $html = '<form  name="searchbox" action="yt">';
         $html .= '<input type="text" width="50%" name="q" ';
         my $query = $request->{'qs'}{'q'};
         if($query) {
@@ -2033,9 +2034,28 @@ package Youtube {
             $html .= 'value="' . $$escaped . '"';            
         }        
         $html .=  '>';
+        if($request->{'qs'}{'media'}) {
+            $html .= '<input type="hidden" name="media" value="' . $request->{'qs'}{'media'} . '">';
+        }
         $html .= '<input type="submit" value="Search">';
         $html .= '</form>';
         return $html;
+    }
+    
+    sub ytplayer {
+        my ($self, $request) = @_;
+        my $html = '<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0" /><iframe src="static/250ms_silence.mp3" allow="autoplay" id="audio" style="display:none"></iframe>';
+        my $url = 'get_video?fmt=yt&id=' . uri_escape($request->{'qs'}{'id'});
+        $url .= '&media=' . uri_escape($request->{'qs'}{'media'});
+        if($request->{'qs'}{'media'} eq 'music') {
+            $request->{'path'}{'basename'} = 'ytaudio';
+            $html .= '<audio controls autoplay src="' . $url . '">Great Browser</audio>';
+        }
+        else {
+            $request->{'path'}{'basename'} = 'yt';
+            $html .= '<video controls autoplay src="' . $url . '">Great Browser</video>';
+        }
+        return $html;        
     }
 
     sub sendAsHTML {
@@ -2046,6 +2066,7 @@ package Youtube {
             return;
         }
         my $html = $self->searchbox($request);
+        $html .= '<div id="vidlist">';
         foreach my $item (@{$json->{'items'}}) {
             my $id = $item->{'id'}{'videoId'};
             next if (! defined $id);         
@@ -2056,11 +2077,36 @@ package Youtube {
             $html .= '<a href="' . $mediaurl . '">' . $item->{'snippet'}{'title'} . '</a>';
             $html .= '<br>';
             $html .= '<a href="' . $mediaurl . '"><img src="' . $item->{'snippet'}{'thumbnails'}{'default'}{'url'} . '" alt="Excellent image loading"></a>';
+            $html .= ' <a href="https://youtube.com/channel/' . $item->{'snippet'}{'channelId'} . '">' .  $item->{'snippet'}{'channelTitle'} . '</a>';
             $html .= '<p>' . $item->{'snippet'}{'description'} . '</p>';
             $html .= '<br>-----------------------------------------------';
             $html .= '</div>'
         }
+        $html .= '</div>';
+        $html .= '<script>
+        var vidlist = document.getElementById("vidlist");
+        vidlist.addEventListener("click", function(e) {                
+            console.log(e);
+            let target = e.target.pathname ? e.target : e.target.parentElement;           
+            if(target.pathname && target.pathname.endsWith("ytplayer")) {
+                e.preventDefault();
+                console.log(target.href);                
+                let newtarget = target.href.replace("ytplayer", "ytembedplayer");
+                fetch(newtarget).then( response => response.text()).then(function(data) {
+                    if(data) {
+                        window.history.replaceState(vidlist.innerHTML, null);                        
+                        window.history.pushState(data, null, target.href);
+                        vidlist.innerHTML = data;                        
+                    }                    
+                });
+            }   
+        });
         
+        window.onpopstate = function(event) {
+            console.log(event.state);            
+            vidlist.innerHTML = event.state;            
+        }
+        </script>';        
         $request->SendLocalBuf(encode_utf8($html), "text/html; charset=utf-8");        
     }
 
@@ -2136,29 +2182,39 @@ package Youtube {
         }],
         ['/ytplayer', sub {
             my ($request) = @_;
-
-            
-            my $html .= '<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0" /><iframe src="static/250ms_silence.mp3" allow="autoplay" id="audio" style="display:none"></iframe>';
-            my $url = 'get_video?fmt=yt&id=' . uri_escape($request->{'qs'}{'id'});
-            $url .= '&media=' . uri_escape($request->{'qs'}{'media'});
-            if($request->{'qs'}{'media'} eq 'music') {
-                $request->{'path'}{'basename'} = 'ytaudio';
-                $html .= '<audio controls autoplay src="' . $url . '">Great Browser</audio>';
-            }
-            else {
-                $request->{'path'}{'basename'} = 'yt';
-                $html .= '<video controls autoplay src="' . $url . '">Great Browser</video>';
-            } 
-            $html = $self->searchbox($request) . $html;          
+            my $html = $self->searchbox($request);            
+            $html .= $self->ytplayer($request);                   
             $request->SendLocalBuf($html, "text/html; charset=utf-8");
+        }],
+        ['/ytembedplayer', sub {
+            my ($request) = @_;
+            $request->SendLocalBuf($self->ytplayer($request), "text/html; charset=utf-8");        
         }],
         
         ];
+        
+        my $mhfsytdl = $settings->{'BINDIR'} . '/youtube-dl';  
+        if(-e $mhfsytdl) {
+            say "Using MHFS youtube-dl. Attempting update";
+            system "$mhfsytdl", "-U";
+            if(system("$mhfsytdl --help > /dev/null") != 0) {
+                say "youtube-dl binary is invalid. plugin load failed";
+                return undef;
+            }
+            $settings->{'youtube-dl'} = $mhfsytdl;
+        }
+        elsif(system('youtube-dl --help > /dev/null') == 0){
+            say "Using system youtube-dl";
+            $settings->{'youtube-dl'} = 'youtube-dl';        
+        }
+        else {
+            say "youtube-dl not found. plugin load failed";
+            return undef;
+        }       
 
         return $self;
     }
-
-
+    
     1;
 }
 
@@ -2239,7 +2295,8 @@ if(defined $SETTINGS->{'GDRIVE'}) {
     say "GDRIVE plugin Enabled";
 }
 push @plugins, MusicLibrary->new($SETTINGS);
-push @plugins, Youtube->new($SETTINGS);
+my $youtubeplugin = Youtube->new($SETTINGS);
+push (@plugins, $youtubeplugin) if($youtubeplugin);
 my $EXT_SOURCE_SITES = $SETTINGS->{'EXT_SOURCE_SITES'};
 
 # make the temp dirs
@@ -2273,8 +2330,8 @@ our %VIDEOFORMATS = (
             
             'noconv' => {'lock' => 0, 'create_cmd' => [''], 'ext' => '', 'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/noconv_player.html', },
             
-            'yt' => {'lock' => 1, 'create_cmd' => ['youtube-dl', '--no-part', '--print-traffic', '-f', 
-            '$VIDEOFORMATS{"yt"}{"youtube-dl_fmts"}{$qs->{"media"} // "video"} // "best"', '-o', '$video{"out_filepath"}', '$qs->{"id"}'], 'ext' => 'yt', 
+            'yt' => {'lock' => 1, 'create_cmd' => [$SETTINGS->{'youtube-dl'}, '--no-part', '--print-traffic', '-f', 
+            '$VIDEOFORMATS{"yt"}{"youtube-dl_fmts"}{$qs->{"media"} // "video"} // "best"', '-o', '$video{"out_filepath"}', '--', '$qs->{"id"}'], 'ext' => 'yt', 
             'youtube-dl_fmts' => {'music' => 'bestaudio', 'video' => 'best'}, 'minsize' => '1048576'}
 );
 
@@ -2629,7 +2686,12 @@ sub get_video {
                     say "cl is $cl";
                     UNLOCK_WRITE($filename);
                     LOCK_WRITE($filename, $cl);
-                    $request->SendLocalFile($filename);
+                    if($request) {
+                        $request->SendLocalFile($filename);                        
+                    }
+                    else {
+                        say "request died, not sending";
+                    }                    
                     $done = 1;
                     return 1;
                 },
