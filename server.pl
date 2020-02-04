@@ -1298,6 +1298,61 @@ package HTTP::BS::Server::Process {
     1;    
 }
 
+package HTTP::BS::Server::Process::Python {
+    use strict; use warnings;
+    use feature 'say';
+
+    # create the pool of python
+    my $MAX_PYTHONS = 10;
+    my $initialized; 
+    my @freeprocesses;
+    my @waiting;      
+
+    sub new {
+        my ($class, $evp, $do_hash) = @_;
+
+        if(! $initialized) {
+            for(my $i = 0; $i< $MAX_PYTHONS; $i++) {
+                my $process = HTTP::BS::Server::Process(['python'], $evp, {
+                    'STDIN' => sub {
+                        say "HTTP::BS::Server::Process::Python stdin";
+                        # write here
+                    },
+                    'STDOUT' => sub {
+                        say "HTTP::BS::Server::Process::Python stdout";
+                        # read and process
+                    },
+                    'STDERR' => sub {
+                        say "HTTP::BS::Server::Process::Python stderr";
+                        # read and process
+                    },
+                    'SIGCHLD' => sub {
+                        say "HTTP::BS::Server::Process::Python SIGCHLD";
+                        # read and process
+                    }                    
+                });
+                push @freeprocesses, $process;
+            }
+            say "HTTP::BS::Server::Process::Python pool initialized, " . scalar(@freeprocesses) . ' processes';
+        }
+        my %self = ( 'evp' => $evp, 'do_hash' => $do_hash);
+        bless \%self, $class;
+        my $process = shift @freeprocesses;
+        if(!$process) {
+            say "out of free python processes, queuing";
+            push @waiting, \%self;
+            return \%self;
+        }
+        # set do_hash for process
+
+        # manage file descriptors
+
+        # return
+        return \%self;
+    }
+    1;
+}
+
 package GDRIVE {
     use strict; use warnings;
     use feature 'say';
@@ -2046,11 +2101,11 @@ package Youtube {
         my ($self, $request) = @_;
         my $html = '<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0" /><iframe src="static/250ms_silence.mp3" allow="autoplay" id="audio" style="display:none"></iframe>';
         my $url = 'get_video?fmt=yt&id=' . uri_escape($request->{'qs'}{'id'});
-        $url .= '&media=' . uri_escape($request->{'qs'}{'media'});
-        if($request->{'qs'}{'media'} eq 'music') {
+        $url .= '&media=' . uri_escape($request->{'qs'}{'media'}) if($request->{'qs'}{'media'});        
+        if($request->{'qs'}{'media'} && ($request->{'qs'}{'media'} eq 'music')) {
             $request->{'path'}{'basename'} = 'ytaudio';
             $html .= '<audio controls autoplay src="' . $url . '">Great Browser</audio>';
-        }
+        }        
         else {
             $request->{'path'}{'basename'} = 'yt';
             $html .= '<video controls autoplay src="' . $url . '">Great Browser</video>';
@@ -2073,7 +2128,7 @@ package Youtube {
             $html .= '<div>';
             my $mediaurl = 'ytplayer?fmt=yt&id=' . $id;
             my $media =  $request->{'qs'}{'media'};
-            $mediaurl .= '&media=' . $media if(defined $media);
+            $mediaurl .= '&media=' . uri_escape($media) if(defined $media);
             $html .= '<a href="' . $mediaurl . '">' . $item->{'snippet'}{'title'} . '</a>';
             $html .= '<br>';
             $html .= '<a href="' . $mediaurl . '"><img src="' . $item->{'snippet'}{'thumbnails'}{'default'}{'url'} . '" alt="Excellent image loading"></a>';
@@ -2698,9 +2753,23 @@ sub get_video {
                 'STDERR' => sub {                    
                     my ($err) = @_;
                     my $buf;
+                    # log this somewhere?
                     while(read($err, $buf, 100)) { }
                     return 1;
-                }
+                },
+                'SIGCHLD' => sub {
+                    if (!$done) {
+                        my $filename = $video{'out_filepath'};
+                        if(! -e $filename) {
+                            say "youtube-dl failed, file not done in SIGCHLD. file doesnt exist 404";
+                            $request->Send404 if($request);
+                        }
+                        else {
+                            say "youtube-dl probably failed. sending file anyways";
+                            $request->SendLocalFile($filename) if($request);
+                        }
+                    }
+                },
                 });
                 my $process = $request->{'process'}; 
                 my $flags = 0;
