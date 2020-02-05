@@ -1231,13 +1231,14 @@ package HTTP::BS::Server::Process {
     my %CHILDREN;
     $SIG{CHLD} = sub {
         while((my $child = waitpid(-1, WNOHANG)) > 0) {
-            if(defined $CHILDREN{$child}) {
-                say "PID $child reaped (func)"; 
-                $CHILDREN{$child}->();
+            my ($wstatus, $exitcode) = ($?, $?>> 8);
+            if(defined $CHILDREN{$child}) {                
+                say "PID $child reaped (func) $exitcode"; 
+                $CHILDREN{$child}->($exitcode);
                 $CHILDREN{$child} = undef;
             }
             else {
-                say "PID $child reaped (No func)"; 
+                say "PID $child reaped (No func) $exitcode"; 
             }        
         }    
     };    
@@ -1275,6 +1276,76 @@ package HTTP::BS::Server::Process {
         }
                
         return bless \%self, $class;
+    }
+
+    sub new_output_process {       
+        my ($class, $evp, $cmd, $handler, $stdin) = @_;
+        my $stdout;
+        my $stderr;
+        my $process;
+        
+        my $prochandlers = {
+        'STDOUT' => sub {
+            my ($handle) = @_;
+            my $buf;
+            say "begin stdout read";
+            while(read($handle, $buf, 100)) {
+                $stdout .= $buf;        
+            }
+            say "broke out stdout";
+            return 1;        
+        },
+        'STDERR' => sub {
+            my ($handle) = @_;
+            my $buf;
+            say "begin stderr read";
+            while(read($handle, $buf, 100)) {
+                $stderr .= $buf;        
+            }
+            say "broke out stderr";
+            return 1;
+        },        
+        'SIGCHLD' => sub {
+            my $obuf;
+            my $handle = $process->{'fd'}{'stdout'}{'fd'};
+            while(read($handle, $obuf, 100000)) {
+                $stdout .= $obuf; 
+                say "stdout sigchld read";            
+            }
+            my $ebuf;
+            $handle = $process->{'fd'}{'stderr'}{'fd'};
+            while(read($handle, $ebuf, 100000)) {
+                $stderr .= $ebuf;
+                say "stderr sigchld read";              
+            }
+            $handler->($stdout, $stderr);         
+        },      
+        };
+        
+        if($stdin) {
+            $prochandlers->{'STDIN'} = sub {
+                # how to deadlock
+                my ($in) = @_;
+                say "output_process stdin";
+                print $in $stdin; # this could block               
+                return 0;        
+            };   
+        }
+        
+        $process =  $class->new($cmd, $evp, $prochandlers);
+        
+        my $flags = 0;
+        my $handle = $process->{'fd'}{'stderr'}{'fd'};
+        return unless defined $handle ;
+        (0 == fcntl($handle, Fcntl::F_GETFL, $flags)) or return undef;
+        $flags |= Fcntl::O_NONBLOCK;
+        (0 == fcntl($handle, Fcntl::F_SETFL, $flags)) or return undef;
+        $handle = $process->{'fd'}{'stdout'}{'fd'};
+        return unless defined $handle ;
+        (0 == fcntl($handle, Fcntl::F_GETFL, $flags)) or return undef;
+        $flags |= Fcntl::O_NONBLOCK;
+        (0 == fcntl($handle, Fcntl::F_SETFL, $flags)) or return undef;
+        return $process;
     } 
 
     sub remove {
@@ -2312,6 +2383,11 @@ $SIG{PIPE} = sub {
     print STDERR "SIGPIPE @_\n";
 };
 
+sub output_process {
+    warn "output_process alias deprecated, use HTTP::BS::Server::Process->new_output_process";
+    return HTTP::BS::Server::Process->new_output_process(@_);
+}
+
 # main
 my $SCRIPTDIR = dirname(abs_path(__FILE__));
 my $CFGDIR = $SCRIPTDIR . '/.conf';
@@ -2758,14 +2834,15 @@ sub get_video {
                     return 1;
                 },
                 'SIGCHLD' => sub {
+                    my ($exitcode) = @_;
                     if (!$done) {
                         my $filename = $video{'out_filepath'};
                         if(! -e $filename) {
-                            say "youtube-dl failed, file not done in SIGCHLD. file doesnt exist 404";
+                            say "youtube-dl failed ($exitcode), file not done in SIGCHLD. file doesnt exist 404";
                             $request->Send404 if($request);
                         }
                         else {
-                            say "youtube-dl probably failed. sending file anyways";
+                            say "youtube-dl probably failed ($exitcode). sending file anyways";
                             $request->SendLocalFile($filename) if($request);
                         }
                     }
@@ -2989,81 +3066,12 @@ sub GetResource {
 
 
 
-sub output_process {
-    my ($evp, $cmd, $handler, $stdin) = @_;
-    my $stdout;
-    my $stderr;
-    my $process;
-    
-    my $prochandlers = {
-    'STDOUT' => sub {
-        my ($handle) = @_;
-        my $buf;
-        say "begin stdout read";
-        while(read($handle, $buf, 100)) {
-            $stdout .= $buf;        
-        }
-        say "broke out stdout";
-        return 1;        
-    },
-    'STDERR' => sub {
-        my ($handle) = @_;
-        my $buf;
-        say "begin stderr read";
-        while(read($handle, $buf, 100)) {
-            $stderr .= $buf;        
-        }
-        say "broke out stderr";
-        return 1;
-    },        
-    'SIGCHLD' => sub {
-        my $obuf;
-        my $handle = $process->{'fd'}{'stdout'}{'fd'};
-        while(read($handle, $obuf, 100000)) {
-            $stdout .= $obuf; 
-            say "stdout sigchld read";            
-        }
-        my $ebuf;
-        $handle = $process->{'fd'}{'stderr'}{'fd'};
-        while(read($handle, $ebuf, 100000)) {
-            $stderr .= $ebuf;
-            say "stderr sigchld read";              
-        }
-        $handler->($stdout, $stderr);         
-    },      
-    };
-    
-    if($stdin) {
-        $prochandlers->{'STDIN'} = sub {
-            # how to deadlock
-            my ($in) = @_;
-            say "output_process stdin";
-            print $in $stdin; # this could block               
-            return 0;        
-        };   
-    }
-    
-    $process =    HTTP::BS::Server::Process->new($cmd, $evp, $prochandlers);
-    
-    my $flags = 0;
-    my $handle = $process->{'fd'}{'stderr'}{'fd'};
-    return unless defined $handle ;
-    (0 == fcntl($handle, Fcntl::F_GETFL, $flags)) or return undef;
-    $flags |= Fcntl::O_NONBLOCK;
-    (0 == fcntl($handle, Fcntl::F_SETFL, $flags)) or return undef;
-    $handle = $process->{'fd'}{'stdout'}{'fd'};
-    return unless defined $handle ;
-    (0 == fcntl($handle, Fcntl::F_GETFL, $flags)) or return undef;
-    $flags |= Fcntl::O_NONBLOCK;
-    (0 == fcntl($handle, Fcntl::F_SETFL, $flags)) or return undef;
-    return $process;
-}
+
 
 sub ptp_request {
     my ($evp, $url, $handler, $tried_login) = @_;
     my $atbuf;
-    my @cmd = ('curl', '-s', '-v', '-b', '/tmp/ptp', '-c', '/tmp/ptp', 'https://xxxxxxx.domain/' . $url);
-    
+    my @cmd = ('curl', '-s', '-v', '-b', '/tmp/ptp', '-c', '/tmp/ptp', 'https://xxxxxxx.domain/' . $url);    
 
     my $process;
     $process    = output_process($evp, \@cmd, sub {
@@ -3091,19 +3099,6 @@ sub ptp_request {
         }
     });
     return $process;
-    
-    
-    
-
-        #if(!$atbuf) {
-        #    if($tried_login) {
-        #        $handler->(undef);
-        #        return;
-        #    }
-        #    $tried_login = 1;
-        #    @cmd = ('curl', '-s', '-v', '-b', '/tmp/ptp', '-c', '/tmp/ptp', '-d', $postdata,  'https://xxxxxxx.domain/ajax.php?action=login');
-        #    $process = HTTP::BS::Server::Process->new(\@cmd, $evp, {
-           
 }
 
 sub rtxmlrpc {
@@ -3113,7 +3108,7 @@ sub rtxmlrpc {
     $process    = output_process($evp, \@cmd, sub {
         my ($output, $error) = @_;
         chomp $output;
-        say 'rtxmlrpc output: ' . $output;
+        #say 'rtxmlrpc output: ' . $output;
         $cb->($output);   
     }, $stdin);
     return $process;
@@ -3435,7 +3430,8 @@ sub torrent_on_contents {
         torrent_d_bytes_done($evp, $asciihash, sub {
         my ($bytes_done) = @_;
         if(! defined $bytes_done) {                    
-        # load, set directory, and download it (race condition)           
+        # load, set directory, and download it (race condition)
+        # 02/05/2020 what race condition?           
             torrent_load_verbose($evp, $tname, sub {                
             if(! defined $_[0]) {
                 $request->Send404;
@@ -3566,13 +3562,17 @@ sub torrent {
                     $torrent{'size_bytes'} = $4;
                     $torrent{'bytes_done'} = $5;
                     if($is_unicode) {
-                        say 'escaped unicode: ' . $torrent{'name'};
+                        my $escaped_unicode = $torrent{'name'};                        
                         $torrent{'name'} =~ s/\\u(.{4})/chr(hex($1))/eg;                                          
-                        $torrent{'name'} =~ s/\\x(.{2})/chr(hex($1))/eg;                        
-                        say $torrent{'name'};
+                        $torrent{'name'} =~ s/\\x(.{2})/chr(hex($1))/eg;
+                        my $decoded_as = $torrent{'name'};                     
                         $torrent{'name'} = ${escape_html($torrent{'name'})};
-                        #$torrent{'name'} = encode_entities($torrent{'name'});                        
-                        say 'html name ' . $torrent{'name'};
+                        #$torrent{'name'} = encode_entities($torrent{'name'});
+                        if($qs->{'logunicode'}) {
+                            say 'unicode escaped: ' . $escaped_unicode;
+                            say 'decoded as: ' . $decoded_as;
+                            say 'html escaped ' . $torrent{'name'};
+                        }
                     }
                     $buf .= '<tr><td>' . $torrent{'name'} . '</td><td>' . $torrent{'hash'} . '</td><td>' . $torrent{'size_bytes'} . '</td><td>' . $torrent{'bytes_done'} . '</td></tr>';
                     $curtor = '';                    
@@ -3580,7 +3580,6 @@ sub torrent {
                 else {
                     my $line = shift @lines;
                     if(! $line) {
-                        say "end of lines";
                         last;
                     }                    
                     $curtor .= $line;                   
