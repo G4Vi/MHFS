@@ -3630,6 +3630,17 @@ sub player_video {
             else {                
                 #$request->SendLocalBuf($result, "text/json");
                 #return;
+                my $moviedir;               
+                my @dlmovies;
+                if(opendir($moviedir, $SETTINGS->{'MEDIALIBRARIES'}{'movies'})) {
+                    while(my $movie = readdir($moviedir)) {
+                        if(! -d ($SETTINGS->{'MEDIALIBRARIES'}{'movies'} . '/' . $movie)) {
+                            $movie =~ s/\.[^.]+$//;
+                        }
+                        push @dlmovies, $movie;
+                    }
+                    closedir($moviedir);                    
+                }
                 my $json = decode_json($result);
                 my $numresult = $json->{'TotalResults'};
                 my $numpages = ceil($numresult/50);
@@ -3642,8 +3653,20 @@ sub player_video {
                         ($buf .= ' / ' . $torrent->{'Scene'}) if $torrent->{'Scene'} eq 'true';
                         ($buf .= ' / ' . $torrent->{'RemasterTitle'}) if $torrent->{'RemasterTitle'};                        
                         ($buf .= ' / ' . $torrent->{'GoldenPopcorn'}) if $torrent->{'GoldenPopcorn'} eq 'true';
-                        my $sizeprint = get_SI_size($torrent->{'Size'});                                              
-                        $buf .= '<a href="torrent?ptpid=' . $torrent->{'Id'} . '">[DL]</a></td><td>' . $torrent->{'UploadTime'} . '</td><td>' . $sizeprint . '</td><td>' . $torrent->{'Snatched'} . '</td><td>' .  $torrent->{'Seeders'} . '</td><td>' .  $torrent->{'Leechers'} . '</td></tr>';                    
+                        my $sizeprint = get_SI_size($torrent->{'Size'});  
+                        my $viewtext = '[DL]';
+                        # attempt to note already downloaded movies. this has false postive matches
+                        # todo compare sizes
+                        my $releasename = $torrent->{'ReleaseName'};
+                        say 'testing releasename ' . $releasename;                        
+                        foreach my $dlmovie (@dlmovies) {                                                       
+                            if($dlmovie eq $releasename) {
+                                $viewtext = '[VIEW]';
+                                say 'match with ' . $dlmovie;
+                                last;     
+                            }                        
+                        }                       
+                        $buf .= '<a href="torrent?ptpid=' . $torrent->{'Id'} . '">' . $viewtext . '</a></td><td>' . $torrent->{'UploadTime'} . '</td><td>' . $sizeprint . '</td><td>' . $torrent->{'Snatched'} . '</td><td>' .  $torrent->{'Seeders'} . '</td><td>' .  $torrent->{'Leechers'} . '</td></tr>';                    
                     }
                     $buf .= '<tbody></table><br>';                    
                 }
