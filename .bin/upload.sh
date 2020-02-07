@@ -239,6 +239,7 @@ function uploadFile(){
 }
 
 # Method to delete files to google drive. Requires 2 arguments id and access token.
+# returns delete success on failure too
 function deleteFile() {
     FILEID="$1"
     ACCESS_TOKEN="$2"

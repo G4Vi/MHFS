@@ -857,6 +857,7 @@ package HTTP::BS::Server::Client::Request {
         foreach my $uploader (@{$self->{'client'}{'server'}{'uploaders'}}) {
             return if($uploader->($self, $requestfile));
         }
+        say "SendFile - SendLocalFile $requestfile";
         return $self->SendLocalFile($requestfile);
     }
 
@@ -1471,6 +1472,16 @@ package GDRIVE {
             });               
         }
     }
+
+    sub tempfile {
+        my ($tmpdir, $requestfile) = @_;             
+        my $qmtmpdir = quotemeta $tmpdir;
+        if($requestfile !~ /^$qmtmpdir/) {
+            my $reqbase = basename($requestfile);
+            $requestfile = $tmpdir . '/' . $reqbase;
+        }
+        return $requestfile;
+    }
     
     # if it would be optimal to gdrive the file
     # AND it hasn't been gdrived, or is being gdrived return the newname
@@ -1480,8 +1491,9 @@ package GDRIVE {
     # otherwise undef
     # (is defined if the file exists)
     sub should_gdrive {
-        my ($requestfile) = @_;
+        my ($requestfile, $tmpfile) = @_;
         if(my $st = stat($requestfile)) {
+        $requestfile = $tmpfile if($tmpfile);
         if(($st->size > 524288) && (! defined (LOCK_GET_LOCKDATA($requestfile))))   {
                 my $gdrivename = $requestfile . '_gdrive';
                 if(! -e $gdrivename) {
@@ -1507,11 +1519,15 @@ package GDRIVE {
     }
     
     sub _gdrive_upload {
-        my ($filename, $settings) = @_;               
-        my $cmdout = shell_stdout('perl', $settings->{'BINDIR'} . '/gdrivemanager.pl', $filename, $settings->{'CFGDIR'} . '/gdrivemanager.json');
+        my ($file, $settings) = @_;               
+        my $cmdout = shell_stdout('perl', $settings->{'BINDIR'} . '/gdrivemanager.pl', $file->{'actualfile'}, $settings->{'CFGDIR'} . '/gdrivemanager.json');
         say $cmdout; 
-        my ($id, $newurl) = split("\n", $cmdout);   
-        my $url;    
+        my ($id, $newurl) = split("\n", $cmdout);
+        if(! $id) {
+            say "gdrive upload completely failed proc done";
+            return;
+        }   
+        my $filename = $file->{'tmpfile'};    
         my $fname = $filename . '_gdrive';
         gdrive_add_tmp_rec($id, $fname, $settings);
         my $fname_tmp = $fname . '.tmp';
@@ -1521,40 +1537,32 @@ package GDRIVE {
     
     sub gdrive_upload {
         my ($file, $settings) = @_;
-        #BADHACK, gdrive things not in the temp dir
-        #my $tmpdir = $SETTINGS->{'TMPDIR'};
-        #if($file =~ /^$tmpdir/)    
-        {
-            my $fnametmp = $file . '_gdrive.tmp';
-            say "fnametmp $fnametmp";
-            open(my $tmpfile, ">>", $fnametmp) or die;
-            close($tmpfile);
-        }
+        my $fnametmp = $file->{'tmpfile'} . '_gdrive.tmp';
+        say "fnametmp $fnametmp";
+        open(my $tmpfile, ">>", $fnametmp) or die;
+        close($tmpfile);        
         ASYNC(\&_gdrive_upload, $file, $settings);
-    }
-    
+    }   
     
     sub uploader {
         my($request, $requestfile) = @_;
-        my $handled;
-        
-        # if the file isn't in the tempdir, create a symlink to it in th tmpdir
+        my $handled;         
         my $tmpdir = $request->{'client'}{'server'}{'settings'}{'TMPDIR'};        
         my $qmtmpdir = quotemeta $tmpdir;
-        if($requestfile !~ /^$qmtmpdir/) {
-             my $reqbase = basename($requestfile);
-             my $tmpfile = $tmpdir . '/' . $reqbase;
-             if(! -e $tmpfile) {
-                 symlink($requestfile, $tmpfile);
-             }
-             $requestfile = $tmpfile;
+        my $actualfile = $requestfile;
+        my $tmpfile;        
+        if($actualfile !~ /^$qmtmpdir/) {
+            $tmpfile = tempfile($tmpdir, $actualfile);
+        }
+        else {
+            $tmpfile = $actualfile;
         }
                         
         # send if it was uploaded in time
-        my $gdrivefile = should_gdrive($requestfile);       
+        my $gdrivefile = should_gdrive($actualfile, $tmpfile);       
         if(defined($gdrivefile) && looks_like_number($gdrivefile) && ($gdrivefile == 0)) {
             $handled = 1;
-            my $url = read_file($requestfile . '_gdrive');
+            my $url = read_file($tmpfile . '_gdrive');
             $request->Send307($url);
         }
         
@@ -1564,8 +1572,8 @@ package GDRIVE {
         (defined($gdrivefile) && ($gdrivefile ne ''))) {        
             say 'forcing gdrive';           
             $handled = 1;
-            $gdrivefile = $requestfile . '_gdrive';          
-            push @togdrive, $requestfile;
+            $gdrivefile = $tmpfile . '_gdrive';          
+            push @togdrive, {'actualfile' => $actualfile, 'tmpfile' => $tmpfile};
             weaken($request); # the only one who should be keeping $request alive is $client                    
             $request->{'client'}{'server'}{'evp'}->add_timer(0, 0, sub {
                 if(! defined $request) {
@@ -1588,21 +1596,22 @@ package GDRIVE {
         }                
         
         # queue up future hls files        
-        if( $requestfile =~ /^(.+[^\d])(\d+)\.ts$/) {
+        if( $actualfile =~ /^(.+[^\d])(\d+)\.ts$/) {
             my ($start, $num) = ($1, $2);
             # no more than 3 uploads should be occurring at a time
-            for(my $i = 0; ($i < 2) && (scalar(@togdrive) < 1); $i++) {                     
-                my $extrafile = $start . sprintf("%04d", ++$num) . '.ts';                    
+            for(my $i = 0; ($i < 2) && (scalar(@togdrive) < 1); $i++) {
+                my $afile = $start . sprintf("%04d", ++$num) . '.ts';                                   
+                my $extrafile = $afile =~ /^$qmtmpdir/ ? $afile : tempfile($tmpdir, $afile);                              
                 my $shgdrive;                
-                if(($shgdrive = should_gdrive($extrafile)) && ( $shgdrive =~ /_gdrive$/)) {                    
-                    push @togdrive, $extrafile;                                               
+                if(($shgdrive = should_gdrive($afile, $extrafile)) && ( $shgdrive =~ /_gdrive$/)) {                    
+                    push @togdrive, {'actualfile' => $afile, 'tmpfile' => $extrafile};                                              
                 }
                 else {
                     last if(! defined($shgdrive));
                 }                    
             }                                   
         }        
-        foreach my $file (@togdrive) {
+        foreach my $file (@togdrive) {                      
             gdrive_upload($file, $request->{'client'}{'server'}{'settings'});                                
         }        
         
@@ -2628,29 +2637,33 @@ sub get_video {
     $qs->{'fmt'} //= 'noconv';
     my %video = ('out_fmt' => video_get_format($qs->{'fmt'}));
     if(defined($qs->{'name'})) {        
-        my $src_file;
-        if($src_file = video_file_lookup($qs->{'name'})) {
-            $video{'src_file'} = $src_file;
-            $video{'out_base'} = $src_file->{'name'};
+        if($video{'src_file'} = video_file_lookup($qs->{'name'})) {            
         }
-        elsif($src_file = media_file_search($qs->{'name'})) {
+        elsif($video{'src_file'} = media_file_search($qs->{'name'})) {
             say "useragent: " . $header->{'User-Agent'};
             # VLC 2 doesn't handle redirects? VLC 3 does
             if($header->{'User-Agent'} !~ /^VLC\/2\.\d+\.\d+\s/) {                
                 my $url = 'get_video?' . $qs->{'querystring'};
-                my $qname = uri_escape($src_file->{'qname'});
+                my $qname = uri_escape($video{'src_file'}{'qname'});
                 $url =~ s/name=[^&]+/name=$qname/;
                 say "url: $url";
                 $request->Send301($url);                
                 return 1;
-            }
-            $video{'src_file'} = $src_file;
-            $video{'out_base'} = $src_file->{'name'};
+            }           
         }
         else {
             $request->Send404;
             return undef;
-        }        
+        }
+        # no conversion necessary, just SEND IT
+        if($video{'out_fmt'} eq 'noconv') {
+            say "NOCONV: SEND IT";
+            $request->SendFile($video{'src_file'}->{'filepath'});
+            return 1;   
+        }
+        $video{'out_base'} = $video{'src_file'}{'name'};
+        # soon https://github.com/video-dev/hls.js/pull/1899
+        $video{'out_base'} = space2us($video{'out_base'}) if ($video{'out_fmt'} eq 'hls');        
     }
     elsif(($video{'out_fmt'} eq 'yt') && defined($qs->{'id'})) {    
         $video{'out_base'} = $YOUTUBEPLUGIN->getOutBase($qs);
@@ -2661,39 +2674,14 @@ sub get_video {
     }
    
     # Determine the full path to the desired file
-    my $fmt = $video{'out_fmt'};
-    # soon https://github.com/video-dev/hls.js/pull/1899
-    $video{'out_base'} = space2us($video{'out_base'}) if ($video{'out_fmt'} eq 'hls');
+    my $fmt = $video{'out_fmt'};    
     $video{'out_location'} = $SETTINGS->{'VIDEO_TMPDIR'} . '/' . $video{'out_base'};    
-    if($video{'out_fmt'} eq 'noconv') {
-        $video{'out_filepath'} = $video{'src_file'}{'filepath'};    
-    }
-    else {
-        $video{'out_filepath'} = $video{'out_location'} . '/' . $video{'out_base'} . '.' . $VIDEOFORMATS{$video{'out_fmt'}}->{'ext'};   
-    }    
+    $video{'out_filepath'} = $video{'out_location'} . '/' . $video{'out_base'} . '.' . $VIDEOFORMATS{$video{'out_fmt'}}{'ext'};   
     
     # Serve it up if it has been created
     if(-e $video{'out_filepath'}) {        
-        say $video{'out_filepath'} . " already exists";
-        my $tdir = $SETTINGS->{'TMPDIR'};
-        my $tmpfile = $video{'out_filepath'};
-        if($video{'out_filepath'} !~ /$tdir/) {
-            $tmpfile = $SETTINGS->{'TMPDIR'} . '/'  . basename($video{'out_filepath'});
-            if(!symlink($video{'out_filepath'}, $tmpfile)) {
-                say "failed to create symlink";
-            }            
-            if(! -e $tmpfile) {
-                # otherwise we can copy
-                # TODO remove this or make it not block
-                if(!copy($video{'out_filepath'}, $SETTINGS->{'TMPDIR'})) {
-                    say "File copy failed for " . $video{'out_filepath'} . " $!";
-                    $request->Send404;
-                    return undef;
-                }
-            }         
-        }
-                 
-        $request->SendFile($tmpfile);                
+        say $video{'out_filepath'} . " already exists";              
+        $request->SendFile($video{'out_filepath'});                
     }
     # otherwise create it
     elsif( defined($VIDEOFORMATS{$fmt}->{'create_cmd'})) {
@@ -2784,7 +2772,6 @@ sub video_get_format {
 sub video_file_lookup {
     my ($filename) = @_; 
     my @locations = ($SETTINGS->{'MEDIALIBRARIES'}{'movies'}, $SETTINGS->{'MEDIALIBRARIES'}{'tv'}, $SETTINGS->{'MEDIALIBRARIES'}{'music'});    
-    
     my $filepath;
     foreach my $location (@locations) {
         my $absolute = abs_path("$location/$filename");

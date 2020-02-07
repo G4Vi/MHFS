@@ -28,6 +28,8 @@ if( ! $CONFIG->{'client_secret'}) {
 }
 
 my $ACCESS_TOKEN;
+my $tokenjson;
+my $lastresponse;
 if(! $CONFIG->{'refresh_token'}) {
     if($ARGV[0] ne '__setup__') {
         die "refresh_token not set";
@@ -42,22 +44,29 @@ if(! $CONFIG->{'refresh_token'}) {
 	<STDIN>;
     $curlcmd = 'curl --silent "https://accounts.google.com/o/oauth2/token" --data "client_id='.$CONFIG->{'client_id'}.'&client_secret='.$CONFIG->{'client_secret'}.'&code='.$codejson->{'device_code'}.'&grant_type=http://oauth.net/grant_type/device/1.0"';
     $response =  `$curlcmd`;
-    my $tokenjson = decode_json($response);
+    $tokenjson = decode_json($response);
     $CONFIG->{'refresh_token'} = $tokenjson->{'refresh_token'};
     $ACCESS_TOKEN = $tokenjson->{'access_token'};
+    $lastresponse = $response;
 }
 else {
     my $curlcmd = 'curl --silent "https://accounts.google.com/o/oauth2/token" --data "client_id='.$CONFIG->{'client_id'}.'&client_secret='.$CONFIG->{'client_secret'}."&refresh_token=".$CONFIG->{'refresh_token'}.'&grant_type=refresh_token"';
     my $response = `$curlcmd`;
     #say $response;
-    my $tokenjson = decode_json($response);
+    $tokenjson = decode_json($response);
     $ACCESS_TOKEN = $tokenjson->{'access_token'};
+    $lastresponse = $response;
 }
+
+$ACCESS_TOKEN or die "Failed to get ACCESS_TOKEN:\n$lastresponse";
+
 
 if($configchanged) {
     my $json = JSON::PP->new->pretty(1);    
     $configdata = $json->encode($CONFIG);
     write_file($configfile, $configdata);
+    say "config updated";
+    exit 0;
 }
 
 use Symbol 'gensym'; 
