@@ -1,0 +1,176 @@
+=head2 Thu Feb  6 11:49:29 2020: C<Module> L<Sub::Uplevel|Sub::Uplevel>
+
+=over 4
+
+=item *
+
+C<installed into: /home/sample/MHFS/perlmodules/lib/perl5>
+
+=item *
+
+C<LINKTYPE: dynamic>
+
+=item *
+
+C<VERSION: 0.2800>
+
+=item *
+
+C<EXE_FILES: >
+
+=back
+
+=head2 Thu Feb  6 11:49:32 2020: C<Module> L<Test::Warn|Test::Warn>
+
+=over 4
+
+=item *
+
+C<installed into: /home/sample/MHFS/perlmodules/lib/perl5>
+
+=item *
+
+C<LINKTYPE: dynamic>
+
+=item *
+
+C<VERSION: 0.36>
+
+=item *
+
+C<EXE_FILES: >
+
+=back
+
+=head2 Thu Feb  6 11:49:36 2020: C<Module> L<Inline|Inline>
+
+=over 4
+
+=item *
+
+C<installed into: /home/sample/MHFS/perlmodules/lib/perl5>
+
+=item *
+
+C<LINKTYPE: dynamic>
+
+=item *
+
+C<VERSION: 0.86>
+
+=item *
+
+C<EXE_FILES: >
+
+=back
+
+=head2 Thu Feb  6 11:50:46 2020: C<Module> L<Test::Number::Delta|Test::Number::Delta>
+
+=over 4
+
+=item *
+
+C<installed into: /home/sample/MHFS/inline-python-pm/../perlmodules/lib/perl5>
+
+=item *
+
+C<LINKTYPE: dynamic>
+
+=item *
+
+C<VERSION: 1.06>
+
+=item *
+
+C<EXE_FILES: >
+
+=back
+
+=head2 Thu Feb  6 11:51:17 2020: C<Module> L<Test::Simple|Test::Simple>
+
+=over 4
+
+=item *
+
+C<installed into: /home/sample/MHFS/inline-python-pm/../perlmodules/lib/perl5>
+
+=item *
+
+C<LINKTYPE: dynamic>
+
+=item *
+
+C<VERSION: 1.302171>
+
+=item *
+
+C<EXE_FILES: >
+
+=back
+
+=head2 Thu Feb  6 11:51:21 2020: C<Module> L<Test::Deep|Test::Deep>
+
+=over 4
+
+=item *
+
+C<installed into: /home/sample/MHFS/inline-python-pm/../perlmodules/lib/perl5>
+
+=item *
+
+C<LINKTYPE: dynamic>
+
+=item *
+
+C<VERSION: 1.128>
+
+=item *
+
+C<EXE_FILES: >
+
+=back
+
+=head2 Thu Feb  6 11:51:34 2020: C<Module> L<Proc::ProcessTable|Proc::ProcessTable>
+
+=over 4
+
+=item *
+
+C<installed into: /home/sample/MHFS/inline-python-pm/../perlmodules/lib/perl5>
+
+=item *
+
+C<LINKTYPE: dynamic>
+
+=item *
+
+C<VERSION: 0.59>
+
+=item *
+
+C<EXE_FILES: >
+
+=back
+
+=head2 Thu Feb  6 12:21:11 2020: C<Module> L<Inline::Python|Inline::Python>
+
+=over 4
+
+=item *
+
+C<installed into: /home/sample/MHFS/perlmodules/lib/perl5/../../../perlmodules/lib/perl5>
+
+=item *
+
+C<LINKTYPE: dynamic>
+
+=item *
+
+C<VERSION: 0.56>
+
+=item *
+
+C<EXE_FILES: >
+
+=back
+
