@@ -2140,6 +2140,7 @@ package Youtube {
     use feature 'state';
     use Encode;
     use Any::URI::Escape;
+    use Scalar::Util qw(looks_like_number weaken);
     HTTP::BS::Server::Util->import();
     BEGIN {
         if( ! (eval "use JSON; 1")) {
@@ -2278,6 +2279,96 @@ package Youtube {
         $request->{'process'} = $tprocess;
         return -1;
     }
+    
+    sub downloadAndServe {
+        my ($self, $request, $video) = @_;
+        weaken($request);
+        my ($stdout, $done);
+        my $qs = $request->{'qs'};
+        my @cmd = ($self->{'youtube-dl'}, '--no-part', '--print-traffic', '-f', $self->{'fmts'}{$qs->{"media"} // "video"} // "best", '-o', $video->{"out_filepath"}, '--', $qs->{"id"});
+        $request->{'process'} = HTTP::BS::Server::Process->new(\@cmd, $request->{'client'}{'server'}{'evp'}, {
+        'STDOUT' => sub {
+            my($out) = @_;
+            my $buf;
+            while(read($out, $buf, 100)) {
+                $stdout .= $buf;        
+            }
+            return 1 if($done);
+            my $filename = $video->{'out_filepath'};
+            return 1 if(! (-e $filename));
+            my $minsize = $self->{'minsize'};
+            if(defined($minsize) && ((-s $filename) < $minsize)) {                      
+                return 1;
+            }                    
+            my ($cl) = $stdout =~ /^.*Content\-Length:\s(\d+)/s;
+            return 1 if(! $cl);
+            say "stdout $stdout";
+            my ($cr) = $stdout =~ /^.*Content\-Range:\sbytes\s\d+\-\d+\/(\d+)/s;
+            if($cr) {
+                say "cr $cr";
+                $cl = $cr if($cr > $cl);                        
+            }                    
+            say "cl is $cl";
+            UNLOCK_WRITE($filename);
+            LOCK_WRITE($filename, $cl);
+            if($request) {
+                $request->SendLocalFile($filename);                        
+            }
+            else {
+                say "request died, not sending";
+            }                    
+            $done = 1;
+            return 1;
+        },
+        'STDERR' => sub {                    
+            my ($err) = @_;
+            my $buf;
+            # log this somewhere?
+            while(read($err, $buf, 100)) { }
+            return 1;
+        },
+        'SIGCHLD' => sub {
+            my ($exitcode) = @_;
+            if (!$done) {
+                my $filename = $video->{'out_filepath'};
+                if(! -e $filename) {
+                    say "youtube-dl failed ($exitcode), file not done in SIGCHLD. file doesnt exist 404";
+                    $request->Send404 if($request);
+                }
+                else {
+                    say "youtube-dl probably failed ($exitcode). sending file anyways";
+                    $request->SendLocalFile($filename) if($request);
+                }
+            }
+        },
+        });
+        my $process = $request->{'process'}; 
+        my $flags = 0;
+        my $handle = $process->{'fd'}{'stderr'}{'fd'};
+        return unless defined $handle ;
+        (0 == fcntl($handle, Fcntl::F_GETFL, $flags)) or return undef;
+        $flags |= Fcntl::O_NONBLOCK;
+        (0 == fcntl($handle, Fcntl::F_SETFL, $flags)) or return undef;
+        $handle = $process->{'fd'}{'stdout'}{'fd'};
+        return unless defined $handle ;
+        (0 == fcntl($handle, Fcntl::F_GETFL, $flags)) or return undef;
+        $flags |= Fcntl::O_NONBLOCK;
+        (0 == fcntl($handle, Fcntl::F_SETFL, $flags)) or return undef;  
+
+        return 1;        
+    }
+    
+    sub getOutBase {
+        my ($self, $qs) = @_;
+        my $media;
+        if(defined $qs->{'media'} && (defined $self->{'fmts'}{$qs->{'media'}})) {
+            $media = $qs->{'media'};
+        }
+        else  {
+            $media = 'video';
+        }        
+        return $qs->{'id'} . '_' . $media; 
+    }
 
     sub new {
         my ($class, $settings) = @_;
@@ -2315,9 +2406,11 @@ package Youtube {
         ['/ytembedplayer', sub {
             my ($request) = @_;
             $request->SendLocalBuf($self->ytplayer($request), "text/html; charset=utf-8");        
-        }],
-        
+        }],        
         ];
+        
+        $self->{'fmts'} = {'music' => 'bestaudio', 'video' => 'best'};
+        $self->{'minsize'} = '1048576';
         
         my $mhfsytdl = $settings->{'BINDIR'} . '/youtube-dl';  
         if(-e $mhfsytdl) {
@@ -2327,10 +2420,12 @@ package Youtube {
                 say "youtube-dl binary is invalid. plugin load failed";
                 return undef;
             }
+            $self->{'youtube-dl'} = $mhfsytdl;
             $settings->{'youtube-dl'} = $mhfsytdl;
         }
         elsif(system('youtube-dl --help > /dev/null') == 0){
             say "Using system youtube-dl";
+            $self->{'youtube-dl'} = 'youtube-dl';
             $settings->{'youtube-dl'} = 'youtube-dl';        
         }
         else {
@@ -2339,7 +2434,8 @@ package Youtube {
         }       
 
         return $self;
-    }
+    }   
+    
     
     1;
 }
@@ -2426,8 +2522,8 @@ if(defined $SETTINGS->{'GDRIVE'}) {
     say "GDRIVE plugin Enabled";
 }
 push @plugins, MusicLibrary->new($SETTINGS);
-my $youtubeplugin = Youtube->new($SETTINGS);
-push (@plugins, $youtubeplugin) if($youtubeplugin);
+my $YOUTUBEPLUGIN = Youtube->new($SETTINGS);
+push (@plugins, $YOUTUBEPLUGIN) if($YOUTUBEPLUGIN);
 my $EXT_SOURCE_SITES = $SETTINGS->{'EXT_SOURCE_SITES'};
 
 # make the temp dirs
@@ -2459,11 +2555,9 @@ our %VIDEOFORMATS = (
             'mp4seg' => {'lock' => 0, 'create_cmd' => '',  'create_cmd_args' => ['requestfile', 'outpathext', 'outpath'], 'ext' => 'm3u8', 
             'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/mp4seg_player.html', }, #'minsize' => '20971520'},
             
-            'noconv' => {'lock' => 0, 'create_cmd' => [''], 'ext' => '', 'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/noconv_player.html', },
-            
-            'yt' => {'lock' => 1, 'create_cmd' => [$SETTINGS->{'youtube-dl'}, '--no-part', '--print-traffic', '-f', 
-            '$VIDEOFORMATS{"yt"}{"youtube-dl_fmts"}{$qs->{"media"} // "video"} // "best"', '-o', '$video{"out_filepath"}', '--', '$qs->{"id"}'], 'ext' => 'yt', 
-            'youtube-dl_fmts' => {'music' => 'bestaudio', 'video' => 'best'}, 'minsize' => '1048576'}
+            'noconv' => {'lock' => 0, 'ext' => '', 'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/noconv_player.html', },            
+
+            'yt' => {'lock' => 1, 'create_cmd' => [''], 'ext' => 'yt'},
 );
 
 my %RESOURCES;
@@ -2500,168 +2594,7 @@ my @routes = (
     ],
     [
         '/torrent', \&torrent
-    ],
-    [
-        '/radio', sub {
-            my ($request) = @_;
-            $request->Send404; 
-            return;
-            $request->{'qs'}{'action'} //= 'listen';                      
-            state $abuf;
-            state $asegtime = 15;
-            
-            $request->{'header'}{'Infinite'} = 'true';
-            if( $request->{'qs'}{'action'} eq 'broadcast') {
-                my $atbuf; 
-                $abuf = undef;
-                my $evp = $request->{'client'}{'server'}{'evp'};                
-                my $file = $SETTINGS->{'MEDIALIBRARIES'}{'music'} . '/Alphaville - Forever Young (1984) [FLAC24-192] {P-13065}/02 - Summer in Berlin.flac';
-                my $bitdepth = 16;
-                my $desiredrate = 48000;
-                my $atime = 0;              
-                my $afmt = 'flac';
-                
-                state $processSegmentProcess;                
-                my $processSegment = sub {
-                    my ($onSegment) = @_;
-                    my @cmd = ('sox', '-t', 'sox', '-', '-V3', '-G', '-R', '-b', $bitdepth, '-t', $afmt, '-', 'rate', '-v', '-L', $desiredrate, 'dither');
-                    say "cmd: " . join(' ', @cmd);
-                    $atbuf = undef;                    
-                    $processSegmentProcess = HTTP::BS::Server::Process->new(\@cmd, $evp, {
-                    #'STDIN' => sub {
-                    #    my ($in) = @_;
-                    #    print $in $data;
-                    #    return 0;
-                    #},
-                    'SIGCHLD' => sub {                       
-                        my $buf;
-                        # dump stderr                        
-                        my $stderr = $processSegmentProcess->{'fd'}{'stderr'}{'fd'};
-                        while(read($stderr, $buf, 65536)) {
-                            print $buf;
-                        }                                               
-                        my $stdout = $processSegmentProcess->{'fd'}{'stdout'}{'fd'};
-                        while(read($stdout, $buf, 65536)) {
-                            say 'sigchld read';
-                            $atbuf .= $buf;
-                        }                                               
-                                             
-                        # don't write the meta, only frames (inc header)
-                        sub getNthByte {
-                            my ($pos, $sbuf) = @_;                            
-                            return ord(substr( $sbuf, $pos, 1));
-                        }                       
-                        for(my $pos = 0;;$pos++) {
-                            my $bytea = getNthByte($pos, $atbuf);
-                            my $byteb = getNthByte($pos+1, $atbuf);
-                            my $val = ($bytea << 8) + $byteb;                            
-                            if( ($val & 0xFFFE) == 0xFFF8) {
-                                say sprintf "synccode bytes: %x%x %c%c", $bytea, $byteb , $bytea, $byteb;
-                                $atbuf = substr $atbuf, $pos;
-                                last;
-                            } 
-                            elsif($pos == length($atbuf)) {
-                                use bytes;
-                                say "no synccode found, length" . length($atbuf);
-                                last;
-                            }                                          
-                        }
-                        undef  $processSegmentProcess; 
-                        say "processSegment done, executing onSegment";
-                        $onSegment->();                        
-                        $request->{'process'} = undef;                        
-                    },
-                   'STDOUT' => sub {
-                        my ($output) = @_;
-                        my $buf;                       
-                        if(my $bytes = read($output, $buf, 65536*2)) {
-                            $atbuf .= $buf;                                                       
-                        }                                               
-                        return 1;
-                   }                 
-                   });
-                };
-                state $getSegmentProcess;
-                my $getSegment = sub {
-                    my ($onSegment) = @_;                 
-                    my @cmd = ('sox', $file, '-t', 'sox', '-', 'trim', $atime, $asegtime);
-                    $atime +=  $asegtime;
-                    say "cmd: " . join(' ', @cmd);
-                    my $segment;                    
-                    $getSegmentProcess = HTTP::BS::Server::Process->new(\@cmd, $evp, {
-                    'SIGCHLD' => sub {                        
-                        my $buf;
-                        my $stdout = $getSegmentProcess->{'fd'}{'stdout'}{'fd'};
-                        binmode($stdout, ":bytes");
-                        while(read($stdout, $buf, 65536)) {
-                            say 'sigchld read';
-                            $segment .= $buf;
-                        }                      
-                        my $dfd = $processSegmentProcess->{'fd'}{'stdin'}{'fd'};
-                        print $dfd $segment;
-                        close($dfd);# so the other end pipe knows we are done writing                       
-                        undef  $getSegmentProcess;
-                        say "getSegment first proc done";
-                    },
-                    'STDOUT' => sub {
-                        my ($output) = @_;
-                        binmode($output, ":bytes");
-                        my $buf;                        
-                        if(my $bytes = read($output, $buf, 65536*2)) {
-                           $segment .= $buf;                                                       
-                        }                                               
-                        return 1;
-                    },                
-                    'STDERR' => sub {
-                        my ($terr) = @_;                       
-                        my $buf;                    
-                        read($terr, $buf, 1);
-                        say "stderr: $buf";                    
-                    }});                                      
-                };
-                weaken($request); # the only one who should be keeping $request alive is $client    
-                $getSegment->();
-                $processSegment->( sub {                   
-                    {
-                        use bytes;
-                        say "atbuf length " . length($atbuf);                    
-                    }
-                    $request->StartSendingBuf($atbuf, 'audio/flac');
-                    $abuf = $atbuf;                                     
-                    #$afmt = 'raw';                                     
-                    my $setSegTimer = sub {
-                        my ($self, $when) = @_;                                     
-                        $evp->add_timer($when, 0, sub {
-                            if(! defined $request) {
-                                say "\$request undef, ignoring CB";
-                                return undef;
-                            }
-                            $getSegment->();
-                            $processSegment->(
-                            sub {                               
-                                return if(! $atbuf);
-                                {
-                                    use bytes;
-                                    say "atbuf length " . length($atbuf);                    
-                                }
-                                $request->{'response'}{'buf'} .= $atbuf;
-                                $request->{'client'}->SetEvents(POLLOUT | $EventLoop::Poll::ALWAYSMASK );                                 
-                                $abuf = $atbuf; 
-                                $request->{'header'}{'Infinite'} = 'false';                            
-                                $self->($self, 0);#$asegtime);
-                                
-                            });                                                       
-                            return undef;
-                        });                                                                     
-                    };                    
-                    $setSegTimer->($setSegTimer, 0);                                    
-                });                           
-            }
-            else {
-                $request->StartSendingBuf($abuf, 'audio/flac');            
-            }        
-        }   
-    ],
+    ],    
     # otherwise attempt to send a file from droot
     sub {
         my ($request) = @_;
@@ -2719,32 +2652,29 @@ sub get_video {
             return undef;
         }        
     }
-    elsif(defined($qs->{'id'})) {    
-        my $media;
-        if(defined $qs->{'media'} && (defined $VIDEOFORMATS{$video{'out_fmt'}}{'youtube-dl_fmts'}{$qs->{'media'}})) {
-            $media = $qs->{'media'};
-        }
-        else  {
-            $media = 'video';
-        }        
-        $video{'out_base'} = $qs->{'id'} . '_' . $media;
+    elsif(($video{'out_fmt'} eq 'yt') && defined($qs->{'id'})) {    
+        $video{'out_base'} = $YOUTUBEPLUGIN->getOutBase($qs);
     }
     else {
         $request->Send404;
         return undef;
     }
    
+    # Determine the full path to the desired file
     my $fmt = $video{'out_fmt'};
     # soon https://github.com/video-dev/hls.js/pull/1899
     $video{'out_base'} = space2us($video{'out_base'}) if ($video{'out_fmt'} eq 'hls');
-    $video{'out_location'} = $SETTINGS->{'VIDEO_TMPDIR'} . '/' . $video{'out_base'};
-    $video{'out_filepath'} = $video{'out_location'} . '/' . $video{'out_base'} . '.' . $VIDEOFORMATS{$video{'out_fmt'}}->{'ext'};
-    $video{'base_url'} = 'tmp/' . $video{'out_base'} . '/';
+    $video{'out_location'} = $SETTINGS->{'VIDEO_TMPDIR'} . '/' . $video{'out_base'};    
     if($video{'out_fmt'} eq 'noconv') {
-        $video{'out_filepath'} = $video{'src_file'}->{'filepath'};    
+        $video{'out_filepath'} = $video{'src_file'}{'filepath'};    
     }
+    else {
+        $video{'out_filepath'} = $video{'out_location'} . '/' . $video{'out_base'} . '.' . $VIDEOFORMATS{$video{'out_fmt'}}->{'ext'};   
+    }    
+    
+    # Serve it up if it has been created
     if(-e $video{'out_filepath'}) {        
-        say $video{'out_filepath'} . " already exists";        
+        say $video{'out_filepath'} . " already exists";
         my $tdir = $SETTINGS->{'TMPDIR'};
         my $tmpfile = $video{'out_filepath'};
         if($video{'out_filepath'} !~ /$tdir/) {
@@ -2765,10 +2695,15 @@ sub get_video {
                  
         $request->SendFile($tmpfile);                
     }
+    # otherwise create it
     elsif( defined($VIDEOFORMATS{$fmt}->{'create_cmd'})) {
         mkdir($video{'out_location'});
-        say "FAILED to LOCK" if(($VIDEOFORMATS{$fmt}->{'lock'} == 1) && (LOCK_WRITE($video{'out_filepath'}) != 1));                       
-        if($VIDEOFORMATS{$fmt}->{'create_cmd'}[0] ne '') {
+        say "FAILED to LOCK" if(($VIDEOFORMATS{$fmt}->{'lock'} == 1) && (LOCK_WRITE($video{'out_filepath'}) != 1));
+        if($fmt eq 'yt') {
+            $YOUTUBEPLUGIN->downloadAndServe($request, \%video);
+            return 1;
+        }        
+        elsif($VIDEOFORMATS{$fmt}->{'create_cmd'}[0] ne '') {
             my @cmd;
             foreach my $cmdpart (@{$VIDEOFORMATS{$fmt}->{'create_cmd'}}) {
                 if($cmdpart =~ /^\$/) {
@@ -2787,82 +2722,7 @@ sub get_video {
             elsif($fmt eq 'dash') {
                 $video{'on_exists'} = \&video_dash_check_ready;
             }
-            # elseif(0) {
-            elsif($fmt eq 'yt') {
-                # delete lock?
-                weaken($request);
-                my ($stdout, $done);
-                $request->{'process'} = HTTP::BS::Server::Process->new(\@cmd, $request->{'client'}{'server'}{'evp'}, {
-                'STDOUT' => sub {
-                    my($out) = @_;
-                    my $buf;
-                    while(read($out, $buf, 100)) {
-                        $stdout .= $buf;        
-                    }
-                    return 1 if($done);
-                    my $filename = $video{'out_filepath'};
-                    return 1 if(! (-e $filename));
-                    my $minsize = $VIDEOFORMATS{$fmt}->{'minsize'};
-                    if(defined($minsize) && ((-s $filename) < $minsize)) {                      
-                        return 1;
-                    }                    
-                    my ($cl) = $stdout =~ /^.*Content\-Length:\s(\d+)/s;
-                    return 1 if(! $cl);
-                    say "stdout $stdout";
-                    my ($cr) = $stdout =~ /^.*Content\-Range:\sbytes\s\d+\-\d+\/(\d+)/s;
-                    if($cr) {
-                        say "cr $cr";
-                        $cl = $cr if($cr > $cl);                        
-                    }                    
-                    say "cl is $cl";
-                    UNLOCK_WRITE($filename);
-                    LOCK_WRITE($filename, $cl);
-                    if($request) {
-                        $request->SendLocalFile($filename);                        
-                    }
-                    else {
-                        say "request died, not sending";
-                    }                    
-                    $done = 1;
-                    return 1;
-                },
-                'STDERR' => sub {                    
-                    my ($err) = @_;
-                    my $buf;
-                    # log this somewhere?
-                    while(read($err, $buf, 100)) { }
-                    return 1;
-                },
-                'SIGCHLD' => sub {
-                    my ($exitcode) = @_;
-                    if (!$done) {
-                        my $filename = $video{'out_filepath'};
-                        if(! -e $filename) {
-                            say "youtube-dl failed ($exitcode), file not done in SIGCHLD. file doesnt exist 404";
-                            $request->Send404 if($request);
-                        }
-                        else {
-                            say "youtube-dl probably failed ($exitcode). sending file anyways";
-                            $request->SendLocalFile($filename) if($request);
-                        }
-                    }
-                },
-                });
-                my $process = $request->{'process'}; 
-                my $flags = 0;
-                my $handle = $process->{'fd'}{'stderr'}{'fd'};
-                return unless defined $handle ;
-                (0 == fcntl($handle, Fcntl::F_GETFL, $flags)) or return undef;
-                $flags |= Fcntl::O_NONBLOCK;
-                (0 == fcntl($handle, Fcntl::F_SETFL, $flags)) or return undef;
-                $handle = $process->{'fd'}{'stdout'}{'fd'};
-                return unless defined $handle ;
-                (0 == fcntl($handle, Fcntl::F_GETFL, $flags)) or return undef;
-                $flags |= Fcntl::O_NONBLOCK;
-                (0 == fcntl($handle, Fcntl::F_SETFL, $flags)) or return undef;  
-
-                return 1;
-            }
+            
             # deprecated
             $video{'pid'} = ASYNC(\&shellcmd_unlock, \@cmd, $video{'out_filepath'});            
         }           
@@ -2904,6 +2764,11 @@ sub get_video {
             return undef;                   
         });
         say "get_video: added timer " . $video{'out_filepath'};                  
+    }
+    else {
+        say "out_fmt: " . $video{'out_fmt'};
+        $request->Send404;
+        return undef;
     }
     return 1;    
 }
