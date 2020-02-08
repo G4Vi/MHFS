@@ -177,18 +177,18 @@ package HTTP::BS::Server {
         $evp->set($sock, \%self, POLLIN);
         # load the plugins        
         foreach my $plugin (@{$plugins}) {            
-            foreach my $timer (@{$plugin->{'timers'}}) {                              
+            foreach my $timer (@{$plugin->{'timers'}}) {
+                say 'plugin(' . ref($plugin) . '): adding timer';                              
                 $self{'evp'}->add_timer(@{$timer});                                                
             }
             if(my $func = $plugin->{'uploader'}) {
-                say "adding function";
+                say 'plugin(' . ref($plugin) . '): adding uploader';
                 push (@{$self{'uploaders'}}, $func);
             }
             foreach my $route (@{$plugin->{'routes'}}) {
-                say "adding route";
+                say 'plugin(' . ref($plugin) . '): adding route ' . $route->[0];
                 push @{$self{'routes'}}, $route;                
-            }
-             
+            }             
         }            
         
         $evp->run(0.1);
@@ -1101,7 +1101,7 @@ package HTTP::BS::Server::Client {
         elsif($sret != $n) {
             $data = substr($data, $sret);
             $n = $n - $sret;
-            say "Wrote $sret bytes out of $total, $n bytes to go";
+            say "wrote $sret bytes out of $total, $n bytes to go";
             return $data;   
         }
         else {
@@ -1433,13 +1433,14 @@ package GDRIVE {
     use Data::Dumper;
     use File::stat;
     use File::Basename;
+    use File::Path qw(make_path);
     use Scalar::Util qw(looks_like_number weaken);
     use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
     HTTP::BS::Server::Util->import();
     
     sub gdrive_add_tmp_rec {
         my ($id, $gdrivefile, $settings) = @_;
-        write_file($settings->{'GDRIVE_TMP_REC_DIR'} . "/$id", $gdrivefile);
+        write_file($settings->{'GDRIVE'}{'TMP_REC_DIR'} . "/$id", $gdrivefile);
     }
     
     sub gdrive_remove_tmp_rec {
@@ -1456,7 +1457,7 @@ package GDRIVE {
                     die if(@files == 10); # only delete 10 files at a time because api limits               
                 }
                 
-            }}, $self->{'settings'}{'GDRIVE_TMP_REC_DIR'}); 
+            }}, $self->{'settings'}{'GDRIVE'}{'TMP_REC_DIR'}); 
         };    
         chdir($curdir);
         
@@ -1622,7 +1623,9 @@ package GDRIVE {
     sub new {
         my ($class, $settings) = @_;
         my $self =  {'settings' => $settings};
-        bless $self, $class;           
+        bless $self, $class;
+        $settings->{'GDRIVE'}{'TMP_REC_DIR'} ||= $settings->{'TMPDIR'} . '/gdrive_tmp_rec';    
+        make_path($settings->{'GDRIVE'}{'TMP_REC_DIR'});        
         $self->{'timers'} = [
             [0, 0, sub {
                 #say "running timer";            
@@ -1799,26 +1802,7 @@ package MusicLibrary {
             'SIGCHLD' => sub {
                 $request->SendLocalFile($tosend);            
             }       
-        });   
-        
-        #say "creating timer to watch for $tosend";
-        #weaken($request); # the only one who should be keeping $request alive is $client                    
-        #$evp->add_timer(0, 0, sub {
-        #    if(! defined $request) {
-        #        say "\$request undef, ignoring CB";
-        #        return undef;
-        #    }            
-        #    if(! -e $tosend) {
-        #        return 1;
-        #    }
-        #    #my $minsize = $VIDEOFORMATS{$fmt}->{'minsize'};
-        #    #if(defined($minsize) && ((-s $filename) < $minsize)) {                      
-        #    #    return 1;
-        #    #}            
-        #    say "SendLocalTrackSegment timer is destructing";
-        #    $request->SendLocalFile($tosend);
-        #    return undef;          
-        #});   
+        });
     }
     
     sub SendLocalTrack {
@@ -2102,10 +2086,10 @@ package MusicLibrary {
         my ($class, $settings) = @_;
         my $self =  {'settings' => $settings};
         bless $self, $class;  
-
-        say "building music library";
+        my $pstart = 'plugin(' . ref($self) . '): ';
+        say $pstart . "building music library";
         $self->BuildLibraries($settings->{'MUSICLIBRARY'}{'sources'});
-        say "done build libraries";
+        say $pstart ."done building libraries";
         $self->{'routes'} = [
             [ '/music_legacy', sub {
                 my ($request) = @_;
@@ -2154,7 +2138,7 @@ package Youtube {
     BEGIN {
         if( ! (eval "use JSON; 1")) {
             eval "use JSON::PP; 1" or die "No implementation of JSON available, see .doc/dependencies.txt";
-            warn "Youtube: Using PurePerl version of JSON (JSON::PP), see .doc/dependencies.txt about installing faster version";
+            warn "plugin(Youtube): Using PurePerl version of JSON (JSON::PP), see .doc/dependencies.txt about installing faster version";
         }
     }
 
@@ -2338,8 +2322,8 @@ package Youtube {
         },
         'SIGCHLD' => sub {
             my ($exitcode) = @_;
-            if (!$done) {
-                my $filename = $video->{'out_filepath'};
+            my $filename = $video->{'out_filepath'};
+            if (!$done) {                
                 if(! -e $filename) {
                     say "youtube-dl failed ($exitcode), file not done in SIGCHLD. file doesnt exist 404";
                     $request->Send404 if($request);
@@ -2348,6 +2332,9 @@ package Youtube {
                     say "youtube-dl probably failed ($exitcode). sending file anyways";
                     $request->SendLocalFile($filename) if($request);
                 }
+            }
+            else {
+                UNLOCK_WRITE($filename);
             }
         },
         });
@@ -2369,6 +2356,8 @@ package Youtube {
     
     sub getOutBase {
         my ($self, $qs) = @_;
+        return undef if(! $qs->{'id'});
+
         my $media;
         if(defined $qs->{'media'} && (defined $self->{'fmts'}{$qs->{'media'}})) {
             $media = $qs->{'media'};
@@ -2420,25 +2409,27 @@ package Youtube {
         
         $self->{'fmts'} = {'music' => 'bestaudio', 'video' => 'best'};
         $self->{'minsize'} = '1048576';
+        $self->{'VIDEOFORMATS'} = {'yt' => {'lock' => 1, 'ext' => 'yt', 'plugin' => $self}};
         
+        my $pstart = 'plugin(' . ref($self) . '): ';
         my $mhfsytdl = $settings->{'BINDIR'} . '/youtube-dl';  
         if(-e $mhfsytdl) {
-            say "Using MHFS youtube-dl. Attempting update";
+            say  $pstart . "Using MHFS youtube-dl. Attempting update";
             system "$mhfsytdl", "-U";
             if(system("$mhfsytdl --help > /dev/null") != 0) {
-                say "youtube-dl binary is invalid. plugin load failed";
+                say $pstart . "youtube-dl binary is invalid. plugin load failed";
                 return undef;
             }
             $self->{'youtube-dl'} = $mhfsytdl;
             $settings->{'youtube-dl'} = $mhfsytdl;
         }
         elsif(system('youtube-dl --help > /dev/null') == 0){
-            say "Using system youtube-dl";
+            say $pstart . "Using system youtube-dl";
             $self->{'youtube-dl'} = 'youtube-dl';
             $settings->{'youtube-dl'} = 'youtube-dl';        
         }
         else {
-            say "youtube-dl not found. plugin load failed";
+            say $pstart . "youtube-dl not found. plugin load failed";
             return undef;
         }       
 
@@ -2523,26 +2514,26 @@ $SETTINGS->{'BINDIR'} ||= $SCRIPTDIR . '/.bin';
 $SETTINGS->{'TOOLDIR'} ||= $SCRIPTDIR . '/.tool';
 $SETTINGS->{'DOCDIR'} ||= $SCRIPTDIR . '/.doc';
 $SETTINGS->{'CFGDIR'} ||= $CFGDIR;
+my %RESOURCES; # Caching of resources
 
+# load plugins
 my @plugins;
-if(defined $SETTINGS->{'GDRIVE'}) {
-    $SETTINGS->{'GDRIVE_TMP_REC_DIR'} ||= $SETTINGS->{'TMPDIR'} . '/gdrive_tmp_rec';    
-    push @plugins, GDRIVE->new($SETTINGS); 
-    say "GDRIVE plugin Enabled";
-}
+{
+my $GDRIVEPLUGIN = GDRIVE->new($SETTINGS);
+push (@plugins, $GDRIVEPLUGIN) if($GDRIVEPLUGIN);
 push @plugins, MusicLibrary->new($SETTINGS);
 my $YOUTUBEPLUGIN = Youtube->new($SETTINGS);
 push (@plugins, $YOUTUBEPLUGIN) if($YOUTUBEPLUGIN);
-my $EXT_SOURCE_SITES = $SETTINGS->{'EXT_SOURCE_SITES'};
+}
 
 # make the temp dirs
-make_path($SETTINGS->{'TMPDIR'}, $SETTINGS->{'VIDEO_TMPDIR'}, $SETTINGS->{'GDRIVE_TMP_REC_DIR'});
+make_path($SETTINGS->{'TMPDIR'}, $SETTINGS->{'VIDEO_TMPDIR'});
 
-our %VIDEOFORMATS = (
+# get_video formats
+my %VIDEOFORMATS = (
             'hlsold' => {'lock' => 0, 'create_cmd' => "ffmpeg -i '%s' -codec:v copy -bsf:v h264_mp4toannexb -strict experimental -acodec aac -f ssegment -segment_list '%s' -segment_list_flags +live -segment_time 10 '%s%%03d.ts'",  'create_cmd_args' => ['requestfile', 'outpathext', 'outpath'], 'ext' => 'm3u8', 
             'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/hls_player.html'},
-
-            #'hls' => {'lock' => 0, 'create_cmd' => ['ffmpeg', '-i', '$video{"src_file"}{"filepath"}', '-codec:v', 'copy', '-strict', 'experimental', '-codec:a', 'aac', '-ac', '2', '-f', 'hls', '-hls_time', '5', '-hls_list_size', '0',  '-hls_segment_filename', '$video{"out_location"} . "/" . $video{"out_base"} . "%04d.ts"', '-master_pl_name', '$video{"out_base"} . ".m3u8"', '$video{"out_filepath"} . "_v"'], 'ext' => 'm3u8', 'desired_audio' => 'aac',
+            
             'hls' => {'lock' => 0, 'create_cmd' => ['ffmpeg', '-i', '$video{"src_file"}{"filepath"}', '-codec:v', 'libx264', '-strict', 'experimental', '-codec:a', 'aac', '-ac', '2', '-f', 'hls', '-hls_time', '5', '-hls_list_size', '0',  '-hls_segment_filename', '$video{"out_location"} . "/" . $video{"out_base"} . "%04d.ts"', '-master_pl_name', '$video{"out_base"} . ".m3u8"', '$video{"out_filepath"} . "_v"'], 'ext' => 'm3u8', 'desired_audio' => 'aac',
             'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/hls_player.html'},
 
@@ -2565,11 +2556,17 @@ our %VIDEOFORMATS = (
             'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/mp4seg_player.html', }, #'minsize' => '20971520'},
             
             'noconv' => {'lock' => 0, 'ext' => '', 'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/noconv_player.html', },            
-
-            'yt' => {'lock' => 1, 'create_cmd' => [''], 'ext' => 'yt'},
 );
 
-my %RESOURCES;
+# get_video formats from plugins
+foreach my $plugin(@plugins) {    
+    foreach my $videoformat (keys %{$plugin->{'VIDEOFORMATS'}}) {
+        say 'plugin(' . ref($plugin) . '): adding video format ' . $videoformat;
+        $VIDEOFORMATS{$videoformat} = $plugin->{'VIDEOFORMATS'}{$videoformat};
+    }
+}
+
+# web server routes
 my @routes = (
     [
         '', sub {
@@ -2624,9 +2621,7 @@ my @routes = (
     }
 );
 
-
-
-        
+# finally start the server        
 my $server = HTTP::BS::Server->new($SETTINGS, \@routes, \@plugins);
 
 # really acquire media file (with search) and convert
@@ -2665,8 +2660,12 @@ sub get_video {
         # soon https://github.com/video-dev/hls.js/pull/1899
         $video{'out_base'} = space2us($video{'out_base'}) if ($video{'out_fmt'} eq 'hls');        
     }
-    elsif(($video{'out_fmt'} eq 'yt') && defined($qs->{'id'})) {    
-        $video{'out_base'} = $YOUTUBEPLUGIN->getOutBase($qs);
+    elsif($VIDEOFORMATS{$video{'out_fmt'}}{'plugin'}) { 
+        $video{'plugin'} = $VIDEOFORMATS{$video{'out_fmt'}}{'plugin'};
+        if(!($video{'out_base'} = $video{'plugin'}->getOutBase($qs))) {
+            $request->Send404;
+            return undef;
+        }   
     }
     else {
         $request->Send404;
@@ -2677,47 +2676,42 @@ sub get_video {
     my $fmt = $video{'out_fmt'};    
     $video{'out_location'} = $SETTINGS->{'VIDEO_TMPDIR'} . '/' . $video{'out_base'};    
     $video{'out_filepath'} = $video{'out_location'} . '/' . $video{'out_base'} . '.' . $VIDEOFORMATS{$video{'out_fmt'}}{'ext'};   
-    
+
     # Serve it up if it has been created
     if(-e $video{'out_filepath'}) {        
         say $video{'out_filepath'} . " already exists";              
-        $request->SendFile($video{'out_filepath'});                
+        $request->SendFile($video{'out_filepath'});
+        return 1;        
     }
     # otherwise create it
-    elsif( defined($VIDEOFORMATS{$fmt}->{'create_cmd'})) {
-        mkdir($video{'out_location'});
-        say "FAILED to LOCK" if(($VIDEOFORMATS{$fmt}->{'lock'} == 1) && (LOCK_WRITE($video{'out_filepath'}) != 1));
-        if($fmt eq 'yt') {
-            $YOUTUBEPLUGIN->downloadAndServe($request, \%video);
-            return 1;
-        }        
-        elsif($VIDEOFORMATS{$fmt}->{'create_cmd'}[0] ne '') {
-            my @cmd;
-            foreach my $cmdpart (@{$VIDEOFORMATS{$fmt}->{'create_cmd'}}) {
-                if($cmdpart =~ /^\$/) {
-                    push @cmd, eval($cmdpart);
-                }
-                else {
-                    push @cmd, $cmdpart;
-                }                
+    mkdir($video{'out_location'});
+    say "FAILED to LOCK" if(($VIDEOFORMATS{$fmt}{'lock'} == 1) && (LOCK_WRITE($video{'out_filepath'}) != 1));
+    if($video{'plugin'}) {
+        $video{'plugin'}->downloadAndServe($request, \%video);
+        return 1;
+    } 
+    elsif(defined($VIDEOFORMATS{$fmt}{'create_cmd'}) && ($VIDEOFORMATS{$fmt}{'create_cmd'}[0] ne '')) {       
+        my @cmd;
+        foreach my $cmdpart (@{$VIDEOFORMATS{$fmt}{'create_cmd'}}) {
+            if($cmdpart =~ /^\$/) {
+                push @cmd, eval($cmdpart);
             }
-            print "$_ " foreach @cmd;
-            print "\n";           
-            video_get_streams(\%video);
-            if($fmt eq 'hls') {                    
-                $video{'on_exists'} = \&video_hls_write_master_playlist;                                         
-            }
-            elsif($fmt eq 'dash') {
-                $video{'on_exists'} = \&video_dash_check_ready;
-            }
-            
-            # deprecated
-            $video{'pid'} = ASYNC(\&shellcmd_unlock, \@cmd, $video{'out_filepath'});            
-        }           
-        else {
-            $request->Send404;
-            return undef;
-        }        
+            else {
+                push @cmd, $cmdpart;
+            }                
+        }
+        print "$_ " foreach @cmd;
+        print "\n";           
+        video_get_streams(\%video);
+        if($fmt eq 'hls') {                    
+            $video{'on_exists'} = \&video_hls_write_master_playlist;                                         
+        }
+        elsif($fmt eq 'dash') {
+            $video{'on_exists'} = \&video_dash_check_ready;
+        }
+        
+        # deprecated
+        $video{'pid'} = ASYNC(\&shellcmd_unlock, \@cmd, $video{'out_filepath'});             
         
         # our file isn't ready yet, so create a timer to check the progress and act
         weaken($request); # the only one who should be keeping $request alive is $client                    
@@ -2732,7 +2726,7 @@ sub get_video {
                  if(! -e $filename) {
                      last;
                  }
-                 my $minsize = $VIDEOFORMATS{$fmt}->{'minsize'};
+                 my $minsize = $VIDEOFORMATS{$fmt}{'minsize'};
                  if(defined($minsize) && ((-s $filename) < $minsize)) {                      
                      last;
                  }
