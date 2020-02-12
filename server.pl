@@ -454,6 +454,7 @@ package HTTP::BS::Server::Client::Request {
     HTTP::BS::Server::Util->import();
     use strict; use warnings;
     use feature 'say';
+    use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
     use Any::URI::Escape;
     use Cwd qw(abs_path getcwd);
     use File::Basename;
@@ -467,8 +468,10 @@ package HTTP::BS::Server::Client::Request {
         my ($class, $client, $indataRef) = @_;        
         my %self = ( 'client' => $client);
         bless \%self, $class;
-        weaken($self{'client'}); #don't allow Request to keep client alive  
-
+        weaken($self{'client'}); #don't allow Request to keep client alive
+        $self{'outheaders'}{'X-MHFS-CONN-ID'} = $client->{'outheaders'}{'X-MHFS-CONN-ID'};  
+        $self{'outheaders'}{'X-MHFS-REQUEST-ID'} = clock_gettime(CLOCK_MONOTONIC) * rand(); # BAD UID
+        say "X-MHFS-CONN-ID: " . $self{'outheaders'}{'X-MHFS-CONN-ID'} . " X-MHFS-REQUEST-ID: " . $self{'outheaders'}{'X-MHFS-REQUEST-ID'};
         my $success;    
         if($$indataRef =~ /^(?:\r\n)*(.+?)\r\n(.+?)\r\n\r\n(.*)$/s) {  
             my $requestline =  $1;
@@ -552,7 +555,7 @@ package HTTP::BS::Server::Client::Request {
     }
 
     sub _BuildHeaders {
-        my ($self, $datalength, $mime, $filename) = @_;
+        my ($self, $datalength, $mime, $filename, $fullpath) = @_;
         my $start =  $self->{'header'}{'_RangeStart'};                 
         my $end =  $self->{'header'}{'_RangeEnd'}; 
         my $retlength;
@@ -564,30 +567,42 @@ package HTTP::BS::Server::Client::Request {
         }
         $retlength = $datalength;
         say "datalength: $datalength";
+        # BAD
         if($datalength == 99999999999) {
-            $datalength = '*';             
-            #$is_partial = 0;
+            $datalength = '*';
+            if($is_partial && (!$end)) {
+                if($start == 0) {
+                    #$is_partial = 0;
+                }
+                else {
+                    #416 this
+                    say "should 416";
+                }
+                #$end = (-s $fullpath) - 1;
+            }                    
         }
-        #$is_partial = 0;
         if (! $is_partial) {
             $headtext = "HTTP/1.1 200 OK\r\n";
         }
         else {
             say "end: $end" if(defined($end));
             $cend = $end if(defined($end) && $end ne '');
+            if($cend <= $start)
+            {
+                say "range messed up";
+            }
             $headtext = "HTTP/1.1 206 Partial Content\r\n"; 
             $retlength = $cend+1;        
             say "cend: $cend";
             $headtext .= "Content-Range: bytes $start-$cend/$datalength\r\n";
         }
-        if($datalength ne '*') {
-            say "sending contentlength";
+        if(($datalength ne '*') || (defined($end) && $end ne '')) {
             my $contentlength = $cend - $start + 1;
             $headtext .= "Content-Length: $contentlength\r\n";
         }
         else {
-            say "sending contentlength";
-            $headtext .= "Content-Length: *\r\n";
+            # chunked here?
+            $self->{'outheaders'}{'Connection'} = 'close';            
         }
         $headtext .=   "Content-Type: $mime\r\n";
         $headtext .=   'Content-Disposition: inline; filename="' . $filename . "\"\r\n" if ($filename);
@@ -595,7 +610,9 @@ package HTTP::BS::Server::Client::Request {
             $headtext .= "Accept-Ranges: bytes\r\n";
         }
         #$headtext .=   "Accept-Ranges: none\r\n";
-        $headtext .=   "Connection: keep-alive\r\n";
+        #$headtext .=   "Connection: keep-alive\r\n";
+        $self->{'outheaders'}{'Connection'} //= $self->{'header'}{'Connection'};
+        $self->{'outheaders'}{'Connection'} //= 'keep-alive';
 
         # serialize the outgoing headers
         foreach my $header (keys %{$self->{'outheaders'}}) {
@@ -620,6 +637,7 @@ package HTTP::BS::Server::Client::Request {
         $data .= "Content-Type: $mime\r\n";
         if($self->{'header'}{'Connection'} && ($self->{'header'}{'Connection'} eq 'close')) {
             $data .= "Connection: close\r\n";
+            $self->{'outheaders'}{'Connection'} = 'close';
         }
         my $msg = "403 Forbidden\r\n";
         $data .= "Content-Length: " . length($msg) . "\r\n";
@@ -637,6 +655,7 @@ package HTTP::BS::Server::Client::Request {
         $data .= "Content-Type: $mime\r\n";
         if($self->{'header'}{'Connection'} && ($self->{'header'}{'Connection'} eq 'close')) {
             $data .= "Connection: close\r\n";
+            $self->{'outheaders'}{'Connection'} = 'close';
         }
         my $msg = "404 Not Found\r\n";
         $data .= "Content-Length: " . length($msg) . "\r\n";
@@ -704,7 +723,7 @@ package HTTP::BS::Server::Client::Request {
         my $mime = $client->{'server'}->getMIME($requestfile);
         
          
-        ($fileitem{'length'}, $headtext) = $self->_BuildHeaders($filelength, $mime, basename($requestfile));        
+        ($fileitem{'length'}, $headtext) = $self->_BuildHeaders($filelength, $mime, basename($requestfile), $requestfile);        
         say "fileitem length: " . $fileitem{'length'};
         
         $fileitem{'buf'} = $$headtext;
@@ -885,7 +904,8 @@ package HTTP::BS::Server::Client {
     sub new {
         my ($class, $sock, $server) = @_;
         $sock->blocking(0);
-        my %self = ('sock' => $sock, 'server' => $server, 'time' => clock_gettime(CLOCK_MONOTONIC), 'inbuf' => '');        
+        my %self = ('sock' => $sock, 'server' => $server, 'time' => clock_gettime(CLOCK_MONOTONIC), 'inbuf' => '');
+        $self{'outheaders'}{'X-MHFS-CONN-ID'} = $self{'time'} * rand(); # BAD UID       
         return bless \%self, $class;
     }
 
@@ -902,8 +922,9 @@ package HTTP::BS::Server::Client {
         my $tempdata;
         my $success = defined($handle->recv($tempdata, $maxlength-length($client->{'inbuf'})));
         if($success) {
-            if(length($tempdata) == 0) {
-                # read 0 bytes, so put this client to rest for a little while                
+            if(length($tempdata) == 0) {                
+                say 'client read 0 bytes, client read closed';
+                return undef;                
                 $client->SetEvents($EventLoop::Poll::ALWAYSMASK );
                 weaken($client);                
                 $client->{'server'}{'evp'}->add_timer(0.1, 0, sub {
@@ -917,19 +938,17 @@ package HTTP::BS::Server::Client {
             $client->{'inbuf'} .= $tempdata;
         }
         else {
-            print ("RECV errno $!\n");
+            print ("RECV errno: $!\n");
             if(! $!{EAGAIN}) {                
                 goto ON_ERROR;
-            }
-            say "EAGAIN";
+            }            
         }
         my $pos = index($client->{'inbuf'}, "\r\n\r\n");
         if($pos != -1) {
             $client->SetEvents($EventLoop::Poll::ALWAYSMASK );  
             my $recvdata = substr $client->{'inbuf'}, 0, $pos+4;
-            $client->{'inbuf'} = substr $client->{'inbuf'}, $pos+4;
-            my $bodylen = length($client->{'inbuf'});
-            say "body - $bodylen bytes: " . $client->{'inbuf'} if($bodylen > 0);
+            # store the rest of the data in-case there's a body or pipelined request
+            $client->{'inbuf'} = substr $client->{'inbuf'}, $pos+4;            
             $client->{'request'} = HTTP::BS::Server::Client::Request->new($client, \$recvdata);            
             return $client->onWriteReady;            
         }
@@ -957,29 +976,11 @@ package HTTP::BS::Server::Client {
                 return undef;
             }            
             elsif($tsrRet ne '') {
-                if($client->{'request'}{'header'}{'Connection'} && ($client->{'request'}{'header'}{'Connection'} eq 'close')) {
+                if($client->{'request'}{'outheaders'}{'Connection'} && ($client->{'request'}{'outheaders'}{'Connection'} eq 'close')) {
                     say "Connection close header set closing conn";
                     say "-------------------------------------------------";                               
                     return undef;              
-                }
-                elsif($client->{'request'}{'header'}{'Infinite'} && ($client->{'request'}{'header'}{'Infinite'} eq 'true')) {
-                    say "Infinite, not moving on";
-                    $client->SetEvents($EventLoop::Poll::ALWAYSMASK ); 
-                    #setsockopt($client->{'sock'}, IPPROTO_TCP, TCP_NODELAY, 1);
-                    #return undef;                    
-                    return 1;
-                }
-                elsif($client->{'request'}{'header'}{'Infinite'}) {
-                    say "debugging buffering";
-                    $client->SetEvents($EventLoop::Poll::ALWAYSMASK ); 
-                    #$client->{'sock'}->autoflush(1);
-                    #say "-------------------------------------------------";                               
-                    #return undef;
-                    #$client->{'sock'}->flush();
-                    #setsockopt($client->{'sock'}, IPPROTO_TCP, TCP_NODELAY, 1);
-                    #$| = 1;                    
-                    return 1;                    
-                }
+                }                
                 $client->SetEvents(POLLIN | $EventLoop::Poll::ALWAYSMASK );
                 $client->onReadReady;
             }            
