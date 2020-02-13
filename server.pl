@@ -559,46 +559,60 @@ package HTTP::BS::Server::Client::Request {
         my $start =  $self->{'header'}{'_RangeStart'};                 
         my $end =  $self->{'header'}{'_RangeEnd'}; 
         my $retlength;
-        my $headtext;   
-        my $cend =  $datalength - 1;    
+        my $headtext;             
+        my $code;
         my $is_partial = ( defined $start);
-        if(! defined $start) {
-            $start = 0;    
-        }
-        $retlength = $datalength;
-        say "datalength: $datalength";
-        # BAD
-        if($datalength == 99999999999) {
+        $start //= 0;
+        if(! defined $datalength) {
+            $retlength = 99999999999;
             $datalength = '*';
             if($is_partial && (!$end)) {
                 if($start == 0) {
-                    #$is_partial = 0;
+                    $is_partial = 0;
                 }
                 else {
                     #416 this
-                    say "should 416";
+                    say "should 416, can't do range request without knowing size";
+                    $code = 416;
+                    $self->{'outheaders'}{'Content-Range'} = "bytes */*";
                 }
-                #$end = (-s $fullpath) - 1;
-            }                    
-        }
-        if (! $is_partial) {
-            $headtext = "HTTP/1.1 200 OK\r\n";
+            }
         }
         else {
-            say "end: $end" if(defined($end));
-            $cend = $end if(defined($end) && $end ne '');
-            if($cend <= $start)
-            {
-                say "range messed up";
-            }
-            $headtext = "HTTP/1.1 206 Partial Content\r\n"; 
-            $retlength = $cend+1;        
-            say "cend: $cend";
-            $headtext .= "Content-Range: bytes $start-$cend/$datalength\r\n";
+            # set the end if not set
+            $end ||= $datalength - 1;
+            say "datalength: $datalength";    
         }
-        if(($datalength ne '*') || (defined($end) && $end ne '')) {
-            my $contentlength = $cend - $start + 1;
-            $headtext .= "Content-Length: $contentlength\r\n";
+
+        my %lookup = (
+            200 => "HTTP/1.1 200 OK\r\n",
+            206 => "HTTP/1.1 206 Partial Content\r\n",
+            301 => "HTTP/1.1 301 Moved Permanently\r\n",
+            307 => "HTTP/1.1 307 Temporary Redirect\r\n",
+            403 => "HTTP/1.1 403 Forbidden\r\n",
+            404 => "HTTP/1.1 404 File Not Found\r\n",
+            416 => "HTTP/1.1 416 Range Not Satisfiable\r\n",
+        );
+        if(!$code) {
+            if(!$is_partial) {
+                $code = 200;
+            }
+            elsif($end <= $start){
+                say "range messed up";
+                $code = 403;
+            }
+            else {
+                $code = 206;
+                $self->{'outheaders'}{'Content-Range'} = "bytes $start-$end/$datalength";
+            }
+        }
+        $headtext = $lookup{$code} || $lookup{403};      
+
+        if($end) {
+            say "end: $end"; 
+            $retlength = $end+1;
+            my $contentlength = $end - $start + 1;
+            $headtext .= "Content-Length: $contentlength\r\n";            
         }
         else {
             # chunked here?
@@ -609,8 +623,10 @@ package HTTP::BS::Server::Client::Request {
         if($datalength ne '*') {
             $headtext .= "Accept-Ranges: bytes\r\n";
         }
-        #$headtext .=   "Accept-Ranges: none\r\n";
-        #$headtext .=   "Connection: keep-alive\r\n";
+        else {
+            # range requests without an end specified will fail so dont claim to support them
+            $headtext .= "Accept-Ranges: none\r\n";
+        }        
         $self->{'outheaders'}{'Connection'} //= $self->{'header'}{'Connection'};
         $self->{'outheaders'}{'Connection'} //= 'keep-alive';
 
@@ -697,8 +713,7 @@ package HTTP::BS::Server::Client::Request {
             return;
         }   
         
-        my %fileitem;
-        my $filelength = LOCK_GET_LOCKDATA($requestfile);    
+        my %fileitem = ('requestfile' => $requestfile);          
         if(! open(my $FH, "<", $requestfile)) {
             $self->Send404;
             return;
@@ -706,22 +721,28 @@ package HTTP::BS::Server::Client::Request {
         else {
             binmode($FH);
             seek($FH, $start // 0, 0);   
-            $fileitem{'fh'} = $FH;
-            $fileitem{'requestfile'} = $requestfile;
-            if(! defined $filelength) {
-                $filelength = stat($FH)->size;
-            }
-            # if tailing file, force return a partial response #invalid comment
-            elsif(defined($start) && !$end && ($filelength == 99999999999)) {
-                say "setting end";
-                $end = (stat($FH)->size - 1);
-            }
+            $fileitem{'fh'} = $FH;            
         }
+        # Get the file size if possible
+        my $filelength = LOCK_GET_LOCKDATA($requestfile);
+        if(defined $filelength) {
+            # 99999999999 means we don't know yet
+            if($filelength == 99999999999) {
+                $filelength = undef;
+                if(defined($start) && !$end) {
+                    #TODO is this better than not allowing range requests
+                    #say "setting end";
+                    #$self->{'header'}{'_RangeEnd'} = (stat($FH)->size - 1);
+                }
+            }
+        }    
+        else {
+            $filelength = stat($fileitem{'fh'})->size;
+        }        
          
         # build the header based on whether we are sending a full response or range request
         my $headtext;    
-        my $mime = $client->{'server'}->getMIME($requestfile);
-        
+        my $mime = $client->{'server'}->getMIME($requestfile);        
          
         ($fileitem{'length'}, $headtext) = $self->_BuildHeaders($filelength, $mime, basename($requestfile), $requestfile);        
         say "fileitem length: " . $fileitem{'length'};
@@ -826,15 +847,6 @@ package HTTP::BS::Server::Client::Request {
         ($fileitem{'length'}, $headtext) = $self->_BuildHeaders($bytesize, $mime);    
         $fileitem{'buf'} = $$headtext . $buf;
         $self->_SendResponse(\%fileitem);
-    }
-    
-    sub StartSendingBuf {
-        my ($self, $buf, $mime) = @_;
-        my $headtext;   
-        my %fileitem;        
-        ($fileitem{'length'}, $headtext) = $self->_BuildHeaders(99999999999, $mime);    
-        $fileitem{'buf'} = $$headtext . $buf;
-        $self->_SendResponse(\%fileitem);   
     }
     
     sub SendAsTar {
