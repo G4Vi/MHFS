@@ -298,6 +298,7 @@ package HTTP::BS::Server::Util {
     use File::Find;
     use Cwd qw(abs_path getcwd);
     our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'shell_stdout', 'shell_escape', 'ssh_stdout', 'pid_running');
+    # single threaded locks
     sub LOCK_GET_LOCKDATA {
         my ($filename) = @_;
         my $lockname = "$filename.lock";    
@@ -322,9 +323,7 @@ package HTTP::BS::Server::Util {
     sub UNLOCK_WRITE {
         my ($filename) = @_;    
         my $lockname = "$filename.lock";
-        if (-e $lockname) {
-            unlink($lockname);
-        }
+        unlink($lockname);
     } 
 
     sub write_file {
@@ -2698,7 +2697,10 @@ sub get_video {
     }
     # otherwise create it
     mkdir($video{'out_location'});
-    say "FAILED to LOCK" if(($VIDEOFORMATS{$fmt}{'lock'} == 1) && (LOCK_WRITE($video{'out_filepath'}) != 1));
+    if(($VIDEOFORMATS{$fmt}{'lock'} == 1) && (LOCK_WRITE($video{'out_filepath'}) != 1)) {
+        say "FAILED to LOCK";
+        # we should do something here 
+    }
     if($video{'plugin'}) {
         $video{'plugin'}->downloadAndServe($request, \%video);
         return 1;
