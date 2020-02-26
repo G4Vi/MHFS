@@ -962,7 +962,8 @@ package BS::Socket {
         my $willwrite;
         while($willwrite = $self->{'on_write_ready'}->($self)) {          
             my $sret;
-            if(!defined($sret = $self->{'sock'}->send($self->{'outbuf'}, MSG_DONTWAIT))) {
+            #if(!defined($sret = $self->{'sock'}->send($self->{'outbuf'}, MSG_DONTWAIT))) {
+            if(!defined($sret = send($self->{'sock'}, $self->{'outbuf'}, MSG_DONTWAIT))) {
                 print ("RECV errno: $!\n");
                 if(! $!{EAGAIN}) {                
                     say "ON_ERROR-------------------------------------------------";
@@ -1298,13 +1299,14 @@ package HTTP::BS::Server::Client {
         my $total = $n;
         my $sret;        
         # croaks when peer is no longer connected
-        $sret = eval { return $csock->send($data, MSG_DONTWAIT); };
-        if ($@) {
-            warn "func blew up: $@";
-            print "send errno $!\n";
-            return undef;       
-        }
-        #$sret = $csock->send($data, MSG_DONTWAIT);        
+        #$sret = eval { return $csock->send($data, MSG_DONTWAIT); };
+        #if ($@) {
+        #    warn "func blew up: $@";
+        #    print "send errno $!\n";
+        #    return undef;       
+        #}
+        #$sret = $csock->send($data, MSG_DONTWAIT);
+        $sret = send($csock, $data, MSG_DONTWAIT);       
         #if(! defined($sret = $csock->send($data, MSG_DONTWAIT))) { 
         if(! defined($sret)) {           
             if($!{ECONNRESET}) {
@@ -2459,7 +2461,7 @@ package MusicLibrary {
         }
 
         $self->{'timers'} = [
-            [ 5, 20, sub {
+            [ 5, 60, sub {
                 if($settings->{'ISCHILD'}) {
                     say "removing timer ISCHILD";
                     return undef;
