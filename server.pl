@@ -27,6 +27,11 @@ package EventLoop::Poll {
         $self->{'poll'}->mask($handle, $events);
         $self->{'fh_map'}{$handle} = $obj;    
     }
+
+    sub getEvents {
+        my ($self, $handle) = @_;
+        return $self->{'poll'}->mask($handle);
+    }
     
     sub remove {
         my ($self, $handle) = @_;
@@ -188,7 +193,8 @@ package HTTP::BS::Server {
             foreach my $route (@{$plugin->{'routes'}}) {
                 say 'plugin(' . ref($plugin) . '): adding route ' . $route->[0];
                 push @{$self{'routes'}}, $route;                
-            }             
+            }
+            $plugin->{'server'} = \%self;             
         }            
         
         $evp->run(0.1);
@@ -896,6 +902,206 @@ package HTTP::BS::Server::Client::Request {
     1;
 }
 
+package BS::Socket {
+    use strict; use warnings;
+    use feature 'say';
+    use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
+    use IO::Socket::INET;
+    use IO::Poll qw(POLLIN POLLOUT POLLHUP);
+    use Scalar::Util qw(looks_like_number weaken);
+
+    sub new {
+        my ($class, $sock, $server, $handlers) = @_;
+        $sock->blocking(0);
+        my %self = ('sock' => $sock, 'time' => clock_gettime(CLOCK_MONOTONIC), 'inbuf' => '', 'on_read_ready' => $handlers->{'on_read_ready'}, 'on_write_ready' => $handlers->{'on_write_ready'}); 
+        $self{'server'} = $server; #weaken($server);         
+        return bless \%self, $class;
+    }
+
+    sub SetEvents {
+        my ($self, $events) = @_;
+        $self->{'server'}{'evp'}->set($self->{'sock'}, $self, $events);            
+    }
+
+    sub GetEvents {
+        my ($self) = @_;
+        $self->{'server'}{'evp'}->getEvents($self->{'sock'});
+    }
+
+    sub unpoll {
+        my ($self) = @_;
+        $self->{'server'}{'evp'}->remove($self->{'sock'});
+        say "poll has " . scalar ( $self->{'server'}{'evp'}{'poll'}->handles) . " handles";              
+    } 
+
+    sub onReadReady {        
+        my ($self) = @_;
+        my $handle = $self->{'sock'};               
+        my $maxlength = 65536;       
+        my $tempdata;
+        while(defined($handle->recv($tempdata, $maxlength-length($self->{'inbuf'})))) {
+            if(length($tempdata) == 0) {                
+                say 'client read 0 bytes, client read closed';
+                return undef;
+            }
+            $self->{'inbuf'} .= $tempdata;
+            my $res = $self->{'on_read_ready'}->($self);
+            next if($res);
+            return $res;
+        }
+        print ("RECV errno: $!\n");
+        if(! $!{EAGAIN}) {                
+            say "ON_ERROR-------------------------------------------------";
+            return undef;          
+        }
+        return '';        
+    }
+
+    sub onWriteReady {
+        my ($self) = @_;
+        my $willwrite;
+        while($willwrite = $self->{'on_write_ready'}->($self)) {          
+            my $sret;
+            if(!defined($sret = $self->{'sock'}->send($self->{'outbuf'}, MSG_DONTWAIT))) {
+                print ("RECV errno: $!\n");
+                if(! $!{EAGAIN}) {                
+                    say "ON_ERROR-------------------------------------------------";
+                    return undef;          
+                }
+                return '';
+            }
+            else {
+                use bytes;
+                my $n = length($self->{'outbuf'});
+                # partial write
+                if($sret != $n) {
+                    my $total = $n;
+                    $self->{'outbuf'} = substr($self->{'outbuf'}, $sret);
+                    $n = $n - $sret;
+                    say "wrote $sret bytes out of $total, $n bytes to go";
+                    return '';
+                }
+                # full write
+                else {
+                    $self->{'outbuf'} = undef;
+                }                
+            }
+        }
+        return $willwrite;
+    }
+
+    sub onHangUp {
+        my ($client) = @_;        
+        return undef;    
+    }
+
+    sub DESTROY {
+        my $self = shift;
+        say "BS::Socket destructor called";
+        if($self->{'sock'}) {
+            #shutdown($self->{'sock'}, 2);
+            close($self->{'sock'});  
+        }
+    } 
+
+    1;
+}
+
+package BS::Socket::HTTP::Client {
+    use strict; use warnings;
+    use feature 'say';
+    use IO::Poll qw(POLLIN POLLOUT POLLHUP);
+    use Scalar::Util qw(looks_like_number weaken);
+    use Data::Dumper;
+    use Devel::Peek;
+    sub new {
+        my ($class, $server, $iosocket_settings, $requests) = @_;
+        $iosocket_settings->{'Proto'} ||= 'tcp';        
+        $iosocket_settings->{'Proto'} eq 'tcp' or die('unknown proto ' . $iosocket_settings->{'Proto'});
+        my $sock = IO::Socket::INET->new(%{$iosocket_settings});
+        $sock or die("failed to create socket");
+        my $sdata;
+        my %self = ( 'bs_socket' => BS::Socket->new($sock, $server, {
+            'on_write_ready' => sub {
+                my ($bssocket) = @_;
+                if($bssocket->{'outbuf'}) {
+                    return 1;
+                }
+                $bssocket->SetEvents($bssocket->GetEvents() & (~(POLLOUT)));
+                return '';
+            },
+            'on_read_ready' => sub {
+                my ($bssocket) = @_;
+                $sdata .= $bssocket->{'inbuf'};
+                $bssocket->{'inbuf'} = '';
+                while(1){
+                    my $request = $requests->[0];
+                    if(! $request) {
+                        $bssocket->SetEvents($bssocket->GetEvents() & (~(POLLIN)));
+                        return undef;
+                        #$bssocket->unpoll();                       
+                        #return ''; 
+                    } 
+                    return 1 if(! $sdata);                   
+                    my $contentlength;
+                    if(! $request->[2]) {
+                        print "handling request " . $request->[0];
+                        $request->[2] = {'touched' => 1};                   
+                    }
+                    else {
+                        $contentlength = $request->[2]{'contentlength'};
+                    }                                                         
+                    if(! $contentlength) {                        
+                        my $headerend = index($sdata, "\r\n\r\n");
+                        next if($headerend == -1);
+                        if($sdata =~ /Content\-Length:\s+(\d+)/) {
+                            $contentlength = $1;
+                            say "contentlength $contentlength";
+                            $request->[2]{'contentlength'} = $contentlength;                                                         
+                        }
+                        else {
+                            say "error no contentlength in header";
+                            return undef;
+                        }
+                        $sdata = substr $sdata, $headerend + 4;
+                    }
+                    my $dlength = length($sdata);                
+                    if($dlength >= $contentlength) {
+                        say 'data length ' . $dlength;
+                        my $data;
+                        if($dlength > $contentlength) {
+                            $data = substr($sdata, 0, $contentlength);
+                            $sdata = substr($sdata, $contentlength);
+                            $dlength = length($data)
+                        }
+                        else {
+                            $data = $sdata;
+                            $sdata = undef;
+                        }                        
+                        say 'processing ' . $dlength;
+                        $request->[1]->($data, $dlength);                                            
+                        shift @{$requests};
+                        next;                        
+                    }
+                    return 1;                
+                }               
+            }
+        }));
+        my $outdata;
+        foreach my $request (@{$requests}) {
+            #$request->[0] =~ /^http:\/\/(.+)$/
+            say "req: " .$request->[0];
+            $outdata .= $request->[0];
+        }
+        $self{'bs_socket'}{'outbuf'} = $outdata;
+        $self{'bs_socket'}->SetEvents(POLLOUT | POLLIN | $EventLoop::Poll::ALWAYSMASK);      
+               
+        return bless \%self, $class;
+    }
+
+    1;
+} 
+
 package HTTP::BS::Server::Client {
     use strict; use warnings;
     use feature 'say';
@@ -1090,8 +1296,17 @@ package HTTP::BS::Server::Client {
     sub TrySendItem {
         my ($csock, $data, $n) = @_;
         my $total = $n;
-        my $sret;
-        if(! defined($sret = $csock->send($data, MSG_DONTWAIT))) {                
+        my $sret;        
+        # croaks when peer is no longer connected
+        $sret = eval { return $csock->send($data, MSG_DONTWAIT); };
+        if ($@) {
+            warn "func blew up: $@";
+            print "send errno $!\n";
+            return undef;       
+        }
+        #$sret = $csock->send($data, MSG_DONTWAIT);        
+        #if(! defined($sret = $csock->send($data, MSG_DONTWAIT))) { 
+        if(! defined($sret)) {           
             if($!{ECONNRESET}) {
                 print "ECONNRESET\n";
                 return undef;
@@ -1673,7 +1888,8 @@ package MusicLibrary {
     use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
     use Scalar::Util qw(looks_like_number weaken);
     use POSIX qw/ceil/;
-    
+    use Storable qw( freeze thaw);
+
     sub BuildLibrary {
         my ($path) = @_;        
         my $statinfo = stat($path);
@@ -2129,7 +2345,178 @@ package MusicLibrary {
             [ '/music_dl', sub {
                 my ($request) = @_;
                 return $self->SendFromLibrary($request);
+            }],
+            [ '/music.storable', sub {
+                my ($request) = @_;
+                $self->BuildLibraries($settings->{'MUSICLIBRARY'}{'sources'});
+                my $scopy =  $self->{'sources'};
+                foreach my $source (@{$scopy}) {
+                    $source->{'SendFile'} = undef;
+                }
+                $request->SendLocalBuf(freeze($scopy), 'application/octet-stream');
             }], 
+        ];
+
+        # block?
+        sub html_request {
+            my ($data, $handler, $sock) = @_;
+            $sock ||= IO::Socket::INET->new(PeerHost => $settings->{'HOST'}, PeerPort => $settings->{'PORT'}+1, Proto => 'tcp');
+            $sock or die;
+            print $sock $data; #\r\nConnection: close
+            #$evp->set($out, $self{'fd'}{'stdout'}, POLLIN | $EventLoop::Poll::ALWAYSMASK);   
+            my ($mdata, $temp, $contentlength);
+            while((defined $sock->recv($temp, 10000000)) || ($!{EAGAIN})) {
+                $mdata .= $temp;
+                if(! $contentlength) {                        
+                    my $headerend = index($mdata, "\r\n\r\n");
+                    next if($headerend == -1);
+                    if($mdata =~ /Content\-Length:\s+(\d+)/) {
+                        $contentlength = $1;
+                        say "contentlength $contentlength";                                                         
+                    }
+                    else {
+                        say "error no contentlength in header";
+                        last;
+                    }
+                    $mdata = substr $mdata, $headerend + 4;
+                }
+                my $dlength = length($mdata);
+                
+                if($dlength == $contentlength) {
+                    say 'data length ' . $dlength;
+                    $handler->($mdata, $sock, $dlength);
+                    return $sock;
+                    last;
+                }
+                elsif($dlength > $contentlength) {
+                    say 'data length ' . $dlength;
+                    say 'dlength is wrong';
+                    last;
+                }                  
+            }
+        }
+
+        sub recvrequests {
+            my($sock, $requests) = @_;
+            my ($mdata);
+            foreach my $request (@{$requests}) {
+                say "handling req: " .$request->[0];
+                my ($contentlength, $temp);                      
+                while((defined $sock->recv($temp, 10000000)) || ($!{EAGAIN})) {
+                    $mdata .= $temp;
+                    if(! $contentlength) {                        
+                        my $headerend = index($mdata, "\r\n\r\n");
+                        next if($headerend == -1);
+                        if($mdata =~ /Content\-Length:\s+(\d+)/) {
+                            $contentlength = $1;
+                            say "contentlength $contentlength";                                                         
+                        }
+                        else {
+                            say "error no contentlength in header";
+                            return undef;
+                        }
+                        $mdata = substr $mdata, $headerend + 4;
+                    }
+                    my $dlength = length($mdata);
+                    
+                    if($dlength >= $contentlength) {
+                        say 'data length ' . $dlength;
+                        my $data;
+                        if($dlength > $contentlength) {
+                            $data = substr($mdata, 0, $contentlength);
+                            $mdata = substr($mdata, $contentlength);
+                            $dlength = length($data)
+                        }
+                        else {
+                            $data = $mdata;
+                            $mdata = undef;
+                        }                        
+                        say 'processing ' . $dlength;
+                        $request->[1]->($data, $sock, $dlength);                                            
+                        last;
+                    }                                     
+                }
+            }
+            if($mdata) {
+                say 'wrong extra data ' . length($mdata);
+                return undef;
+            }
+            return $sock;
+        }
+
+        sub http_pipeline {
+            my ($requests, $sock) = @_;
+            $sock ||= IO::Socket::INET->new(PeerHost => $settings->{'HOST'}, PeerPort => $settings->{'PORT'}+1, Proto => 'tcp');
+            $sock or die;
+            my $outdata;
+            foreach my $request (@{$requests}) {
+                #$request->[0] =~ /^http:\/\/(.+)$/
+                say "req: " .$request->[0];
+                $outdata .= $request->[0];
+            }
+            print $sock $outdata;
+            return recvrequests($sock, $requests);           
+        }
+
+        $self->{'timers'} = [
+            [ 5, 20, sub {
+                if($settings->{'ISCHILD'}) {
+                    say "removing timer ISCHILD";
+                    return undef;
+                }
+                say "refresh library timer";
+                
+
+                BS::Socket::HTTP::Client->new($self->{'server'}, {PeerHost => $settings->{'HOST'}, PeerPort => $settings->{'PORT'}+1, Proto => 'tcp'}, 
+                #http_pipeline(
+                    [
+                    [
+                        "GET /stream/music.storable HTTP/1.1\r\nHost: " . $settings->{'DOMAIN'} . "\r\n\r\n", sub {
+                        my ($data, $sock) = @_;
+                        my $temp = thaw($data);
+                        foreach my $source (@{$self->{'sources'}}) {
+                            foreach my $tsource(@{$temp}) {
+                                if(($source->{'type'} eq $tsource->{'type'}) && ($source->{'folder'} eq $tsource->{'folder'}) && 
+                                $tsource->{'lib'}) {
+                                    say "updating library " . $source->{'folder'};
+                                    $source->{'lib'} = $tsource->{'lib'};
+                                }
+                            }
+                        }
+                        }
+                    ],
+                    [
+                        "GET /stream/music HTTP/1.1\r\nHost: " . $settings->{'DOMAIN'} . "\r\n\r\n", sub {
+                        my ($data) = @_;
+                        say "updating html";
+                        $self->{'html_gapless'} = $data;
+                        }
+                    ],
+                ]);
+
+
+                #my $sock = html_request("GET /stream/music.storable HTTP/1.1\r\nHost: " . $settings->{'DOMAIN'} . "\r\n\r\n", sub {
+                #    my ($data, $sock) = @_;
+                #    my $temp = thaw($data);
+                #    foreach my $source (@{$self->{'sources'}}) {
+                #        foreach my $tsource(@{$temp}) {
+                #            if(($source->{'type'} eq $tsource->{'type'}) && ($source->{'folder'} eq $tsource->{'folder'}) && 
+                #            $tsource->{'lib'}) {
+                #                say "updating library " . $source->{'folder'};
+                #                $source->{'lib'} = $tsource->{'lib'};
+                #            }
+                #        }
+                #    }
+                #    return html_request("GET /stream/music HTTP/1.1\r\nHost: " . $settings->{'DOMAIN'} . "\r\n\r\n", sub {
+                #        my ($data) = @_;
+                #        say "updating html";
+                #        $self->{'html_gapless'} = $data;
+                #    }, $sock);
+                #});          
+                
+                say "____________________";
+                return 1;
+            }],
         ];
         
         return $self;
@@ -2633,7 +3020,12 @@ my @routes = (
     }
 );
 
-# finally start the server        
+# finally start the server
+if(fork() == 0) {
+    $SETTINGS->{'PORT'} = $SETTINGS->{'PORT'} + 1;
+    $SETTINGS->{'ISCHILD'} = 1;
+}
+    
 my $server = HTTP::BS::Server->new($SETTINGS, \@routes, \@plugins);
 
 # really acquire media file (with search) and convert
