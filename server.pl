@@ -2507,6 +2507,7 @@ package MusicLibrary {
                     ["/music", sub {
                     }, $self->{'html_gapless'}]
                 ]);
+                return 1;
             }],
         ];
     }
