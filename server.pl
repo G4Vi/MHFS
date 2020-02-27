@@ -94,7 +94,7 @@ package EventLoop::Poll {
                     my $obj = $self->{'fh_map'}{$handle};                    
 
                     if($revents & POLLIN) { 
-                        #say "readyReady";                                                                  
+                        #say "read Ready " .$$;                                                                  
                         if(! defined($obj->onReadReady)) {
                             $self->remove($handle);
                             say "poll has " . scalar ( $self->{'poll'}->handles) . " handles";  
@@ -181,7 +181,20 @@ package HTTP::BS::Server {
 
         $evp->set($sock, \%self, POLLIN);
         # load the plugins        
-        foreach my $plugin (@{$plugins}) {            
+        foreach my $plugin (@{$plugins}) {
+            if($settings->{'ISCHILD'}) {
+                if(! $plugin->can('childnew')) {
+                    say 'plugin(' . ref($plugin) . '): cant childnew';
+                    $plugin->{'timers'} = undef;
+                    $plugin->{'uploader'} = undef;
+                    $plugin->{'routes'} = undef;                
+                }
+                else {
+                    $plugin->childnew;
+                }                
+            }
+
+        
             foreach my $timer (@{$plugin->{'timers'}}) {
                 say 'plugin(' . ref($plugin) . '): adding timer';                              
                 $self{'evp'}->add_timer(@{$timer});                                                
@@ -949,7 +962,7 @@ package BS::Socket {
             next if($res);
             return $res;
         }
-        print ("RECV errno: $!\n");
+        print ("onReadReady RECV errno: $!\n");
         if(! $!{EAGAIN}) {                
             say "ON_ERROR-------------------------------------------------";
             return undef;          
@@ -2215,33 +2228,17 @@ package MusicLibrary {
    
 
     sub BuildLibraries {
-        my ($self, $sources) = @_;
+        my ($self) = @_;
         my @wholeLibrary;
-        $self->{'sources'} = [];
-        foreach my $source (@{$sources}) {
+       
+        foreach my $source (@{$self->{'sources'}}) {
             my $lib;
             my $folder = quotemeta $source->{'folder'};
             if($source->{'type'} eq 'local') {
-                $lib = BuildLibrary($source->{'folder'});
-                $source->{'SendFile'} //= sub   {
-                    my ($request, $file) = @_;
-                    return undef if(! -e $file);
-                    #return undef if(-d $file); #we can't handle directories right now
-                    if( ! -d $file) {
-                        SendLocalTrack($request, $file);
-                    }
-                    else {
-                        $request->SendAsTar($file);
-                    }
-                    return 1;
-                };      
+                $lib = BuildLibrary($source->{'folder'});                    
             }
             elsif($source->{'type'} eq 'ssh') {
-                $lib = $self->BuildRemoteLibrary($source);
-                $source->{'SendFile'} //= sub {
-                    my ($request, $file, $node) = @_;               
-                    return $request->SendFromSSH($source, $file, $node);
-                };
+                $lib = $self->BuildRemoteLibrary($source);               
             }
             elsif($source->{'type'} eq 'mhfs') {
                 $source->{'type'} = 'ssh';
@@ -2256,14 +2253,9 @@ package MusicLibrary {
                         $source->{'httpport'} //= 8000;
                     }                
                 }            
-                say "MHFS host at " . $source->{'httphost'} . ':' . $source->{'httpport'} if($source->{'httphost'});
-                $source->{'SendFile'} //= sub {
-                my ($request, $file, $node) = @_;
-                    return $request->Proxy($source, $node);
-                };
+                say "MHFS host at " . $source->{'httphost'} . ':' . $source->{'httpport'} if($source->{'httphost'});                
             }
-            if($lib) {
-                push @{$self->{'sources'}}, $source;
+            if($lib) {                
                 $source->{'lib'} = $lib;
                 OUTER: foreach my $item (@{$lib->[2]}) {
                     foreach my $already (@wholeLibrary) {
@@ -2274,6 +2266,7 @@ package MusicLibrary {
             }
             else {
                 $source->{'lib'} = undef;
+                die "invalid source: " . $source->{'type'};
             }
         }
         $self->{'library'} = \@wholeLibrary;
@@ -2295,6 +2288,29 @@ package MusicLibrary {
         }
         return $lib;
     }
+    
+    # Define source types here
+    my %sendFiles = (
+        'local' => sub {
+            my ($request, $file) = @_;
+            return undef if(! -e $file);            
+            if( ! -d $file) {
+                SendLocalTrack($request, $file);
+            }
+            else {
+                $request->SendAsTar($file);
+            }
+            return 1;       
+        },
+        'mhfs' => sub {
+            my ($request, $file, $node, $source) = @_;
+            return $request->Proxy($source, $node);
+        },
+        'ssh' => sub {
+            my ($request, $file, $node, $source) = @_;               
+            return $request->SendFromSSH($source, $file, $node);       
+        },   
+    );
 
     sub SendFromLibrary {
         my ($self, $request) = @_;
@@ -2302,8 +2318,8 @@ package MusicLibrary {
             my $node = FindInLibrary($source->{'lib'}, $request->{'qs'}{'name'});
             next if ! $node;
 
-            my $tfile = $source->{'folder'} . '/' . $request->{'qs'}{'name'};
-            if($source->{'SendFile'}->($request, $tfile, $node)) {
+            my $tfile = $source->{'folder'} . '/' . $request->{'qs'}{'name'};            
+            if($source->{'SendFile'}->($request, $tfile, $node, $source)) {
                 return 1;
             } 
         }
@@ -2312,13 +2328,32 @@ package MusicLibrary {
         $request->Send404;
     }
     
+    sub childnew {
+        my ($self) = @_;
+        push (@{$self->{'routes'}}, [ '/music.storable', sub {
+                my ($request) = @_;
+                $self->BuildLibraries();
+                my @mlibs;
+                foreach my $source (@{$self->{'sources'}}) {
+                    push @mlibs, $source->{'lib'};                
+                }                
+                $request->SendLocalBuf(freeze(\@mlibs), 'application/octet-stream');
+            }]);
+        $self->{'timers'} = undef;    
+    }
+    
     sub new {
         my ($class, $settings) = @_;
         my $self =  {'settings' => $settings};
         bless $self, $class;  
         my $pstart = 'plugin(' . ref($self) . '): ';
+        say $pstart . "setting up sources";
+        $self->{'sources'} = $settings->{'MUSICLIBRARY'}{'sources'};        
+        foreach my $source(@{$self->{'sources'}}) {
+            $source->{'SendFile'} //= $sendFiles{$source->{'type'}};        
+        }
         say $pstart . "building music library";
-        $self->BuildLibraries($settings->{'MUSICLIBRARY'}{'sources'});
+        $self->BuildLibraries();
         say $pstart ."done building libraries";
         $self->{'routes'} = [
             [ '/music_legacy', sub {
@@ -2327,7 +2362,7 @@ package MusicLibrary {
             }],
             [ '/music_force', sub {
                 my ($request) = @_;
-                $self->BuildLibraries($settings->{'MUSICLIBRARY'}{'sources'}); 
+                $self->BuildLibraries(); 
                 return $self->SendLibrary($request);
             }],
             [ '/music_gapless', sub {
@@ -2347,118 +2382,8 @@ package MusicLibrary {
             [ '/music_dl', sub {
                 my ($request) = @_;
                 return $self->SendFromLibrary($request);
-            }],
-            [ '/music.storable', sub {
-                my ($request) = @_;
-                $self->BuildLibraries($settings->{'MUSICLIBRARY'}{'sources'});
-                my $scopy =  $self->{'sources'};
-                foreach my $source (@{$scopy}) {
-                    $source->{'SendFile'} = undef;
-                }
-                $request->SendLocalBuf(freeze($scopy), 'application/octet-stream');
-            }], 
+            }],             
         ];
-
-        # block?
-        sub html_request {
-            my ($data, $handler, $sock) = @_;
-            $sock ||= IO::Socket::INET->new(PeerHost => $settings->{'HOST'}, PeerPort => $settings->{'PORT'}+1, Proto => 'tcp');
-            $sock or die;
-            print $sock $data; #\r\nConnection: close
-            #$evp->set($out, $self{'fd'}{'stdout'}, POLLIN | $EventLoop::Poll::ALWAYSMASK);   
-            my ($mdata, $temp, $contentlength);
-            while((defined $sock->recv($temp, 10000000)) || ($!{EAGAIN})) {
-                $mdata .= $temp;
-                if(! $contentlength) {                        
-                    my $headerend = index($mdata, "\r\n\r\n");
-                    next if($headerend == -1);
-                    if($mdata =~ /Content\-Length:\s+(\d+)/) {
-                        $contentlength = $1;
-                        say "contentlength $contentlength";                                                         
-                    }
-                    else {
-                        say "error no contentlength in header";
-                        last;
-                    }
-                    $mdata = substr $mdata, $headerend + 4;
-                }
-                my $dlength = length($mdata);
-                
-                if($dlength == $contentlength) {
-                    say 'data length ' . $dlength;
-                    $handler->($mdata, $sock, $dlength);
-                    return $sock;
-                    last;
-                }
-                elsif($dlength > $contentlength) {
-                    say 'data length ' . $dlength;
-                    say 'dlength is wrong';
-                    last;
-                }                  
-            }
-        }
-
-        sub recvrequests {
-            my($sock, $requests) = @_;
-            my ($mdata);
-            foreach my $request (@{$requests}) {
-                say "handling req: " .$request->[0];
-                my ($contentlength, $temp);                      
-                while((defined $sock->recv($temp, 10000000)) || ($!{EAGAIN})) {
-                    $mdata .= $temp;
-                    if(! $contentlength) {                        
-                        my $headerend = index($mdata, "\r\n\r\n");
-                        next if($headerend == -1);
-                        if($mdata =~ /Content\-Length:\s+(\d+)/) {
-                            $contentlength = $1;
-                            say "contentlength $contentlength";                                                         
-                        }
-                        else {
-                            say "error no contentlength in header";
-                            return undef;
-                        }
-                        $mdata = substr $mdata, $headerend + 4;
-                    }
-                    my $dlength = length($mdata);
-                    
-                    if($dlength >= $contentlength) {
-                        say 'data length ' . $dlength;
-                        my $data;
-                        if($dlength > $contentlength) {
-                            $data = substr($mdata, 0, $contentlength);
-                            $mdata = substr($mdata, $contentlength);
-                            $dlength = length($data)
-                        }
-                        else {
-                            $data = $mdata;
-                            $mdata = undef;
-                        }                        
-                        say 'processing ' . $dlength;
-                        $request->[1]->($data, $sock, $dlength);                                            
-                        last;
-                    }                                     
-                }
-            }
-            if($mdata) {
-                say 'wrong extra data ' . length($mdata);
-                return undef;
-            }
-            return $sock;
-        }
-
-        sub http_pipeline {
-            my ($requests, $sock) = @_;
-            $sock ||= IO::Socket::INET->new(PeerHost => $settings->{'HOST'}, PeerPort => $settings->{'PORT'}+1, Proto => 'tcp');
-            $sock or die;
-            my $outdata;
-            foreach my $request (@{$requests}) {
-                #$request->[0] =~ /^http:\/\/(.+)$/
-                say "req: " .$request->[0];
-                $outdata .= $request->[0];
-            }
-            print $sock $outdata;
-            return recvrequests($sock, $requests);           
-        }
 
         $self->{'timers'} = [
             [ 5, 60, sub {
@@ -2469,22 +2394,21 @@ package MusicLibrary {
                 say "refresh library timer";
                 
 
-                BS::Socket::HTTP::Client->new($self->{'server'}, {PeerHost => $settings->{'HOST'}, PeerPort => $settings->{'PORT'}+1, Proto => 'tcp'}, 
-                #http_pipeline(
-                    [
+                BS::Socket::HTTP::Client->new($self->{'server'}, {PeerHost => $settings->{'HOST'}, PeerPort => $settings->{'PORT'}+1, Proto => 'tcp'}, [
                     [
                         "GET /stream/music.storable HTTP/1.1\r\nHost: " . $settings->{'DOMAIN'} . "\r\n\r\n", sub {
                         my ($data, $sock) = @_;
                         my $temp = thaw($data);
-                        foreach my $source (@{$self->{'sources'}}) {
-                            foreach my $tsource(@{$temp}) {
-                                if(($source->{'type'} eq $tsource->{'type'}) && ($source->{'folder'} eq $tsource->{'folder'}) && 
-                                $tsource->{'lib'}) {
-                                    say "updating library " . $source->{'folder'};
-                                    $source->{'lib'} = $tsource->{'lib'};
-                                }
-                            }
+                        if(scalar(@{$temp}) != scalar(@{$self->{'sources'}})) {
+                            say "incorrect number of sources, not updating library";
+                            return;                            
                         }
+                        
+                        foreach my $source (@{$self->{'sources'}}) {
+                            say "updating library " . $source->{'folder'};
+                            $source->{'lib'} = shift @{$temp};                       
+                        }                       
+                        
                         }
                     ],
                     [
@@ -2494,29 +2418,8 @@ package MusicLibrary {
                         $self->{'html_gapless'} = $data;
                         }
                     ],
-                ]);
-
-
-                #my $sock = html_request("GET /stream/music.storable HTTP/1.1\r\nHost: " . $settings->{'DOMAIN'} . "\r\n\r\n", sub {
-                #    my ($data, $sock) = @_;
-                #    my $temp = thaw($data);
-                #    foreach my $source (@{$self->{'sources'}}) {
-                #        foreach my $tsource(@{$temp}) {
-                #            if(($source->{'type'} eq $tsource->{'type'}) && ($source->{'folder'} eq $tsource->{'folder'}) && 
-                #            $tsource->{'lib'}) {
-                #                say "updating library " . $source->{'folder'};
-                #                $source->{'lib'} = $tsource->{'lib'};
-                #            }
-                #        }
-                #    }
-                #    return html_request("GET /stream/music HTTP/1.1\r\nHost: " . $settings->{'DOMAIN'} . "\r\n\r\n", sub {
-                #        my ($data) = @_;
-                #        say "updating html";
-                #        $self->{'html_gapless'} = $data;
-                #    }, $sock);
-                #});          
-                
-                say "____________________";
+                ]);                
+                say "launched library update";
                 return 1;
             }],
         ];
