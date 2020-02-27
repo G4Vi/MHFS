@@ -316,7 +316,7 @@ package HTTP::BS::Server::Util {
     use Exporter 'import';
     use File::Find;
     use Cwd qw(abs_path getcwd);
-    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'shell_stdout', 'shell_escape', 'ssh_stdout', 'pid_running');
+    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'shell_stdout', 'shell_escape', 'ssh_stdout', 'pid_running', 'escape_html_noquote');
     # single threaded locks
     sub LOCK_GET_LOCKDATA {
         my ($filename) = @_;
@@ -424,6 +424,17 @@ package HTTP::BS::Server::Util {
     sub escape_html {
         my ($string) = @_;
         my %dangerchars = ( '"' => '&quot;', "'" => '&#x27;', '<' => '&lt;', '>' => '&gt;', '/' => '&#x2F;');
+        $string =~ s/&/&amp;/g;
+        foreach my $key(keys %dangerchars) {
+            my $val = $dangerchars{$key};
+            $string =~ s/$key/$val/g;
+        }
+        return \$string;
+    }
+
+    sub escape_html_noquote {
+        my ($string) = @_;
+        my %dangerchars = ('<' => '&lt;', '>' => '&gt;');
         $string =~ s/&/&amp;/g;
         foreach my $key(keys %dangerchars) {
             my $val = $dangerchars{$key};
@@ -543,7 +554,8 @@ package HTTP::BS::Server::Client::Request {
                      }                 
                      
                      #dispatch
-                     if(($method =~ /^HEAD|GET$/i) ) {
+                     if(($method =~ /^HEAD|GET|PUT$/i) ) {
+                         $self{'method'} = $method;
                          $self{'path'} = \%pathStruct;
                          $self{'qs'} = \%qsStruct;
                          $self{'header'} = \%headerStruct;
@@ -897,6 +909,39 @@ package HTTP::BS::Server::Client::Request {
                 });
             },                      
         });
+
+        sub PUTBuf {
+            my ($self, $handler) = @_;
+            if(length($self->{'client'}{'inbuf'}) < $self->{'header'}{'Content-Length'}) {
+                $self->{'client'}->SetEvents(POLLIN | $EventLoop::Poll::ALWAYSMASK ); 
+            }
+            my $sdata;
+            $self->{'client'}{'datahandler'} = sub {
+                my $contentlength = $self->{'header'}{'Content-Length'};
+                $sdata .= $self->{'client'}{'inbuf'};
+                my $dlength = length($sdata);                                       
+                if($dlength >= $contentlength) {
+                    say 'PUTBuf datalength ' . $dlength;
+                    my $data;
+                    if($dlength > $contentlength) {
+                        $data = substr($sdata, 0, $contentlength);
+                        $self->{'client'}{'inbuf'} = substr($sdata, $contentlength);
+                        $dlength = length($data)
+                    }
+                    else {
+                        $data = $sdata;
+                        $self->{'client'}{'inbuf'} = '';
+                    }
+                    $self->{'client'}{'datahandler'} = undef;
+                    $handler->($data);
+                }
+                else {
+                    $self->{'client'}{'inbuf'} = '';
+                }
+                return '';
+            };
+            $self->{'client'}{'datahandler'}->();
+        }
     
     }
 
@@ -1029,9 +1074,112 @@ package BS::Socket::HTTP::Client {
     use Data::Dumper;
     use Devel::Peek;
     sub new {
-        my ($class, $server, $iosocket_settings, $requests) = @_;
+        my ($class, $server, $iosocket_settings, $requests, $rdata) = @_;
+        my $sock = IO::Socket::INET->new(%{$iosocket_settings});
+        $sock or die("failed to create socket");
+        my $sdata;
+        my %self = ( 'bs_socket' => BS::Socket->new($sock, $server, {
+            'on_write_ready' => sub {
+                my ($bssocket) = @_;
+                if($bssocket->{'outbuf'}) {
+                    return 1;
+                }
+                $bssocket->SetEvents($bssocket->GetEvents() & (~(POLLOUT)));
+                return '';
+            },
+            'on_read_ready' => sub {
+                my ($bssocket) = @_;
+                $sdata .= $bssocket->{'inbuf'};
+                $bssocket->{'inbuf'} = '';
+                while(1){
+                    my $request = $requests->[0];
+                    if(! $request) {
+                        $bssocket->SetEvents($bssocket->GetEvents() & (~(POLLIN)));
+                        return undef;
+                        #$bssocket->unpoll();                       
+                        #return ''; 
+                    } 
+                    return 1 if(! $sdata);                   
+                    my $contentlength;
+                    if(! $request->[3]) {
+                        say "handling request " . $request->[0];
+                        $request->[3] = {'touched' => 1};                   
+                    }
+                    else 
+                    {
+                        $contentlength = $request->[3]{'contentlength'};
+                    }                                                         
+                    if(! $contentlength) {                        
+                        my $headerend = index($sdata, "\r\n\r\n");
+                        next if($headerend == -1);
+                        if($sdata =~ /Content\-Length:\s+(\d+)/) {
+                            $contentlength = $1;
+                            say "contentlength $contentlength";
+                            $request->[3]{'contentlength'} = $contentlength;                                                         
+                        }
+                        else {
+                            say "error no contentlength in header";
+                            return undef;
+                        }
+                        $sdata = substr $sdata, $headerend + 4;
+                    }
+                    my $dlength = length($sdata);                
+                    if($dlength >= $contentlength) {
+                        say 'data length ' . $dlength;
+                        my $data;
+                        if($dlength > $contentlength) {
+                            $data = substr($sdata, 0, $contentlength);
+                            $sdata = substr($sdata, $contentlength);
+                            $dlength = length($data)
+                        }
+                        else {
+                            $data = $sdata;
+                            $sdata = undef;
+                        }                        
+                        say 'processing ' . $dlength;
+                        $request->[1]->($data, $dlength);                                            
+                        shift @{$requests};
+                        next;                        
+                    }
+                    return 1;                
+                }               
+            }
+        }));
+        $self{'bs_socket'}{'outbuf'} = $rdata;
+        $self{'bs_socket'}->SetEvents(POLLOUT | POLLIN | $EventLoop::Poll::ALWAYSMASK);      
+               
+        return bless \%self, $class;
+    }
+
+    sub conn_settings {
+        my ($c_url, $iosocket_settings) = @_;
+        $iosocket_settings //= {};
         $iosocket_settings->{'Proto'} ||= 'tcp';        
         $iosocket_settings->{'Proto'} eq 'tcp' or die('unknown proto ' . $iosocket_settings->{'Proto'});
+        ($c_url =~ /^http:\/\/([^\s\:]+)(?::(\d+))?$/) or die  "can't match url";
+        my $host = $1;        
+        $iosocket_settings->{'PeerPort'} //= $2 // 80;
+        $iosocket_settings->{'PeerHost'} //= $host;
+        return ($host, $iosocket_settings);
+    }
+
+    sub put_buf {
+        my ($class, $server, $c_url, $requests, $iosocket_setting) = @_;
+        my ($host, $iosocket_settings) = conn_settings($c_url, $iosocket_setting);
+        my $outdata;
+        foreach my $request (@{$requests}) {            
+            say "PUT ".$request->[0] . ' ('.$host.':'.$iosocket_settings->{'PeerPort'}.')';           
+            $outdata .= 'PUT '.$request->[0]." HTTP/1.1\r\nHost: ". $host.':'.$iosocket_settings->{'PeerPort'}."\r\n";  
+            die 'error is utf8' if(utf8::is_utf8($request->[2]));              
+            $outdata .= 'Content-Length: ' . length($request->[2]) . "\r\n\r\n";
+            $outdata .= $request->[2];
+        }              
+        return $class->new($server, $iosocket_settings, $requests, $outdata);        
+    }
+
+    sub get {
+        my ($class, $server, $c_url, $requests, $iosocket_setting) = @_;       
+        my ($host, $iosocket_settings) = conn_settings($c_url, $iosocket_setting);
         my $sock = IO::Socket::INET->new(%{$iosocket_settings});
         $sock or die("failed to create socket");
         my $sdata;
@@ -1102,10 +1250,9 @@ package BS::Socket::HTTP::Client {
             }
         }));
         my $outdata;
-        foreach my $request (@{$requests}) {
-            #$request->[0] =~ /^http:\/\/(.+)$/
-            say "req: " .$request->[0];
-            $outdata .= $request->[0];
+        foreach my $request (@{$requests}) {            
+            say "GET http://".$host.':'.$iosocket_settings->{'PeerPort'}.$request->[0];            
+            $outdata .= 'GET '.$request->[0]." HTTP/1.1\r\nHost: ". $host.':'.$iosocket_settings->{'PeerPort'}."\r\n\r\n";
         }
         $self{'bs_socket'}{'outbuf'} = $outdata;
         $self{'bs_socket'}->SetEvents(POLLOUT | POLLIN | $EventLoop::Poll::ALWAYSMASK);      
@@ -1152,19 +1299,10 @@ package HTTP::BS::Server::Client {
         my $maxlength = 65536;
         my $tempdata;
         my $success = defined($handle->recv($tempdata, $maxlength-length($client->{'inbuf'})));
-        if($success) {
+        if($success) {            
             if(length($tempdata) == 0) {                
-                say 'client read 0 bytes, client read closed';
-                return undef;                
-                $client->SetEvents($EventLoop::Poll::ALWAYSMASK );
-                weaken($client);                
-                $client->{'server'}{'evp'}->add_timer(0.1, 0, sub {
-                    if(defined $client) {
-                        $client->SetEvents(POLLIN | $EventLoop::Poll::ALWAYSMASK );
-                    }
-                    return undef;
-                });
-                return '';
+                say 'HTTP::BS::Server::Client - read 0 bytes, client read closed';
+                return undef;               
             }
             $client->{'inbuf'} .= $tempdata;
         }
@@ -1173,6 +1311,10 @@ package HTTP::BS::Server::Client {
             if(! $!{EAGAIN}) {                
                 goto ON_ERROR;
             }            
+        }
+        
+        if($client->{'datahandler'} && length($client->{'inbuf'})) {
+            return $client->{'datahandler'}->();
         }
         my $pos = index($client->{'inbuf'}, "\r\n\r\n");
         if($pos != -1) {
@@ -1904,6 +2046,7 @@ package MusicLibrary {
     use Scalar::Util qw(looks_like_number weaken);
     use POSIX qw/ceil/;
     use Storable qw( freeze thaw);
+    use Encode qw(encode_utf8);
 
     sub BuildLibrary {
         my ($path) = @_;        
@@ -1974,7 +2117,8 @@ package MusicLibrary {
         $where //= '';
         my $buf = '';
         my $name_unencoded = decode('UTF-8', $files->[0]);
-        my $name = encode_entities($name_unencoded);        
+        #my $name = encode_entities($name_unencoded);
+        my $name = ${escape_html_noquote($name_unencoded)};        
         if($files->[2]) {
             my $dir = $files->[0]; 
             $buf .= '<tr>';            
@@ -2019,9 +2163,9 @@ package MusicLibrary {
             $buf .= '<br>';
         }
         
-        $self->{'html'} = $buf .  read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_bottom.html');         
+        $self->{'html'} = encode_utf8($buf .  read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_bottom.html'));         
         #$self->{'html_gapless'} = $buf . read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_bottom_gapless.html');
-        $self->{'html_gapless'} = $buf . read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_bottom_better.html');
+        $self->{'html_gapless'} = encode_utf8($buf . read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_bottom_better.html'));
     }
 
     sub SendLibrary {
@@ -2327,19 +2471,44 @@ package MusicLibrary {
         say "name: " . $request->{'qs'}{'name'};
         $request->Send404;
     }
+
+    sub UpdateLibraries {        
+        my ($self, $data) = @_;
+        my $temp = thaw($data);
+        if(scalar(@{$temp}) != scalar(@{$self->{'sources'}})) {
+            say "incorrect number of sources, not updating library";
+            return;                            
+        }                        
+        foreach my $source (@{$self->{'sources'}}) {
+            say "updating library " . $source->{'folder'};
+            $source->{'lib'} = shift @{$temp};                       
+        }
+    }
+
+    sub UpdateHTML {
+        my ($self, $data) = @_;
+        say "updating html";
+        $self->{'html_gapless'} = $data;
+    }
     
     sub childnew {
         my ($self) = @_;
-        push (@{$self->{'routes'}}, [ '/music.storable', sub {
-                my ($request) = @_;
+        $self->{'timers'} = [
+            [ 10000, 60, sub {                
                 $self->BuildLibraries();
                 my @mlibs;
                 foreach my $source (@{$self->{'sources'}}) {
                     push @mlibs, $source->{'lib'};                
-                }                
-                $request->SendLocalBuf(freeze(\@mlibs), 'application/octet-stream');
-            }]);
-        $self->{'timers'} = undef;    
+                }
+                my $putdata = freeze(\@mlibs);                
+                BS::Socket::HTTP::Client->put_buf($self->{'server'}, $self->{'settings'}{'P_URL'}, [
+                    ["/api/music.storable", sub {
+                    }, $putdata],
+                    ["/music", sub {
+                    }, $self->{'html_gapless'}]
+                ]);
+            }],
+        ];
     }
     
     sub new {
@@ -2372,16 +2541,44 @@ package MusicLibrary {
             }],
             ['/music', sub {
                 my ($request) = @_;
-                foreach my $route (@{$self->{'routes'}}) {
-                    if($route->[0] eq '/music_gapless') {
-                        $route->[1]->($request);
-                        last;
+                if($request->{'method'} ne 'PUT') { 
+                    foreach my $route (@{$self->{'routes'}}) {
+                        if($route->[0] eq '/music_gapless') {
+                            $route->[1]->($request);
+                            last;
+                        }
                     }
+                }
+                else {
+                    $request->PUTBuf(sub {
+                        my ($data) = @_;
+                        $request->SendLocalBuf("api call successful", "text/html; charset=utf-8");
+                        $self->UpdateHTML($data);
+                    });
                 }                
             }],
             [ '/music_dl', sub {
                 my ($request) = @_;
                 return $self->SendFromLibrary($request);
+            }],
+            [ '/api/music.storable', sub {
+                my ($request) = @_;
+                if($request->{'method'} eq 'PUT') {                    
+                    $request->PUTBuf(sub {
+                        my ($data) = @_;
+                        $request->SendLocalBuf("api call successful", "text/html; charset=utf-8");
+                        $self->UpdateLibraries($data);
+                    });
+                }
+                else {
+                    # warning blocks
+                    $self->BuildLibraries();
+                    my @mlibs;
+                    foreach my $source (@{$self->{'sources'}}) {
+                        push @mlibs, $source->{'lib'};                
+                    }                
+                    $request->SendLocalBuf(freeze(\@mlibs), 'application/octet-stream');
+                }                              
             }],             
         ];
 
@@ -2391,34 +2588,18 @@ package MusicLibrary {
                     say "removing timer ISCHILD";
                     return undef;
                 }
-                say "refresh library timer";
+                say "refresh library timer";                
                 
-
-                BS::Socket::HTTP::Client->new($self->{'server'}, {PeerHost => $settings->{'HOST'}, PeerPort => $settings->{'PORT'}+1, Proto => 'tcp'}, [
-                    [
-                        "GET /stream/music.storable HTTP/1.1\r\nHost: " . $settings->{'DOMAIN'} . "\r\n\r\n", sub {
-                        my ($data, $sock) = @_;
-                        my $temp = thaw($data);
-                        if(scalar(@{$temp}) != scalar(@{$self->{'sources'}})) {
-                            say "incorrect number of sources, not updating library";
-                            return;                            
-                        }
-                        
-                        foreach my $source (@{$self->{'sources'}}) {
-                            say "updating library " . $source->{'folder'};
-                            $source->{'lib'} = shift @{$temp};                       
-                        }                       
-                        
-                        }
-                    ],
-                    [
-                        "GET /stream/music HTTP/1.1\r\nHost: " . $settings->{'DOMAIN'} . "\r\n\r\n", sub {
-                        my ($data) = @_;
-                        say "updating html";
-                        $self->{'html_gapless'} = $data;
-                        }
-                    ],
-                ]);                
+                BS::Socket::HTTP::Client->get($self->{'server'}, $settings->{'C_URL'}, [
+                    ["/api/music.storable", sub {                        
+                        unshift @_, $self;
+                        &UpdateLibraries;
+                    }],
+                    ['/music', sub {
+                        unshift @_, $self;
+                        &UpdateHTML;                        
+                    }],
+                ]);                             
                 say "launched library update";
                 return 1;
             }],
@@ -2926,9 +3107,24 @@ my @routes = (
 );
 
 # finally start the server
+$SETTINGS->{'CPORT'} //= $SETTINGS->{'PORT'} + 1;
+$SETTINGS->{'CHOST'} //= '127.0.0.1';
+$SETTINGS->{'CDOMAIN'} //= $SETTINGS->{'CHOST'};
 if(fork() == 0) {
-    $SETTINGS->{'PORT'} = $SETTINGS->{'PORT'} + 1;
+    $SETTINGS->{'PHOST'} = $SETTINGS->{'HOST'};
+    $SETTINGS->{'HOST'} = $SETTINGS->{'CHOST'};
+    $SETTINGS->{'CHORT'} = undef;
+    $SETTINGS->{'PPORT'} = $SETTINGS->{'PORT'};
+    $SETTINGS->{'PORT'} = $SETTINGS->{'CPORT'};
+    $SETTINGS->{'CPORT'} = undef;
+    $SETTINGS->{'PDOMAIN'} = $SETTINGS->{'DOMAIN'};
+    $SETTINGS->{'DOMAIN'} = $SETTINGS->{'CDOMAIN'};
+    $SETTINGS->{'CDOMAIN'} = undef;
     $SETTINGS->{'ISCHILD'} = 1;
+    $SETTINGS->{'P_URL'} = "http://".$SETTINGS->{'PDOMAIN'}.':'.$SETTINGS->{'PPORT'};    
+}
+else {
+    $SETTINGS->{'C_URL'} = "http://".$SETTINGS->{'CDOMAIN'}.':'.$SETTINGS->{'CPORT'};
 }
     
 my $server = HTTP::BS::Server->new($SETTINGS, \@routes, \@plugins);
