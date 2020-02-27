@@ -2494,7 +2494,7 @@ package MusicLibrary {
     sub childnew {
         my ($self) = @_;
         $self->{'timers'} = [
-            [ 10000, 60, sub {                
+            [ 5, 60, sub {                
                 $self->BuildLibraries();
                 my @mlibs;
                 foreach my $source (@{$self->{'sources'}}) {
@@ -2582,28 +2582,28 @@ package MusicLibrary {
             }],             
         ];
 
-        $self->{'timers'} = [
-            [ 5, 60, sub {
-                if($settings->{'ISCHILD'}) {
-                    say "removing timer ISCHILD";
-                    return undef;
-                }
-                say "refresh library timer";                
-                
-                BS::Socket::HTTP::Client->get($self->{'server'}, $settings->{'C_URL'}, [
-                    ["/api/music.storable", sub {                        
-                        unshift @_, $self;
-                        &UpdateLibraries;
-                    }],
-                    ['/music', sub {
-                        unshift @_, $self;
-                        &UpdateHTML;                        
-                    }],
-                ]);                             
-                say "launched library update";
-                return 1;
-            }],
-        ];
+        #$self->{'timers'} = [
+        #    [ 5, 60, sub {
+        #        if($settings->{'ISCHILD'}) {
+        #            say "removing timer ISCHILD";
+        #            return undef;
+        #        }
+        #        say "refresh library timer";                
+        #        
+        #        BS::Socket::HTTP::Client->get($self->{'server'}, $settings->{'C_URL'}, [
+        #            ["/api/music.storable", sub {                        
+        #                unshift @_, $self;
+        #                &UpdateLibraries;
+        #            }],
+        #            ['/music', sub {
+        #                unshift @_, $self;
+        #                &UpdateHTML;                        
+        #            }],
+        #        ]);                             
+        #        say "launched library update";
+        #        return 1;
+        #    }],
+        #];
         
         return $self;
     }
