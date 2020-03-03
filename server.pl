@@ -492,7 +492,115 @@ package HTTP::BS::Server::Client::Request {
     use Data::Dumper;
     use Scalar::Util qw(weaken);
     use IPC::Open3;
-    use Symbol 'gensym';    
+    use Symbol 'gensym';
+    use constant {
+        MAX_REQUEST_SIZE => 8192,
+    };
+
+    sub _new {
+        my ($class, $client) = @_;        
+        my %self = ( 'client' => $client);
+        bless \%self, $class;
+        weaken($self{'client'}); #don't allow Request to keep client alive
+        $self{'on_read_ready'} = \&want_request_line;
+        $self{'outheaders'}{'X-MHFS-CONN-ID'} = $client->{'outheaders'}{'X-MHFS-CONN-ID'};          
+        return \%self;
+    }
+
+    # on ready ready handlers
+    sub want_request_line {
+        my ($self) = @_;
+        my $ipos = index($self->{'client'}{'inbuf'}, "\r\n");
+        if($ipos != -1) {
+            if(substr($self->{'client'}{'inbuf'}, 0, $ipos+2, '') =~ /^(([^\s]+)\s+([^\s]+)\s+(?:HTTP\/1\.([0-1])))\r\n/) {
+                my $rl = $1;
+                $self->{'method'}    = $2;                
+                $self->{'uri'}       = $3;
+                $self->{'httpproto'} = $4;                                
+                $self->{'outheaders'}{'X-MHFS-REQUEST-ID'} = clock_gettime(CLOCK_MONOTONIC) * rand(); # BAD UID
+                say "X-MHFS-CONN-ID: " . $self->{'outheaders'}{'X-MHFS-CONN-ID'} . " X-MHFS-REQUEST-ID: " . $self->{'outheaders'}{'X-MHFS-REQUEST-ID'};
+                say "RECV: $rl";
+                if(($self->{'method'} ne 'GET') && ($self->{'method'} ne 'HEAD') && ($self->{'method'} ne 'PUT')) {
+                    say "X-MHFS-CONN-ID: " . $self->{'outheaders'}{'X-MHFS-CONN-ID'} . 'Invalid method: ' . $self->{'method'}. ', closing conn';
+                    return undef;
+                }
+                my ($path, $querystring) = ($self->{'uri'} =~ /^([^\?]+)(?:\?)?(.*)$/g);             
+                say("raw path: $path\nraw querystring: $querystring");
+                #transformations
+                $path = uri_unescape($path);
+                my $webpath = quotemeta $self->{'client'}{'server'}{'settings'}{'WEBPATH'};
+                $path =~ s/^$webpath\/?/\//;
+                $path =~ s/(?:\/|\\)+$//;
+                print "path: $path ";                    
+                say "querystring: $querystring";                     
+                #parse path                     
+                my %pathStruct = ( 'unsafepath' => $path);
+                my $abspath = abs_path('.' . $path);                  
+                if (defined $abspath) {
+                   print "abs: " . $abspath;
+                   $pathStruct{'requestfile'} = $abspath;
+                   $pathStruct{'basename'} = basename( $pathStruct{'requestfile'}); 
+                }
+                print "\n";                    
+                #parse querystring
+                my %qsStruct = ( 'querystring' => $querystring);
+                my @qsPairs = split('&', $querystring);
+                foreach my $pair (@qsPairs) {
+                    my($key, $value) = split('=', $pair);
+                    if(defined $value) {
+                        $qsStruct{$key} = uri_unescape($value);
+                    }                                      
+                }
+                $self->{'path'} = \%pathStruct;
+                $self->{'qs'} = \%qsStruct;
+
+
+                $self->{'on_read_ready'} = \&want_headers;
+                return want_headers($self);
+            }
+            else {
+                say "X-MHFS-CONN-ID: " . $self->{'outheaders'}{'X-MHFS-CONN-ID'} . ' Invalid Request line, closing conn';
+                return undef;
+            }            
+        }
+        elsif(length($self->{'client'}{'inbuf'}) > MAX_REQUEST_SIZE) {
+            say "X-MHFS-CONN-ID: " . $self->{'outheaders'}{'X-MHFS-CONN-ID'} . ' No Request line, closing conn';
+            return undef;
+        }
+        return 1;
+    }
+
+    sub want_headers {
+        my ($self) = @_;
+        my $ipos;
+        while($ipos = index($self->{'client'}{'inbuf'}, "\r\n")) {                
+            if($ipos == -1) {
+                if(length($self->{'client'}{'inbuf'}) > MAX_REQUEST_SIZE) {
+                    say "X-MHFS-CONN-ID: " . $self->{'outheaders'}{'X-MHFS-CONN-ID'} . ' Headers too big, closing conn';
+                    return undef;
+                }
+                return 1;
+            }                
+            elsif(substr($self->{'client'}{'inbuf'}, 0, $ipos+2, '') =~ /^(([^:]+):\s*(.*))\r\n/) {
+                say "RECV: $1";
+                $self->{'header'}{$2} = $3;            
+            }
+            else {                
+                say "X-MHFS-CONN-ID: " . $self->{'outheaders'}{'X-MHFS-CONN-ID'} . ' Invalid header, closing conn';
+                return undef;
+            }        
+        }
+        # when $ipos is 0 we recieved the end of the headers: \r\n\r\n
+        if((defined $self->{'header'}{'Range'}) &&  ($self->{'header'}{'Range'} =~ /^bytes=([0-9]+)\-([0-9]*)$/)) {
+            $self->{'header'}{'_RangeStart'} = $1;
+            $self->{'header'}{'_RangeEnd'} = $2;                                
+        }
+        $self->{'on_read_ready'} = undef;
+        $self->{'client'}->SetEvents($EventLoop::Poll::ALWAYSMASK );  
+        _Handle($self);       
+        return 1;
+    }
+   
     sub new {
         my ($class, $client, $indataRef) = @_;        
         my %self = ( 'client' => $client);
@@ -1291,6 +1399,16 @@ package HTTP::BS::Server::Client {
         my ($self, $events) = @_;
         $self->{'server'}{'evp'}->set($self->{'sock'}, $self, $events);            
     }
+    
+    #sub onReadReady {
+    #    my ($self) = @_;
+    #    my $ret = $self->{'request'}->on_read_ready();
+    #    if($ret) {
+    #        $client->SetEvents(POLLOUT | $EventLoop::Poll::ALWAYSMASK );
+    #        $ret = $self->onWriteReady(); 
+    #    }
+    #    return $ret;        
+    #}
 
     # currently only creates HTTP Request objects, but this could change if we allow file uploads
     sub onReadReady {        
