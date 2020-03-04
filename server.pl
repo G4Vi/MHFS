@@ -493,23 +493,26 @@ package HTTP::BS::Server::Client::Request {
     use Scalar::Util qw(weaken);
     use IPC::Open3;
     use Symbol 'gensym';
+    use Devel::Peek;
     use constant {
         MAX_REQUEST_SIZE => 8192,
     };
 
-    sub _new {
+    sub new {
         my ($class, $client) = @_;        
         my %self = ( 'client' => $client);
         bless \%self, $class;
         weaken($self{'client'}); #don't allow Request to keep client alive
         $self{'on_read_ready'} = \&want_request_line;
-        $self{'outheaders'}{'X-MHFS-CONN-ID'} = $client->{'outheaders'}{'X-MHFS-CONN-ID'};          
+        $self{'outheaders'}{'X-MHFS-CONN-ID'} = $client->{'outheaders'}{'X-MHFS-CONN-ID'};      
+        $self{'rl'} = 0;        
         return \%self;
     }
 
     # on ready ready handlers
     sub want_request_line {
         my ($self) = @_;
+        
         my $ipos = index($self->{'client'}{'inbuf'}, "\r\n");
         if($ipos != -1) {
             if(substr($self->{'client'}{'inbuf'}, 0, $ipos+2, '') =~ /^(([^\s]+)\s+([^\s]+)\s+(?:HTTP\/1\.([0-1])))\r\n/) {
@@ -595,90 +598,12 @@ package HTTP::BS::Server::Client::Request {
             $self->{'header'}{'_RangeStart'} = $1;
             $self->{'header'}{'_RangeEnd'} = $2;                                
         }
+        substr($self->{'client'}{'inbuf'}, 0, 2, '');
         $self->{'on_read_ready'} = undef;
         $self->{'client'}->SetEvents($EventLoop::Poll::ALWAYSMASK );  
         _Handle($self);       
         return 1;
-    }
-   
-    sub new {
-        my ($class, $client, $indataRef) = @_;        
-        my %self = ( 'client' => $client);
-        bless \%self, $class;
-        weaken($self{'client'}); #don't allow Request to keep client alive
-        $self{'outheaders'}{'X-MHFS-CONN-ID'} = $client->{'outheaders'}{'X-MHFS-CONN-ID'};  
-        $self{'outheaders'}{'X-MHFS-REQUEST-ID'} = clock_gettime(CLOCK_MONOTONIC) * rand(); # BAD UID
-        say "X-MHFS-CONN-ID: " . $self{'outheaders'}{'X-MHFS-CONN-ID'} . " X-MHFS-REQUEST-ID: " . $self{'outheaders'}{'X-MHFS-REQUEST-ID'};
-        my $success;    
-        if($$indataRef =~ /^(?:\r\n)*(.+?)\r\n(.+?)\r\n\r\n(.*)$/s) {  
-            my $requestline =  $1;
-            my @headerlines = split('\r\n', $2);
-            say "RECV: $requestline";
-            say "RECV: $_" foreach @headerlines;
-            my $body = $2;
-            if($requestline =~ /^([^\s]+)\s+([^\s]+)\s+([^\s]+)$/) {
-                my $method = $1;
-                my $uri = $2;
-                my $proto = $3;
-                if($proto =~ /^HTTP/i) {
-                     #$uri =~ s/%([A-Fa-f\d]{2})/chr hex $1/eg; #decode the uri
-                     my ($path, $querystring) = ($uri =~ /^([^\?]+)(?:\?)?(.*)$/g);             
-                     say("raw path: $path\nraw querystring: $querystring");
-                     #transformations
-                     $path = uri_unescape($path);
-                     my $webpath = quotemeta $client->{'server'}{'settings'}{'WEBPATH'};
-                     $path =~ s/^$webpath\/?/\//;
-                     $path =~ s/(?:\/|\\)+$//;
-                     print "path: $path ";                    
-                     say "querystring: $querystring";                     
-                     #parse path                     
-                     my %pathStruct = ( 'unsafepath' => $path);
-                     my $abspath = abs_path('.' . $path);                  
-                     if (defined $abspath) {
-                        print "abs: " . $abspath;
-                        $pathStruct{'requestfile'} = $abspath;
-                        $pathStruct{'basename'} = basename( $pathStruct{'requestfile'}); 
-                     }
-                     print "\n";                    
-                     #parse querystring
-                     my %qsStruct = ( 'querystring' => $querystring);
-                     my @qsPairs = split('&', $querystring);
-                     foreach my $pair (@qsPairs) {
-                         my($key, $value) = split('=', $pair);
-                         if(defined $value) {
-                             $qsStruct{$key} = uri_unescape($value);
-                         }                                      
-                     }
-                     #parse headers
-                     my %headerStruct;
-                     foreach my $headerline (@headerlines) {
-                         if($headerline =~ /^\s*([^:]+):\s*(.*)$/) {                         
-                             $headerStruct{$1} = $2;    
-                         }               
-                     }
-                     if((defined $headerStruct{'Range'}) &&  ($headerStruct{'Range'} =~ /^bytes=([0-9]+)\-([0-9]*)$/)) {
-                         $headerStruct{'_RangeStart'} = $1;
-                         $headerStruct{'_RangeEnd'} = $2;                                
-                     }                 
-                     
-                     #dispatch
-                     if(($method =~ /^HEAD|GET|PUT$/i) ) {
-                         $self{'method'} = $method;
-                         $self{'path'} = \%pathStruct;
-                         $self{'qs'} = \%qsStruct;
-                         $self{'header'} = \%headerStruct;
-                         $self{'request'} = $$indataRef;
-                         _Handle(\%self);
-                         return \%self;              
-                     }              
-                }
-                        
-            }   
-        }
-        
-        Send403(\%self);
-        return \%self;      
-    }
+    }   
 
     sub _Handle {
         my ($self) = @_;
@@ -1016,41 +941,73 @@ package HTTP::BS::Server::Client::Request {
                     }                
                 });
             },                      
-        });
-
-        sub PUTBuf {
-            my ($self, $handler) = @_;
-            if(length($self->{'client'}{'inbuf'}) < $self->{'header'}{'Content-Length'}) {
-                $self->{'client'}->SetEvents(POLLIN | $EventLoop::Poll::ALWAYSMASK ); 
-            }
-            my $sdata;
-            $self->{'client'}{'datahandler'} = sub {
-                my $contentlength = $self->{'header'}{'Content-Length'};
-                $sdata .= $self->{'client'}{'inbuf'};
-                my $dlength = length($sdata);                                       
-                if($dlength >= $contentlength) {
-                    say 'PUTBuf datalength ' . $dlength;
-                    my $data;
-                    if($dlength > $contentlength) {
-                        $data = substr($sdata, 0, $contentlength);
-                        $self->{'client'}{'inbuf'} = substr($sdata, $contentlength);
-                        $dlength = length($data)
-                    }
-                    else {
-                        $data = $sdata;
-                        $self->{'client'}{'inbuf'} = '';
-                    }
-                    $self->{'client'}{'datahandler'} = undef;
-                    $handler->($data);
+        });   
+    }
+    
+    sub PUTBuf_old {
+        my ($self, $handler) = @_;
+        if(length($self->{'client'}{'inbuf'}) < $self->{'header'}{'Content-Length'}) {
+            $self->{'client'}->SetEvents(POLLIN | $EventLoop::Poll::ALWAYSMASK ); 
+        }
+        my $sdata;
+        $self->{'on_read_ready'} = sub {
+            my $contentlength = $self->{'header'}{'Content-Length'};
+            $sdata .= $self->{'client'}{'inbuf'};
+            my $dlength = length($sdata);                                       
+            if($dlength >= $contentlength) {
+                say 'PUTBuf datalength ' . $dlength;
+                my $data;
+                if($dlength > $contentlength) {
+                    $data = substr($sdata, 0, $contentlength);
+                    $self->{'client'}{'inbuf'} = substr($sdata, $contentlength);
+                    $dlength = length($data)
                 }
                 else {
+                    $data = $sdata;
                     $self->{'client'}{'inbuf'} = '';
                 }
-                return '';
-            };
-            $self->{'client'}{'datahandler'}->();
-        }
+                $self->{'on_read_ready'} = undef;
+                $handler->($data);
+            }
+            else {
+                $self->{'client'}{'inbuf'} = '';
+            }
+            #return '';
+            return 1;
+        };
+        $self->{'on_read_ready'}->();
+    }
     
+    sub PUTBuf{
+        my ($self, $handler) = @_;
+        if($self->{'header'}{'Content-Length'} > 20000000) {
+            say "PUTBuf too big";
+            $self->{'client'}->SetEvents(POLLIN | $EventLoop::Poll::ALWAYSMASK );
+            $self->{'on_read_ready'} = sub { return undef };
+            return;
+        }
+        if(length($self->{'client'}{'inbuf'}) < $self->{'header'}{'Content-Length'}) {
+            $self->{'client'}->SetEvents(POLLIN | $EventLoop::Poll::ALWAYSMASK ); 
+        }       
+        $self->{'on_read_ready'} = sub {
+            my $contentlength = $self->{'header'}{'Content-Length'};           
+            my $dlength = length($self->{'client'}{'inbuf'});                                       
+            if($dlength >= $contentlength) {
+                say 'PUTBuf datalength ' . $dlength;
+                my $data;
+                if($dlength > $contentlength) {
+                    $data = substr($self->{'client'}{'inbuf'}, 0, $contentlength, '');                    
+                }
+                else {
+                    $data = $self->{'client'}{'inbuf'};
+                    $self->{'client'}{'inbuf'} = '';
+                }
+                $self->{'on_read_ready'} = undef;
+                $handler->($data);
+            }            
+            return 1;
+        };
+        $self->{'on_read_ready'}->();
     }
 
     # TODO, check plugins for SendOption
@@ -1115,7 +1072,7 @@ package BS::Socket {
             next if($res);
             return $res;
         }
-        print ("onReadReady RECV errno: $!\n");
+        print ("BS::Socket onReadReady RECV errno: $!\n");
         if(! $!{EAGAIN}) {                
             say "ON_ERROR-------------------------------------------------";
             return undef;          
@@ -1130,7 +1087,7 @@ package BS::Socket {
             my $sret;
             #if(!defined($sret = $self->{'sock'}->send($self->{'outbuf'}, MSG_DONTWAIT))) {
             if(!defined($sret = send($self->{'sock'}, $self->{'outbuf'}, MSG_DONTWAIT))) {
-                print ("RECV errno: $!\n");
+                print ("BS::Socket onWriteReady RECV errno: $!\n");
                 if(! $!{EAGAIN}) {                
                     say "ON_ERROR-------------------------------------------------";
                     return undef;          
@@ -1391,7 +1348,8 @@ package HTTP::BS::Server::Client {
         my ($class, $sock, $server) = @_;
         $sock->blocking(0);
         my %self = ('sock' => $sock, 'server' => $server, 'time' => clock_gettime(CLOCK_MONOTONIC), 'inbuf' => '');
-        $self{'outheaders'}{'X-MHFS-CONN-ID'} = $self{'time'} * rand(); # BAD UID       
+        $self{'outheaders'}{'X-MHFS-CONN-ID'} = $self{'time'} * rand(); # BAD UID 
+        $self{'request'} = HTTP::BS::Server::Client::Request->new(\%self);      
         return bless \%self, $class;
     }
 
@@ -1400,60 +1358,49 @@ package HTTP::BS::Server::Client {
         $self->{'server'}{'evp'}->set($self->{'sock'}, $self, $events);            
     }
     
-    #sub onReadReady {
-    #    my ($self) = @_;
-    #    my $ret = $self->{'request'}->on_read_ready();
-    #    if($ret) {
-    #        $client->SetEvents(POLLOUT | $EventLoop::Poll::ALWAYSMASK );
-    #        $ret = $self->onWriteReady(); 
-    #    }
-    #    return $ret;        
-    #}
+    use constant {
+         RECV_SIZE => 65536     
+    }; 
 
-    # currently only creates HTTP Request objects, but this could change if we allow file uploads
-    sub onReadReady {        
-        my ($client) = @_;
-        my $handle = $client->{'sock'};               
-        my $maxlength = 65536;
-        my $tempdata;
-        my $success = defined($handle->recv($tempdata, $maxlength-length($client->{'inbuf'})));
-        if($success) {            
-            if(length($tempdata) == 0) {                
-                say 'HTTP::BS::Server::Client - read 0 bytes, client read closed';
-                return undef;               
+    sub do_on_data {
+        my ($self) = @_;
+        my $res = $self->{'request'}{'on_read_ready'}->($self->{'request'});
+        if($res) {
+            if(defined $self->{'request'}{'response'}) {
+                #say "do_on_data: goto onWriteReady";
+                goto &onWriteReady;
+                #return onWriteReady($self);
             }
-            $client->{'inbuf'} .= $tempdata;
+            else {
+                #say "do_on_data: goto onReadReady inbuf " . length($self->{'inbuf'});
+                goto &onReadReady;
+                #return onReadReady($self);
+            }
         }
-        else {
-            print ("RECV errno: $!\n");
-            if(! $!{EAGAIN}) {                
-                goto ON_ERROR;
-            }            
-        }
-        
-        if($client->{'datahandler'} && length($client->{'inbuf'})) {
-            return $client->{'datahandler'}->();
-        }
-        my $pos = index($client->{'inbuf'}, "\r\n\r\n");
-        if($pos != -1) {
-            $client->SetEvents($EventLoop::Poll::ALWAYSMASK );  
-            my $recvdata = substr $client->{'inbuf'}, 0, $pos+4;
-            # store the rest of the data in-case there's a body or pipelined request
-            $client->{'inbuf'} = substr $client->{'inbuf'}, $pos+4;            
-            $client->{'request'} = HTTP::BS::Server::Client::Request->new($client, \$recvdata);            
-            return $client->onWriteReady;            
-        }
-        elsif(length($client->{'inbuf'}) >= $maxlength) {
-            say "End of header not found in $maxlength !!!";                
-        }
-        else {
-            return '';
-        }        
-        
-        ON_ERROR:
-        say "ON_ERROR-------------------------------------------------";               
-        return undef;       
+        return $res;
     }
+
+     
+    sub onReadReady {        
+        my ($self) = @_;             
+        my $tempdata;        
+        if(defined($self->{'sock'}->recv($tempdata, RECV_SIZE))) {
+            if(length($tempdata) == 0) {                
+                say 'client read 0 bytes, client read closed';
+                return undef;
+            }
+            #$self->{'request'}{'rl'} += length($tempdata);
+            #say "read length " . length($tempdata) . ' rl ' . $self->{'request'}{'rl'};
+            $self->{'inbuf'} .= $tempdata;
+            goto &do_on_data;
+        }
+        #print ("HTTP::BS::Server::Client onReadReady RECV errno: $!\n");
+        if(! $!{EAGAIN}) {                
+            print ("HTTP::BS::Server::Client onReadReady RECV errno: $!\n");
+            return undef;          
+        }
+        return '';        
+    }   
     
     sub onWriteReady {
         my ($client) = @_;
@@ -1473,11 +1420,13 @@ package HTTP::BS::Server::Client {
                     return undef;              
                 }                
                 $client->SetEvents(POLLIN | $EventLoop::Poll::ALWAYSMASK );
-                $client->onReadReady;
+                $client->{'request'} = HTTP::BS::Server::Client::Request->new($client);
+                # handle possible existing read data 
+                goto &do_on_data;                
             }            
         }
         else {             
-            #say "response not defined, probably set later by a timer or poll";                     
+            say "response not defined, probably set later by a timer or poll";                     
         }        
         return 1;        
     }    
@@ -1620,7 +1569,7 @@ package HTTP::BS::Server::Client {
 
     sub DESTROY {
         my $self = shift;
-        say "client destructor called";
+        say "HTTP::BS::Server::Client destructor called";
         if($self->{'sock'}) {
             #shutdown($self->{'sock'}, 2);
             close($self->{'sock'});  
