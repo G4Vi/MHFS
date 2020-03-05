@@ -559,7 +559,8 @@ package HTTP::BS::Server::Client::Request {
 
 
                 $self->{'on_read_ready'} = \&want_headers;
-                return want_headers($self);
+                #return want_headers($self);
+                goto &want_headers;
             }
             else {
                 say "X-MHFS-CONN-ID: " . $self->{'outheaders'}{'X-MHFS-CONN-ID'} . ' Invalid Request line, closing conn';
@@ -601,7 +602,15 @@ package HTTP::BS::Server::Client::Request {
         substr($self->{'client'}{'inbuf'}, 0, 2, '');
         $self->{'on_read_ready'} = undef;
         $self->{'client'}->SetEvents($EventLoop::Poll::ALWAYSMASK );  
-        _Handle($self);       
+        # finally handle the request
+        #_Handle($self);  
+        foreach my $route (@{$self->{'client'}{'server'}{'routes'}}) {                        
+            if($self->{'path'}{'unsafepath'} eq $route->[0]) {
+                $route->[1]($self);
+                return 1;
+            }
+        }
+        $self->{'client'}{'server'}{'route_default'}($self);     
         return 1;
     }   
 
@@ -1371,10 +1380,13 @@ package HTTP::BS::Server::Client {
                 goto &onWriteReady;
                 #return onWriteReady($self);
             }
-            else {
+            elsif(defined $self->{'request'}{'on_read_ready'}) {
                 #say "do_on_data: goto onReadReady inbuf " . length($self->{'inbuf'});
                 goto &onReadReady;
                 #return onReadReady($self);
+            }
+            else {
+                say "do_on_data: response and on_read_ready not defined, response by timer or poll?"; 
             }
         }
         return $res;
@@ -2258,46 +2270,54 @@ package MusicLibrary {
             }       
         });
     }
+
+    my %TRACKDURATION;
+    sub SendTrack {
+        my ($request, $tosend) = @_;        
+        #my $gapless = $request->{'qs'}{'gapless'};            
+        #if($gapless) {
+        #    $request->SendFile($tosend);
+        #}
+        if(defined $request->{'qs'}{'part'}) {
+            if($TRACKDURATION{$tosend}) {
+                say "no proc, duration cached";
+                $request->{'outheaders'}{'X-MHFS-NUMSEGMENTS'} = ceil($TRACKDURATION{$tosend} / $SEGMENT_DURATION);
+                $request->{'outheaders'}{'X-MHFS-TRACKDURATION'} = $TRACKDURATION{$tosend};
+                $request->{'outheaders'}{'X-MHFS-MAXSEGDURATION'} = $SEGMENT_DURATION;
+                SendLocalTrackSegment($request, $tosend);
+                return;
+            }
+
+            my $evp = $request->{'client'}{'server'}{'evp'};
+            $request->{'process'} = HTTP::BS::Server::Process->new(['soxi', '-D', $tosend], $evp, {
+                'STDOUT' => sub {
+                    my ($stdout) = @_;
+                    my $buf;
+                    $request->{'process'} = undef;
+                    if(!read($stdout, $buf, 4096)) {
+                        say "failed to read soxi";
+                        $request->Send404;
+                    }
+                    else {
+                        my ($duration) = $buf =~ /^(.+)$/;
+                        $request->{'outheaders'}{'X-MHFS-NUMSEGMENTS'} = ceil($duration / $SEGMENT_DURATION);
+                        $request->{'outheaders'}{'X-MHFS-TRACKDURATION'} = $duration;
+                        $request->{'outheaders'}{'X-MHFS-MAXSEGDURATION'} = $SEGMENT_DURATION;
+                        $TRACKDURATION{$tosend} = $duration;
+                        SendLocalTrackSegment($request, $tosend);
+                    }
+                    return -1;                        
+                },                
+            });
+        }
+        else {
+            $request->SendLocalFile($tosend);
+        }
+    }
     
     sub SendLocalTrack {
         my ($request, $file) = @_;    
-        my $evp = $request->{'client'}{'server'}{'evp'}; 
-        my $SendFile = sub {
-            my($tosend) = @_;    
-
-            #my $gapless = $request->{'qs'}{'gapless'};            
-            #if($gapless) {
-            #    $request->SendFile($tosend);
-            #}
-            my $part = $request->{'qs'}{'part'};
-            if(defined $part) {
-                $request->{'process'} = HTTP::BS::Server::Process->new(['soxi', '-D', $tosend], $evp, {
-                    'STDOUT' => sub {
-                        my ($stdout) = @_;
-                        my $buf;
-                        $request->{'process'} = undef;
-                        if(!read($stdout, $buf, 4096)) {
-                            say "failed to read soxi";
-                            $request->Send404;
-                        }
-                        else {
-                            my ($duration) = $buf =~ /^(.+)$/;
-                            $request->{'outheaders'}{'X-MHFS-NUMSEGMENTS'} = ceil($duration / $SEGMENT_DURATION);
-                            $request->{'outheaders'}{'X-MHFS-TRACKDURATION'} = $duration;
-                            $request->{'outheaders'}{'X-MHFS-MAXSEGDURATION'} = $SEGMENT_DURATION;
-                            
-                            SendLocalTrackSegment($request, $tosend);
-                        }
-                        return -1;                        
-                    },                
-                });
-            }
-            else {
-                $request->SendLocalFile($tosend);
-            }        
-        };        
-            
-        
+        my $evp = $request->{'client'}{'server'}{'evp'};        
         my $tmpdir = $request->{'client'}{'server'}{'settings'}{'TMPDIR'};  
         my $filebase = basename($file);
         # determine if we need to convert to flac or to search for lossy flacs       
@@ -2315,7 +2335,7 @@ package MusicLibrary {
         # however we do all processing in PCM (in flac)
         my $bitdepth = $request->{'qs'}{'bitdepth'};                
         if(! $max_sample_rate) {
-            $SendFile->($file);
+            SendTrack($request, $file);
             return;            
         }           
         elsif(! $bitdepth) {
@@ -2339,7 +2359,7 @@ package MusicLibrary {
             my $tmpfile = $tmpdir . '/' . $setting->[0] . '_' . $setting->[1] . '_' . $filebase;
             if(-e $tmpfile) {
                 say "No need to resample $tmpfile exists";
-                $SendFile->($tmpfile);
+                SendTrack($request, $tmpfile);
                 return;
             }                      
         }
@@ -2352,7 +2372,7 @@ package MusicLibrary {
         # convert to pcm (flac) and retry if not already
         if(!$is_flac) {
             if(! $request->{'qs'}{'part'}) {
-                $SendFile->($file);
+                SendTrack($request, $file);
                 return;
             }            
             
@@ -2391,14 +2411,14 @@ package MusicLibrary {
                     say "maxsamplerate $max_sample_rate bitdepth $bitdepth";                    
                     if(($samplerate <= $max_sample_rate) && ($inbitdepth <= $bitdepth)) {
                         say "samplerate is <= max_sample_rate";
-                        $SendFile->($file);
+                        SendTrack($request, $file);
                         return -1;                
                     }                    
                     last;                
                 }               
                 say "regex or ffmpeg failed";
                 say $buf if($buf);                
-                $SendFile->($file);
+                SendTrack($request, $file);
                 return -1;            
             }                                     
                         
@@ -2425,7 +2445,7 @@ package MusicLibrary {
             'SIGCHLD' => sub {
                 # HACK
                 $request->{'client'}{'time'} = clock_gettime(CLOCK_MONOTONIC); 
-                $SendFile->($outfile);                                      
+                SendTrack($request, $outfile);                                      
             },                    
             'STDERR' => sub {
                 my ($terr) = @_;
