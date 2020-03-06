@@ -4,12 +4,12 @@ apt-get install libany-uri-escape-perl
 htmml escape?
 JSON
 Storable
+IO::AIO apt-get install libio-aio-perl 
 #Unicode::Escape - apt-get install libunicode-escape-perl
 binaries:
 ffmpeg
 sox
 stunnel
-
 youtube-dl for Youtube plugin
 
 

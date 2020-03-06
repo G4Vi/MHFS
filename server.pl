@@ -143,6 +143,30 @@ package EventLoop::Poll {
     1;
 }
 
+package HTTP::BS::Server::AIO {
+    use strict; use warnings;
+    use feature 'say';
+    use IO::Poll qw(POLLIN POLLOUT POLLHUP);
+    use IO::AIO;
+    use IO::Handle;
+    sub new {
+        my ($class, $evp) = @_;
+        my %self;
+        bless \%self, $class;
+        
+        $evp->set(IO::Handle->new_from_fd(IO::AIO::poll_fileno, 'r'), \%self, POLLIN);
+    }
+
+    sub onReadReady {
+        #say "executing poll_cb";
+        IO::AIO::poll_cb;
+    }
+
+
+
+    1;
+}
+
 package HTTP::BS::Server {
     use strict; use warnings;
     use feature 'say';
@@ -151,6 +175,7 @@ package HTTP::BS::Server {
     use IO::Poll qw(POLLIN POLLOUT POLLHUP);
     use Scalar::Util qw(weaken);
     use Data::Dumper;
+   
     HTTP::BS::Server::Util->import();
     
     sub new {
@@ -180,6 +205,8 @@ package HTTP::BS::Server {
         bless \%self, $class;
 
         $evp->set($sock, \%self, POLLIN);
+        $self{'ioaio'} = HTTP::BS::Server::AIO->new($evp);     
+
         # load the plugins        
         foreach my $plugin (@{$plugins}) {
             if($settings->{'ISCHILD'}) {
@@ -239,7 +266,7 @@ package HTTP::BS::Server {
         my $MAX_TIME_WITHOUT_SEND = 30; #600;
         my $cref = HTTP::BS::Server::Client->new($csock, $server);
                
-        $server->{'evp'}->set($csock, $cref, POLLIN | $EventLoop::Poll::ALWAYSMASK);    
+        #$server->{'evp'}->set($csock, $cref, POLLIN | $EventLoop::Poll::ALWAYSMASK);    
 
         weaken($cref); #don't allow this timer to keep the client object alive
         $server->{'evp'}->add_timer($MAX_TIME_WITHOUT_SEND, 0, sub {
@@ -505,7 +532,9 @@ package HTTP::BS::Server::Client::Request {
         weaken($self{'client'}); #don't allow Request to keep client alive
         $self{'on_read_ready'} = \&want_request_line;
         $self{'outheaders'}{'X-MHFS-CONN-ID'} = $client->{'outheaders'}{'X-MHFS-CONN-ID'};      
-        $self{'rl'} = 0;        
+        $self{'rl'} = 0;
+        # we want the request
+        $client->SetEvents(POLLIN | $EventLoop::Poll::ALWAYSMASK );        
         return \%self;
     }
 
@@ -1357,9 +1386,10 @@ package HTTP::BS::Server::Client {
         my ($class, $sock, $server) = @_;
         $sock->blocking(0);
         my %self = ('sock' => $sock, 'server' => $server, 'time' => clock_gettime(CLOCK_MONOTONIC), 'inbuf' => '');
-        $self{'outheaders'}{'X-MHFS-CONN-ID'} = $self{'time'} * rand(); # BAD UID 
+        $self{'outheaders'}{'X-MHFS-CONN-ID'} = $self{'time'} * rand(); # BAD UID
+        bless \%self, $class;
         $self{'request'} = HTTP::BS::Server::Client::Request->new(\%self);      
-        return bless \%self, $class;
+        return \%self;
     }
 
     sub SetEvents {
@@ -1380,6 +1410,7 @@ package HTTP::BS::Server::Client {
                 goto &onWriteReady;
                 #return onWriteReady($self);
             }
+            #else {
             elsif(defined $self->{'request'}{'on_read_ready'}) {
                 #say "do_on_data: goto onReadReady inbuf " . length($self->{'inbuf'});
                 goto &onReadReady;
@@ -1398,9 +1429,13 @@ package HTTP::BS::Server::Client {
         my $tempdata;        
         if(defined($self->{'sock'}->recv($tempdata, RECV_SIZE))) {
             if(length($tempdata) == 0) {                
-                say 'client read 0 bytes, client read closed';
+                say 'Server::Client read 0 bytes, client read closed';
                 return undef;
             }
+            #elsif(! defined $self->{'request'}{'on_read_ready'}) {
+            #    say "recv without on_read_ready?";
+            #    return undef;
+            #}
             #$self->{'request'}{'rl'} += length($tempdata);
             #say "read length " . length($tempdata) . ' rl ' . $self->{'request'}{'rl'};
             $self->{'inbuf'} .= $tempdata;
@@ -1431,7 +1466,7 @@ package HTTP::BS::Server::Client {
                     say "-------------------------------------------------";                               
                     return undef;              
                 }                
-                $client->SetEvents(POLLIN | $EventLoop::Poll::ALWAYSMASK );
+                #$client->SetEvents(POLLIN | $EventLoop::Poll::ALWAYSMASK );
                 $client->{'request'} = HTTP::BS::Server::Client::Request->new($client);
                 # handle possible existing read data 
                 goto &do_on_data;                
@@ -2126,6 +2161,7 @@ package MusicLibrary {
     use POSIX qw/ceil/;
     use Storable qw( freeze thaw);
     use Encode qw(encode_utf8);
+    use IO::AIO;
 
     sub BuildLibrary {
         my ($path) = @_;        
@@ -2272,6 +2308,7 @@ package MusicLibrary {
     }
 
     my %TRACKDURATION;
+    my %TRACKINFO;
     sub SendTrack {
         my ($request, $tosend) = @_;        
         #my $gapless = $request->{'qs'}{'gapless'};            
@@ -2279,6 +2316,15 @@ package MusicLibrary {
         #    $request->SendFile($tosend);
         #}
         if(defined $request->{'qs'}{'part'}) {
+            if(!defined($TRACKINFO{$tosend}))
+            {
+                GetTrackInfo($tosend, sub {
+                    $TRACKDURATION{$tosend} = $TRACKINFO{$tosend}{'duration'};
+                    SendTrack($request, $tosend);
+                });
+                return;
+            }
+            
             if($TRACKDURATION{$tosend}) {
                 say "no proc, duration cached";
                 $request->{'outheaders'}{'X-MHFS-NUMSEGMENTS'} = ceil($TRACKDURATION{$tosend} / $SEGMENT_DURATION);
@@ -2287,7 +2333,7 @@ package MusicLibrary {
                 SendLocalTrackSegment($request, $tosend);
                 return;
             }
-
+            # dead code
             my $evp = $request->{'client'}{'server'}{'evp'};
             $request->{'process'} = HTTP::BS::Server::Process->new(['soxi', '-D', $tosend], $evp, {
                 'STDOUT' => sub {
@@ -2314,26 +2360,94 @@ package MusicLibrary {
             $request->SendLocalFile($tosend);
         }
     }
+
+    sub parseStreamInfo {
+        # https://metacpan.org/source/DANIEL/Audio-FLAC-Header-2.4/Header.pm
+        my ($buf) = @_;
+        my $metaBinString = unpack('B144', $buf);
+ 
+        my $x32 = 0 x 32;
+        my $info = {};
+        $info->{'MINIMUMBLOCKSIZE'} = unpack('N', pack('B32', substr($x32 . substr($metaBinString, 0, 16), -32)));
+        $info->{'MAXIMUMBLOCKSIZE'} = unpack('N', pack('B32', substr($x32 . substr($metaBinString, 16, 16), -32)));
+        $info->{'MINIMUMFRAMESIZE'} = unpack('N', pack('B32', substr($x32 . substr($metaBinString, 32, 24), -32)));
+        $info->{'MAXIMUMFRAMESIZE'} = unpack('N', pack('B32', substr($x32 . substr($metaBinString, 56, 24), -32)));
+ 
+        $info->{'SAMPLERATE'}       = unpack('N', pack('B32', substr($x32 . substr($metaBinString, 80, 20), -32)));
+        $info->{'NUMCHANNELS'}      = unpack('N', pack('B32', substr($x32 . substr($metaBinString, 100, 3), -32))) + 1;
+        $info->{'BITSPERSAMPLE'}    = unpack('N', pack('B32', substr($x32 . substr($metaBinString, 103, 5), -32))) + 1;
+ 
+        # Calculate total samples in two parts
+        my $highBits = unpack('N', pack('B32', substr($x32 . substr($metaBinString, 108, 4), -32)));
+ 
+        $info->{'TOTALSAMPLES'} = $highBits * 2 ** 32 +
+                unpack('N', pack('B32', substr($x32 . substr($metaBinString, 112, 32), -32)));
+ 
+        # Return the MD5 as a 32-character hexadecimal string
+        $info->{'MD5CHECKSUM'} = unpack('H32',substr($buf, 18, 16));
+        return $info; 
+    }
+
+    sub GetTrackInfo {
+        my ($file, $continue) = @_;
+        aio_open($file, IO::AIO::O_RDONLY, 0 , sub {
+            my ($fh) = @_;
+            $fh or die "aio_open failed";
+            my $buf = '';
+            aio_read($fh, 8, 34,$buf, 0, sub {                    
+                $_[0] == 34 or die "short read";
+                my $info = parseStreamInfo($buf);
+                $info->{'duration'} = $info->{'TOTALSAMPLES'}/$info->{'SAMPLERATE'}; 
+                $TRACKINFO{$file} = $info;
+                print Dumper($info); 
+                $continue->();                                      
+            });
+        });
+    }
+
+    sub onSampleRates {
+        my ($request, $file, $rates) = @_;
+    }
     
     sub SendLocalTrack {
         my ($request, $file) = @_;    
         my $evp = $request->{'client'}{'server'}{'evp'};        
         my $tmpdir = $request->{'client'}{'server'}{'settings'}{'TMPDIR'};  
         my $filebase = basename($file);
-        # determine if we need to convert to flac or to search for lossy flacs       
+        # convert to lossy flac if necessary (segmenting a lossy file)     
         my $is_flac = $file =~ /\.flac$/i;
         if(!$is_flac) {
+            if(! $request->{'qs'}{'part'}) {
+                SendTrack($request, $file);
+                return;
+            }
             $filebase =~ s/\.[^.]+$/.lossy.flac/;
             my $tlossy = $tmpdir . '/' . $filebase;
             if(-e $tlossy ) {
                 $is_flac = 1;
                 $file = $tlossy;
+            }
+            else {
+                my $outfile = $tmpdir . '/' . $filebase;            
+                my @cmd = ('ffmpeg', '-i', $file, '-c:a', 'flac', '-sample_fmt', 's16', $outfile);
+                my $buf;
+                $request->{'process'} = HTTP::BS::Server::Process->new(\@cmd, $evp, {
+                'SIGCHLD' => sub {
+                    # HACK
+                    $request->{'client'}{'time'} = clock_gettime(CLOCK_MONOTONIC);
+                    SendLocalTrack($request,$outfile);                
+                },                    
+                'STDERR' => sub {
+                    my ($terr) = @_;
+                    read($terr, $buf, 4096);                                     
+                }}); 
+                return;
             }            
         }
+
         my $max_sample_rate = $request->{'qs'}{'max_sample_rate'};
-        # bitdepth only makes sense with PCM audio
-        # however we do all processing in PCM (in flac)
-        my $bitdepth = $request->{'qs'}{'bitdepth'};                
+        my $bitdepth = $request->{'qs'}{'bitdepth'};             
+
         if(! $max_sample_rate) {
             SendTrack($request, $file);
             return;            
@@ -2363,98 +2477,60 @@ package MusicLibrary {
                 return;
             }                      
         }
+
+        if(!defined($TRACKINFO{$file}))
+        {
+            GetTrackInfo($file, sub {
+                $TRACKDURATION{$file} = $TRACKINFO{$file}{'duration'};
+                SendLocalTrack($request, $file);
+            });
+            return;
+        }
+
+        my $samplerate = $TRACKINFO{$file}{'SAMPLERATE'};
+        my $inbitdepth = $TRACKINFO{$file}{'BITSPERSAMPLE'};        
+        say "input: samplerate $samplerate inbitdepth $inbitdepth";
+        say "maxsamplerate $max_sample_rate bitdepth $bitdepth";                    
+        if(($samplerate <= $max_sample_rate) && ($inbitdepth <= $bitdepth)) {
+            say "samplerate is <= max_sample_rate, not resampling";
+            SendTrack($request, $file);
+            return;               
+        }      
+        # resampling
+        my $desiredrate;
+        RATE_FACTOR: foreach my $key (keys %rates) {
+            if(($samplerate % $key) == 0) {
+                foreach my $rate (@{$rates{$key}}) {
+                    if(($rate <= $samplerate) && ($rate <= $max_sample_rate)) {
+                        $desiredrate = $rate;
+                        last RATE_FACTOR;
+                    }                      
+                }
+            }                
+        }
+        $desiredrate //= $max_sample_rate;                
+        say "desired rate: $desiredrate";
+        # build the command                       
+        my $outfile = $tmpdir . '/' . $bitdepth . '_' . $desiredrate . '_' . $filebase;
+        my @cmd = ('sox', $file, '-G', '-b', $bitdepth, $outfile, 'rate', '-v', '-L', $desiredrate, 'dither');
+        say "cmd: " . join(' ', @cmd);
         
         # HACK
         say "client time was: " . $request->{'client'}{'time'};
         $request->{'client'}{'time'} += 30;
         say "HACK client time extended to " . $request->{'client'}{'time'};
-        
-        # convert to pcm (flac) and retry if not already
-        if(!$is_flac) {
-            if(! $request->{'qs'}{'part'}) {
-                SendTrack($request, $file);
-                return;
-            }            
-            
-            my $outfile = $tmpdir . '/' . $filebase;          
-            #my @cmd = ('ffmpeg', '-i', $file, $outfile);
-            my @cmd = ('ffmpeg', '-i', $file, '-c:a', 'flac', '-sample_fmt', 's16', $outfile);
-            my $buf;
-            $request->{'process'} = HTTP::BS::Server::Process->new(\@cmd, $evp, {
-            'SIGCHLD' => sub {
-                # HACK
-                $request->{'client'}{'time'} = clock_gettime(CLOCK_MONOTONIC);
-                SendLocalTrack($request,$outfile);                
-            },                    
-            'STDERR' => sub {
-                my ($terr) = @_;
-                read($terr, $buf, 4096);                                     
-            }}); 
-            return;                     
-        }
-        
-        # have ffmpeg determine the input file parameters and act accordingly                           
-        $request->{'process'} = HTTP::BS::Server::Process->new(['ffmpeg', '-i', $file], $evp, {
+        $request->{'process'} = HTTP::BS::Server::Process->new(\@cmd, $evp, {
+        'SIGCHLD' => sub {
+            # HACK
+            $request->{'client'}{'time'} = clock_gettime(CLOCK_MONOTONIC); 
+            SendTrack($request, $outfile);                                      
+        },                    
         'STDERR' => sub {
-            my ($err) = @_;
+            my ($terr) = @_;
             my $buf;
-            my $samplerate;                      
-            my $rfailed = ! read($err, $buf, 4096);
-            while(1) {
-                if($rfailed) {                
-                }                
-                elsif($buf =~ /Audio:\s[^\s]+\s(\d+)\sHz,\s[a-z]+,\s(?:(?:s(16))|(?:s32\s\((24)\sbit\)))/) {
-                    $samplerate = $1;
-                    my $inbitdepth = $2 || $3;
-                    #$inbitdepth = $3 if(! $inbitdepth);
-                    say "input: samplerate $samplerate inbitdepth $inbitdepth";
-                    say "maxsamplerate $max_sample_rate bitdepth $bitdepth";                    
-                    if(($samplerate <= $max_sample_rate) && ($inbitdepth <= $bitdepth)) {
-                        say "samplerate is <= max_sample_rate";
-                        SendTrack($request, $file);
-                        return -1;                
-                    }                    
-                    last;                
-                }               
-                say "regex or ffmpeg failed";
-                say $buf if($buf);                
-                SendTrack($request, $file);
-                return -1;            
-            }                                     
-                        
-            # choose the sample rate                
-            my $desiredrate;
-            RATE_FACTOR: foreach my $key (keys %rates) {
-                if(($samplerate % $key) == 0) {
-                    foreach my $rate (@{$rates{$key}}) {
-                        if(($rate <= $samplerate) && ($rate <= $max_sample_rate)) {
-                            $desiredrate = $rate;
-                            last RATE_FACTOR;
-                        }                      
-                    }
-                }                
-            }
-            $desiredrate //= $max_sample_rate;                
-            say "desired rate: $desiredrate";
-            # build the command                       
-            my $outfile = $tmpdir . '/' . $bitdepth . '_' . $desiredrate . '_' . $filebase;
-            my @cmd = ('sox', $file, '-G', '-b', $bitdepth, $outfile, 'rate', '-v', '-L', $desiredrate, 'dither');
-            say "cmd: " . join(' ', @cmd);
-            
-            $request->{'process'} = HTTP::BS::Server::Process->new(\@cmd, $evp, {
-            'SIGCHLD' => sub {
-                # HACK
-                $request->{'client'}{'time'} = clock_gettime(CLOCK_MONOTONIC); 
-                SendTrack($request, $outfile);                                      
-            },                    
-            'STDERR' => sub {
-                my ($terr) = @_;
-                read($terr, $buf, 4096);                                     
-            }});                  
-            
-            return -1;
-            
-        }});   
+            read($terr, $buf, 4096);                                     
+        }});  
+        return;
     }    
    
 
@@ -3198,6 +3274,7 @@ my @routes = (
 $SETTINGS->{'CPORT'} //= $SETTINGS->{'PORT'} + 1;
 $SETTINGS->{'CHOST'} //= '127.0.0.1';
 $SETTINGS->{'CDOMAIN'} //= $SETTINGS->{'CHOST'};
+#if(0){
 if(fork() == 0) {
     $SETTINGS->{'PHOST'} = $SETTINGS->{'HOST'};
     $SETTINGS->{'HOST'} = $SETTINGS->{'CHOST'};
