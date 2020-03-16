@@ -32,6 +32,7 @@ var MainAudioContext;
 var NextBufferTime;
 var RepeatAstart;
 var SaveNextBufferTime;
+var LastBufferTime;
 
 //var CurrentSources;
 //var NextSources;
@@ -554,9 +555,10 @@ function Track(trackname) {
             this.sources.push(source);
             skiptime = (skiptime % this.maxsegduration);
             console.log('Scheduling ' + this.trackname + 'at ' + start + ' segment timeskipped ' + skiptime);
-        }
+        }         
         source.start(start, skiptime);
-        var timeleft = source.buffer.duration - skiptime;
+        LastBufferTime = LastBufferTime || start;
+        var timeleft = source.buffer.duration - skiptime;        
         NextBufferTime = start + timeleft;
         
         if(isLastPart) {                       
@@ -617,7 +619,8 @@ function Track(trackname) {
                 this._startseg = seg;                
             }
             var track = this;
-            this.backofftime = 1000;            
+            this.backofftime = 1000;
+            LastBufferTime = null;            
             this.currentDownload = new TrackDownload(this, function (buffer, isFirstPart, isLastPart) {                
                 if (!USESEGMENTS) {
                     track.buf = buffer;
@@ -632,6 +635,9 @@ function Track(trackname) {
                     
                 }
                 track.queueBuffer(buffer, skiptime, isFirstPart, isLastPart, start);
+                /*console.log('LastBufferTime ' + LastBufferTime);
+                start = LastBufferTime + (55 * 4096 * (seg-track._startseg))/44100;
+                console.log('start ' + start + ' NextBufferTime ' + NextBufferTime);*/
                 start = null;
                 skiptime = 0;
                 return true;
