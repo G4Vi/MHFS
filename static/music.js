@@ -18,6 +18,8 @@ var dbarea     = document.getElementById('musicdb');
 var MAX_SAMPLE_RATE;
 var BITDEPTH;
 var USESEGMENTS;
+var USEINCREMENTAL;
+var ISDECODING;
 var PTrackUrlParams;
 const BUFFER_MS = 300;
 const BUFFER_S = (BUFFER_MS / 1000);
@@ -211,6 +213,348 @@ function DecodeFlac(thedata, ondecoded) {
     ondecoded(toWav(metaData, decData));    
 }
 /*end firefox flac decoding is bad*/
+
+function roundUp(x, multiple) {
+	var rem = x % multiple;
+    if(rem == 0) {
+    	return x;		
+    }
+    else {
+		return x + multiple - rem;	    	
+    }		
+}
+
+function concatTypedArrays(a, b) { // a, b TypedArray of same type
+    var c = new (a.constructor)(a.length + b.length);
+    c.set(a, 0);
+    c.set(b, a.length);
+    return c;
+}
+
+async function TryDecodeFlacBuf(track, binData) {
+    if(typeof Flac === 'undefined') {
+        console.log('DecodeFlac, no Flac - setInterval');
+        let promise = new Promise((resolve, reject) => {
+            let itertimer;
+            function onIter() {                
+                if(typeof Flac === 'undefined') {
+                    console.log('DecodeFlac, no Flac - setInterval');
+                    return;
+                }                
+                clearInterval(itertimer);
+                resolve("success");            
+            };
+            itertimer = setInterval(onIter, 5);            
+        });
+        let result = await promise;       
+    }
+    if(!Flac.isReady()) {
+        console.log('DecodeFlac, Flac not ready, handler added');
+        let promise = new Promise((resolve, reject) => {
+            Flac.on('ready', function(libFlac){
+                resolve("suc2");
+            });
+        });    
+        let result = await promise;
+        console.log('flac loaded');        
+    }    
+    
+    track.bytesLeft -= binData.buffer.byteLength;
+    if(! track.binData) {
+        track.binData = binData;
+        track.currentDataOffset = 0;
+        track.decData = [];
+        track.decFrames = 0;
+    }
+    else {
+        track.binData = concatTypedArrays(track.binData, binData);
+    }
+	
+    var flac_ok = 1;    
+	
+    if(! track.flac_decoder) {
+        track.flac_decoder = Flac.create_libflac_decoder(false); 
+        if (track.flac_decoder != 0){
+            
+	        /** @memberOf decode */
+            function read_callback_fn(bufferSize){	          	
+                console.log('decode read callback, buffer bytes max=', bufferSize);
+                
+                var start = track.currentDataOffset;
+                var csize =track.binData.buffer.byteLength;
+                var end = track.currentDataOffset === csize? -1 : Math.min(track.currentDataOffset + bufferSize, csize);
+                
+                var _buffer;
+                var numberOfReadBytes;
+                if(end !== -1){
+                    
+                    _buffer = track.binData.subarray(track.currentDataOffset, end);
+                    numberOfReadBytes = end - track.currentDataOffset;
+                    
+                    track.currentDataOffset = end;
+                } else {
+                    console.log('no bytes left');
+                    numberOfReadBytes = 0;
+                }
+                //console.log(_buffer);
+                return {buffer: _buffer, readDataLength: numberOfReadBytes, error: false};
+            }
+            
+            /** @memberOf decode */
+            function write_callback_fn(buffer){
+                // buffer is the decoded audio data, Uint8Array
+                //console.log('decode write callback', buffer);
+                //track.decData.push(buffer);
+                track.decData.push(buffer);
+                console.log("write_callback decdata len " + track.decData.length);
+            }
+            
+            /** @memberOf decode */
+            function metadata_callback_fn(data){
+                console.info('meta data: ', data);
+                track.meta_data = data;               		
+                for(var n in track.meta_data){
+                    console.log( n + ' ' + 	track.meta_data[n]);
+                }	
+            }
+	        /** @memberOf decode */
+	        function error_callback_fn(decoder, err, client_data){
+	            console.log('decode error callback', err);
+	        }
+            var init_status = Flac.init_decoder_stream(track.flac_decoder, read_callback_fn, write_callback_fn, error_callback_fn, metadata_callback_fn);
+            
+
+		    
+		    
+            flac_ok &= init_status == 0;
+            console.log("flac init     : " + flac_ok);//DEBUG
+	    } else {
+	    	var msg = 'Error initializing the decoder.';
+	        console.error(msg);
+	    	return;
+        }        
+    }
+	
+
+	
+	function readmeta() {
+		let is_last = 0;
+		let type;
+		let flac_return = 1;
+		is_last = (track.binData[track.data_offset] & 0x80) == 0x80;
+		type = track.binData[track.data_offset] & 0x7F;
+		let size = ((track.binData[track.data_offset+1] << 16) & 0xFF0000) | ((track.binData[track.data_offset+2] << 8) & 0xFF00) | track.binData[track.data_offset+3];
+		console.log('metablock size ' + size + ' is_last ' + is_last + ' type ' + type + 'offset ' + track.data_offset);
+		if(track.binData.length < roundUp(track.data_offset + 4 + size, 8192)) {
+			console.log('not enough data for current meta');
+            return;			
+		}
+		flac_return &= Flac.FLAC__stream_decoder_process_single(track.flac_decoder);
+		state = Flac.FLAC__stream_decoder_get_state(track.flac_decoder);
+        track.data_offset += (4 + size);		
+        if(is_last) {
+            track.metaleft = 0;
+        }			
+	}
+	
+	function isframe() {
+		let synccode = ((track.binData[track.data_offset] << 6)	& 0x3FC0) | ((track.binData[track.data_offset+1] >> 2) & 0x3F);
+		return (synccode == 0x3FFE);
+	}
+	
+	
+    if(! track.meta_data) {
+		console.log('no meta');
+		if(track.binData.length < (8+34)) {			
+			console.log('not enough data for streaminfo');
+			return;
+		}
+        track.data_offset = 4;
+		track.metaleft = 1;
+        readmeta();		
+    }
+	while(track.metaleft) {		
+		if(isframe()) {
+			console.log('unexpected frame before meta was done');
+            track.metaleft = 0;
+            return;			
+		}
+		readmeta();			
+	}
+	console.log('isframe ' + isframe());
+	//await queueFlac(track, 1, 0);
+	//console.log('after await');
+	return;	
+}
+
+function int16ToFloat32(inputArray) {
+
+        let int16arr = new Int16Array(inputArray)
+        var output = new Float32Array(int16arr.length);
+        for (var i = 0; i < int16arr.length; i++) {
+            var int = int16arr[i];
+            var float = (int >= 0x8000) ? -(0x10000 - int) / 0x8000 : int / 0x7FFF;
+            output[i] = float;
+        }
+        return output;
+    }
+
+
+async function queueFlac(track, duration, skiptime) {
+	if(! track.meta_data  || track.metaleft) {
+		console.log('metadata left not queuing');
+		ISDECODING = 0;
+        return;		
+	}
+	if(duration != 1) {
+		console.log('duration of not 1 not supported');		
+	}
+	track.decData = track.decData || [];
+	duration = 1;
+	let datareq = roundUp(track.meta_data['max_framesize'], 8192);
+	let samples = track.meta_data['sampleRate'] * duration;
+	let frames  = Math.ceil(samples/track.meta_data['max_blocksize']);
+	
+	var flac_return = 1;
+	var state = 0;
+	while(((track.binData.buffer.byteLength - track.currentDataOffset) >= datareq) ||(track.bytesLeft == 0))  {
+		flac_return &= Flac.FLAC__stream_decoder_process_single(track.flac_decoder);
+        //need to check decoder state: state == 4: end of stream ( > 4: error)
+		state = Flac.FLAC__stream_decoder_get_state(track.flac_decoder);
+		if((!flac_return) || (state > 3)) {
+			if(flac_return && (state == 4)) {
+				console.log("decoding success flac_return:" + flac_return + " state " + state);
+				break;
+			}
+			console.log("decoding error flac_return:" + flac_return + " state " + state);
+			break;
+		}
+		console.log("decoded frames " + track.decData.length);
+        if(track.decData.length >= frames) {
+			let decodedsamples = 0;
+		    for(var i = 0; i < track.decData.length; i++) {
+		    	decodedsamples += (track.decData[i][0].length / 2);			
+		    }
+			console.log('decoded samples 1 ' + decodedsamples); 
+			if(decodedsamples >= samples) break;
+        }			
+	}	
+	if(track.decData.length >= frames) {
+		frames = track.decData.length;
+		let decodedsamples = 0;
+		for(var i = 0; i < track.decData.length; i++) {
+			decodedsamples += (track.decData[i][0].length / 2);			
+		}		
+		console.log('decoded samples ' + decodedsamples);		
+		
+		let leftoversamples = decodedsamples - samples;
+		console.log('decoded samples (leftover) ' + leftoversamples);
+		track.decDataSave = [];
+		// save leftoversamples for later
+		let decodedsaved = 0;
+		if(leftoversamples > 0) {
+		    let bytespersample = track.meta_data['bitsPerSample'] / 8;			
+			track.decDataSave[0] = [];
+		    for(var i = 0; i < track.meta_data['channels']; i++) {
+                track.decDataSave[0][i] =  track.decData[frames-1][i].subarray( track.decData[frames-1][i].length - (leftoversamples * bytespersample));
+                track.decData[frames-1][i] = track.decData[frames-1][i].subarray(0, track.decData[frames-1][i].length - (leftoversamples * bytespersample));			
+				//track.decDataSave[0][i] =  track.decData[frames-1][i].subarray(leftoversamples * bytespersample);
+		    	//track.decData[frames-1][i] = track.decData[frames-1][i].subarray(0, leftoversamples * bytespersample);
+                	
+		    }
+			decodedsamples = 0;
+            for(var i = 0; i < track.decDataSave.length; i++) {
+		    	decodedsamples += (track.decDataSave[i][0].length / 2);			
+		    }
+            if(decodedsamples != leftoversamples) alert(1);			
+			
+		}
+		decodedsamples = 0;
+        for(var i = 0; i < track.decData.length; i++) {
+			decodedsamples += (track.decData[i][0].length / 2);			
+		}		
+		console.log('decoded samples 2 ' + decodedsamples);	
+        
+		
+        	
+		//console.log(track.decData);
+		
+		let wav = toWav(track.meta_data, track.decData);		
+		track.decData = track.decDataSave;
+		let incomingdata = await MainAudioContext.decodeAudioData(wav);		
+		
+		
+		/*function toint16(byteA, byteB) {
+			var sign = byteB & (1 << 7);
+            var x = (((byteB & 0xFF) << 8) | (byteA & 0xFF));
+            if (sign) {
+               x = 0xFFFF0000 | x;  // fill in most significant bits with 1's
+            }
+            return x;			
+		}
+		
+		let incomingdata = MainAudioContext.createBuffer(track.meta_data['channels'], track.meta_data['sampleRate'] * duration, track.meta_data['sampleRate']);
+		let div = Math.pow(2, track.meta_data['bitsPerSample'] - 1);
+        for(var i = 0; i < incomingdata.numberOfChannels; i++) {			
+			let buf = new Float32Array(samples);
+			let bufindex = 0;           
+			for(var j = 0; j < frames; j++) {
+				//const view = new DataView(track.decData[j][i].buffer);                
+				for(var k = 0; k < track.decData[j][i].length; k += 2){
+					//let s16value = view.getInt16(k, 1);
+					let s16value = toint16(track.decData[j][i][k], track.decData[j][i][k+1]);
+                    buf[bufindex++] = (s16value / 0x7FFF);
+					//buf[bufindex++] = s16value / div;
+					//buf[bufindex++] = (s16value + 0.5) / (0x7FFF + 0.5);
+                    //buf[bufindex++] = (s16value > 0) ? (s16value / 0x7FFF) : (s16value / 0x8000); 
+                    //buf[bufindex++] = (s16value < 0) ? (s16value / 0x8000) : (s16value / 0x7FFF); 
+                    //buf[bufindex++] = (s16value >= 0x8000) ? -(0x10000 - s16value) / 0x8000 : s16value / 0x7FFF;                                                            
+					if((buf[bufindex-1] > 1) || (buf[bufindex-1] < -1)) {
+						console.log('CLAMPING FLOAT');
+						if(buf[bufindex-1] > 1) buf[bufindex-1] = 1;
+					    if(buf[bufindex-1] < -1) buf[bufindex-1] = -1; 	
+					}                  				
+				}
+
+			}
+			console.log('bufindex ' + bufindex, 'samples ' + samples);
+			incomingdata.getChannelData(i).set(buf);			
+		}*/
+        /*
+        let wav = toWav(track.meta_data, track.decData);
+		let decindex = 0;
+		const view = new DataView(track.decData[0][0].buffer);
+		const wavview = new DataView(wav);
+        for( let wavindex = 44; (wavindex < wavview.byteLength) && (decindex < track.decData[0][0].length); wavindex += 4) {
+		    var sign = track.decData[0][0][decindex+1] & (1 << 7);
+            var x = (((track.decData[0][0][decindex+1] & 0xFF) << 8) | (track.decData[0][0][decindex] & 0xFF));
+            if (sign) {
+               x = 0xFFFF0000 | x;  // fill in most significant bits with 1's
+            }
+			if(wavview.getInt16(wavindex, 1) != x) {
+			//if(wavview.getInt16(wavindex, 1) != view.getInt16(decindex, 1)) {
+				console.log('wav is different ' + decindex + ' wav ' + wavview.getInt16(wavindex, 1) + ' decData ' + x +  ' wav[0] ' + wavview.getUint8(wavindex) + ' wav[1] ' + wavview.getUint8(wavindex+1) + ' t[0] ' +track.decData[0][0][decindex] + ' t[1] '+ track.decData[0][0][decindex+1]);
+                alert(1);			
+			}
+			decindex += 2;
+		}
+		*/
+		//track.decData = track.decDataSave;		
+		
+		ISDECODING = 0;
+		var source = MainAudioContext.createBufferSource();
+        source.connect(MainAudioContext.destination);
+        source.buffer = incomingdata;
+		if(NextBufferTime < MainAudioContext.currentTime) {
+            console.log('TOO SLOW ' + NextBufferTime + ' ' + MainAudioContext.currentTime);
+		    NextBufferTime = Math.ceil(MainAudioContext.currentTime + BUFFER_S);
+		}
+		source.start(NextBufferTime, 0);
+		NextBufferTime = NextBufferTime + source.buffer.duration;
+        console.log('queued NextBufferTime ' + NextBufferTime + ' duration ' + source.buffer.duration);		
+	}	
+}
+
 
 function TrackDownload(track, onDownloaded, seg) {
     this.track = track;
@@ -602,7 +946,35 @@ function Track(trackname) {
         this.isDownloaded = false;
         this.queuednext = false;
         skiptime = skiptime || 0;
-        if (this.buf) {
+        if(USEINCREMENTAL) {
+            console.log('incremental');
+            (async () => {
+                let response = await fetch(geturl(this.trackname));
+                let reader = response.body.getReader();
+                this.CL = response.headers.get('Content-Length');
+                console.log('CL ' + this.CL);
+                this.bytesLeft = this.CL;
+                var binData;
+                while(1) {
+                    let {value: chunk, done: readerDone} = await reader.read();
+                    if(chunk){
+                        console.log('chunk length ' + chunk.length);
+                        await TryDecodeFlacBuf(this, chunk);
+                        //binData = binData ? concatTypedArrays(binData, chunk) : chunk;                        
+                        //if(binData.length == this.CL) {
+                        //    await TryDecodeFlacBuf(this, binData);
+                        //    await TryDecodeFlacBuf(this, new Uint8Array());
+                        //}
+                    }//
+                    if(readerDone) {
+                        console.log('dl of ' + this.trackname + ' done');
+                        return;
+                    }
+                }
+                
+            })();            
+        }        
+        else if (this.buf) {
             this.queueBuffer(this.buf, skiptime, true, true, start);
         }
         else {
@@ -652,7 +1024,16 @@ function Track(trackname) {
 }
 
 function loop() {
-    if(Tracks[CurrentTrack]) {              
+    if(Tracks[CurrentTrack]) {
+
+        if(USEINCREMENTAL) {
+            //await queueFlac(Tracks[CurrentTrack], 1, 0);
+			if(((NextBufferTime - MainAudioContext.currentTime) < 10) && !ISDECODING) {		
+                ISDECODING = 1;			
+			    queueFlac(Tracks[CurrentTrack], 1, 0);
+			}
+
+        }			
         if (SBAR_UPDATING) {
             console.log('Not updating SBAR, SBAR_UPDATING');            
         }
@@ -762,6 +1143,7 @@ function _BuildPTrack() {
     if (MAX_SAMPLE_RATE) PTrackUrlParams.append('max_sample_rate', MAX_SAMPLE_RATE);
     if (BITDEPTH) PTrackUrlParams.append('bitdepth', BITDEPTH);
     if (USESEGMENTS) PTrackUrlParams.append('segments', USESEGMENTS);
+    if (USEINCREMENTAL) PTrackUrlParams.append('inc', USEINCREMENTAL);
     Tracks.forEach(function (track) {
         PTrackUrlParams.append('ptrack', track.trackname);
     });
@@ -951,10 +1333,17 @@ dbarea.addEventListener('click', function (e) {
     MAX_SAMPLE_RATE = urlParams.get('max_sample_rate') || 48000;
     BITDEPTH        = urlParams.get('bitdepth');
     USESEGMENTS     = urlParams.get('segments');
-    if(USESEGMENTS === null) {
+    USEINCREMENTAL  = urlParams.get("inc");
+    if((USESEGMENTS === null) && (USEINCREMENTAL === null)) {
         USESEGMENTS = 1;
+        console.log('default USESEGMENTS');
+    }
+    else if(USEINCREMENTAL) {
+        USEINCREMENTAL = Number(USEINCREMENTAL);
+        console.log('USEINCREMENTAL');
     }
     else {
+        console.log('USESEGMENTS');
         USESEGMENTS = Number(USESEGMENTS);
     }        
     MainAudioContext = CreateAudioContext();
