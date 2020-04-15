@@ -2334,19 +2334,9 @@ package MusicLibrary {
             if($TRACKDURATION{$tosend}) {
                 say "no proc, duration cached";
                 my $pv = Mytest::new($tosend);
-                #my $framecnt = Mytest::mytest_get_flac_frame_count($pv);
-                #$SEGMENT_DURATION = (4096 * 55) / $TRACKINFO{$tosend}{'SAMPLERATE'};
-                #$request->{'outheaders'}{'X-MHFS-NUMSEGMENTS'} = ceil($framecnt/55);
-                #$TRACKINFO{$tosend}{'pv'} //= Mytest::new($tosend);
                 $request->{'outheaders'}{'X-MHFS-NUMSEGMENTS'} = ceil($TRACKDURATION{$tosend} / $SEGMENT_DURATION);
                 $request->{'outheaders'}{'X-MHFS-TRACKDURATION'} = $TRACKDURATION{$tosend};
                 $request->{'outheaders'}{'X-MHFS-MAXSEGDURATION'} = $SEGMENT_DURATION;
-                #my $framestowaste = ($request->{'qs'}{'part'} - 1) * 55;                
-                #Mytest::mytest_get_flac_frames($pv, $framestowaste) if($framestowaste);
-                #my $framesleft = $framecnt - $framestowaste;
-                #my $toget = $framesleft > 55 ? 55 : $framesleft;
-                #my $res = Mytest::mytest_get_flac_frames($pv, $toget);
-                
                 my $samples_per_seg = $TRACKINFO{$tosend}{'SAMPLERATE'} * $SEGMENT_DURATION;
                 my $spos = $samples_per_seg * ($request->{'qs'}{'part'} - 1);
                 

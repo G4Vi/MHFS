@@ -166,7 +166,8 @@ BOOTDEP =
 XS_FILES = Mytest.xs
 C_FILES  = Mytest.c
 O_FILES  = Mytest.o
-H_FILES  = ppport.h
+H_FILES  = dr_flac.h \
+	ppport.h
 MAN1PODS = 
 MAN3PODS = lib/Mytest.pm
 
