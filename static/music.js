@@ -34,7 +34,33 @@ var MainAudioContext;
 var NextBufferTime;
 var RepeatAstart;
 var SaveNextBufferTime;
-var LastBufferTime;
+
+let FlacWorker = new Worker('static/flacworker.js');
+FlacWorker.addEventListener('message', function(e) {
+    //console.log(e.data);
+    if(e.data.message == 'decodedone') {    
+        ISDECODING = 0;
+        let incomingdata = MainAudioContext.createBuffer(e.data.channels, e.data.samples, e.data.samplerate);
+        for( let i = 0; i < e.data.channels; i++) {
+            let buf = new Float32Array(e.data.abuf[i]);
+            incomingdata.getChannelData(i).set(buf);        
+        }
+        
+        let source = MainAudioContext.createBufferSource();
+        source.connect(MainAudioContext.destination);
+        source.buffer = incomingdata;
+        if(NextBufferTime < MainAudioContext.currentTime) {
+            console.log('TOO SLOW ' + NextBufferTime + ' ' + MainAudioContext.currentTime);
+            NextBufferTime = Math.ceil(MainAudioContext.currentTime + BUFFER_S);
+	    }
+        source.start(NextBufferTime, 0);
+        NextBufferTime = NextBufferTime + source.buffer.duration;
+        console.log('queued NextBufferTime ' + NextBufferTime + ' duration ' + source.buffer.duration);
+    }
+    else if(e.data.message == 'decode_no_meta') {
+        ISDECODING = 0;
+    }        
+});
 
 //var CurrentSources;
 //var NextSources;
@@ -387,19 +413,6 @@ async function TryDecodeFlacBuf(track, binData) {
 	return;	
 }
 
-function int16ToFloat32(inputArray) {
-
-        let int16arr = new Int16Array(inputArray)
-        var output = new Float32Array(int16arr.length);
-        for (var i = 0; i < int16arr.length; i++) {
-            var int = int16arr[i];
-            var float = (int >= 0x8000) ? -(0x10000 - int) / 0x8000 : int / 0x7FFF;
-            output[i] = float;
-        }
-        return output;
-    }
-
-
 async function queueFlac(track, duration, skiptime) {
 	if(! track.meta_data  || track.metaleft) {
 		console.log('metadata left not queuing');
@@ -457,10 +470,7 @@ async function queueFlac(track, duration, skiptime) {
 			track.decDataSave[0] = [];
 		    for(var i = 0; i < track.meta_data['channels']; i++) {
                 track.decDataSave[0][i] =  track.decData[frames-1][i].subarray( track.decData[frames-1][i].length - (leftoversamples * bytespersample));
-                track.decData[frames-1][i] = track.decData[frames-1][i].subarray(0, track.decData[frames-1][i].length - (leftoversamples * bytespersample));			
-				//track.decDataSave[0][i] =  track.decData[frames-1][i].subarray(leftoversamples * bytespersample);
-		    	//track.decData[frames-1][i] = track.decData[frames-1][i].subarray(0, leftoversamples * bytespersample);
-                	
+                track.decData[frames-1][i] = track.decData[frames-1][i].subarray(0, track.decData[frames-1][i].length - (leftoversamples * bytespersample));               	
 		    }
 			decodedsamples = 0;
             for(var i = 0; i < track.decDataSave.length; i++) {
@@ -519,27 +529,9 @@ async function queueFlac(track, duration, skiptime) {
 			}
 			console.log('bufindex ' + bufindex, 'samples ' + samples);
 			incomingdata.getChannelData(i).set(buf);			
-		}*/
-        /*
-        let wav = toWav(track.meta_data, track.decData);
-		let decindex = 0;
-		const view = new DataView(track.decData[0][0].buffer);
-		const wavview = new DataView(wav);
-        for( let wavindex = 44; (wavindex < wavview.byteLength) && (decindex < track.decData[0][0].length); wavindex += 4) {
-		    var sign = track.decData[0][0][decindex+1] & (1 << 7);
-            var x = (((track.decData[0][0][decindex+1] & 0xFF) << 8) | (track.decData[0][0][decindex] & 0xFF));
-            if (sign) {
-               x = 0xFFFF0000 | x;  // fill in most significant bits with 1's
-            }
-			if(wavview.getInt16(wavindex, 1) != x) {
-			//if(wavview.getInt16(wavindex, 1) != view.getInt16(decindex, 1)) {
-				console.log('wav is different ' + decindex + ' wav ' + wavview.getInt16(wavindex, 1) + ' decData ' + x +  ' wav[0] ' + wavview.getUint8(wavindex) + ' wav[1] ' + wavview.getUint8(wavindex+1) + ' t[0] ' +track.decData[0][0][decindex] + ' t[1] '+ track.decData[0][0][decindex+1]);
-                alert(1);			
-			}
-			decindex += 2;
 		}
-		*/
-		//track.decData = track.decDataSave;		
+		track.decData = track.decDataSave;
+        */        
 		
 		ISDECODING = 0;
 		var source = MainAudioContext.createBufferSource();
@@ -901,7 +893,6 @@ function Track(trackname) {
             console.log('Scheduling ' + this.trackname + 'at ' + start + ' segment timeskipped ' + skiptime);
         }         
         source.start(start, skiptime);
-        LastBufferTime = LastBufferTime || start;
         var timeleft = source.buffer.duration - skiptime;        
         NextBufferTime = start + timeleft;
         
@@ -948,7 +939,9 @@ function Track(trackname) {
         skiptime = skiptime || 0;
         if(USEINCREMENTAL) {
             console.log('incremental');
-            (async () => {
+            let url = new URL(geturl(this.trackname), document.baseURI).href;        
+            FlacWorker.postMessage({'message': 'download', 'trackname' : this.trackname, 'url' : url});
+            /*(async () => {
                 let response = await fetch(geturl(this.trackname));
                 let reader = response.body.getReader();
                 this.CL = response.headers.get('Content-Length');
@@ -972,7 +965,7 @@ function Track(trackname) {
                     }
                 }
                 
-            })();            
+            })();*/            
         }        
         else if (this.buf) {
             this.queueBuffer(this.buf, skiptime, true, true, start);
@@ -991,8 +984,7 @@ function Track(trackname) {
                 this._startseg = seg;                
             }
             var track = this;
-            this.backofftime = 1000;
-            LastBufferTime = null;            
+            this.backofftime = 1000;         
             this.currentDownload = new TrackDownload(this, function (buffer, isFirstPart, isLastPart) {                
                 if (!USESEGMENTS) {
                     track.buf = buffer;
@@ -1007,9 +999,6 @@ function Track(trackname) {
                     
                 }
                 track.queueBuffer(buffer, skiptime, isFirstPart, isLastPart, start);
-                /*console.log('LastBufferTime ' + LastBufferTime);
-                start = LastBufferTime + (55 * 4096 * (seg-track._startseg))/44100;
-                console.log('start ' + start + ' NextBufferTime ' + NextBufferTime);*/
                 start = null;
                 skiptime = 0;
                 return true;
@@ -1023,14 +1012,20 @@ function Track(trackname) {
     };
 }
 
+
+
+
 function loop() {
     if(Tracks[CurrentTrack]) {
 
         if(USEINCREMENTAL) {
             //await queueFlac(Tracks[CurrentTrack], 1, 0);
-			if(((NextBufferTime - MainAudioContext.currentTime) < 10) && !ISDECODING) {		
+			if(((NextBufferTime - MainAudioContext.currentTime) < 1) && !ISDECODING) {	
+                console.log('setting ISDECODING to 1');          
                 ISDECODING = 1;			
-			    queueFlac(Tracks[CurrentTrack], 1, 0);
+			    //queueFlac(Tracks[CurrentTrack], 1, 0);
+                console.log('sending: message in a bottle');
+                FlacWorker.postMessage({'message' : 'decode', 'trackname' : Tracks[CurrentTrack].trackname, 'duration' : 1, 'skiptime' : 0});
 			}
 
         }			
@@ -1050,7 +1045,8 @@ function loop() {
             SetSeekbarValue(time);
         }       
     }
-    window.requestAnimationFrame(loop);
+    setTimeout(loop, 20);
+    //window.requestAnimationFrame(loop);
 }
 
 Number.prototype.toHHMMSS = function () {
