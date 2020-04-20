@@ -196,12 +196,92 @@ _mytest_get_flac_cleanup:
 	return false;
 }
 
-bool _mytest_get_pcm(_mytest *mytest, uint64_t start, size_t count)
+bool _mytest_get_wav(_mytest *mytest, uint64_t start, uint64_t end)
 {
-   return true;
+    mytest->flacbuffersize = (end - start) + 1 + 1;	
+    mytest->largest_offset  = mytest->flacbuffersize - 1;
+	mytest->flacbuffer = mytest->malloc(mytest->flacbuffersize);
+    if(mytest->flacbuffer == NULL)
+    {
+        return false;
+    }    
+    
+    drflac *pFlac = mytest->pFlac;
+    uint64_t bytesleft = mytest->largest_offset;
+    if(start < 44) {
+        uint8_t data[44];
+        memcpy(data, "RIFF", 4);
+        uint32_t chunksize = (pFlac->totalPCMFrameCount * pFlac->channels * sizeof(int16_t)) + 36;
+        memcpy(&data[4], &chunksize, 4);
+        memcpy(&data[8], "WAVEfmt ", 8);
+        uint32_t pcm = 16;
+        memcpy(&data[16], &pcm, 4);
+        uint16_t audioformat = 1;
+        memcpy(&data[20], &audioformat, 2);
+        uint16_t numchannels = pFlac->channels;
+        memcpy(&data[22], &numchannels, 2);
+        uint32_t samplerate = pFlac->sampleRate;
+        memcpy(&data[24], &samplerate, 4);
+        uint32_t byterate = samplerate * numchannels * (pFlac->bitsPerSample / 8);
+        memcpy(&data[28], &byterate, 4);
+        uint16_t blockalign = numchannels * (pFlac->bitsPerSample / 8);
+        memcpy(&data[32], &blockalign, 2);
+        uint16_t bitspersample = pFlac->bitsPerSample;
+        memcpy(&data[34], &bitspersample, 2);
+        memcpy(&data[36], "data", 4);
+        uint32_t totalsize = pFlac->totalPCMFrameCount * pFlac->channels * sizeof(int16_t);
+        memcpy(&data[40], &totalsize, 4);
+        unsigned tcopy = MIN(44, end+1) - start;
+        memcpy(&mytest->flacbuffer[start], data, tcopy);
+        bytesleft -= tcopy;         
+    }
+    unsigned pcmframesize = (pFlac->channels * (pFlac->bitsPerSample/8));
+    uint32_t count = bytesleft / pcmframesize;
+    if((bytesleft % pcmframesize) > 0)  {
+        count++;
+    }
+    fprintf(stderr, "decoding %u samples\n", count);
+    if(count) {
+        unsigned startsample;
+        unsigned skipbytes;
+        if(start < 44) {
+            startsample = 0;
+            skipbytes = 0;            
+        }
+        else {
+            uint64_t startbyte = start - 44;
+            startsample = startbyte / (pFlac->channels * (pFlac->bitsPerSample/8));
+            skipbytes = 0;
+            /*skipbytes = (startbyte+1) % (pFlac->channels * (pFlac->bitsPerSample/8));
+            if(skipbytes > 0) {
+                startsample++;
+                fprintf(stderr, "skipbytes %u\n", skipbytes);
+            }
+            */
+        }
+        if(!drflac_seek_to_pcm_frame(pFlac, startsample))
+        {
+            return false;   
+        }
+        int16_t *raw16Samples = malloc((size_t)count * pFlac->channels * sizeof(int16_t));
+        if(raw16Samples == NULL)
+        {
+            return false;
+        }    
+        if(drflac_read_pcm_frames_s16(mytest->pFlac, count, raw16Samples) != count)
+        {
+            free(raw16Samples);
+            return false;     
+        }
+        uint8_t *tbuf = (uint8_t*)raw16Samples;
+        memcpy(&mytest->flacbuffer[mytest->largest_offset-bytesleft],  tbuf + skipbytes, (size_t)bytesleft);       
+        free(raw16Samples);
+    }
+    
+    return true;
 }
 
-void * _mytest_get_wav(_mytest *mytest, uint64_t start, size_t count)
+void * _mytest_get_wav_seg(_mytest *mytest, uint64_t start, size_t count)
 {
     drflac *pFlac = mytest->pFlac;
     // read in the desired amount of samples   
@@ -328,13 +408,13 @@ get_flac(mytest, start, count)
         RETVAL
 
 SV *
-get_pcm(mytest, start, count)
+get_wav(mytest, start, end)
         Mytest mytest
 		UV start
-		size_t count
+		UV end
 	CODE:
         SV *data = NULL;
-        if(_mytest_get_pcm(mytest, start, count))
+        if(_mytest_get_wav(mytest, start, end))
         {
             mytest->flacbuffer[mytest->largest_offset] = '\0';
 			data = newSV(0);
@@ -350,13 +430,13 @@ get_pcm(mytest, start, count)
         RETVAL
         
 SV *
-get_wav(mytest, start, count)
+get_wav_seg(mytest, start, count)
         Mytest mytest
 		UV start
 		size_t count
 	CODE:
         SV *data = NULL;
-        void *wav = _mytest_get_wav(mytest, start, count);
+        void *wav = _mytest_get_wav_seg(mytest, start, count);
         if(wav)
         {
             mytest->flacbuffer[mytest->largest_offset] = '\0';

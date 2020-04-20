@@ -19,7 +19,7 @@ var MAX_SAMPLE_RATE;
 var BITDEPTH;
 var USESEGMENTS;
 var USEINCREMENTAL;
-var ISDECODING;
+var USEWAV;
 var PTrackUrlParams;
 const BUFFER_MS = 300;
 const BUFFER_S = (BUFFER_MS / 1000);
@@ -35,35 +35,6 @@ var NextBufferTime;
 var RepeatAstart;
 var SaveNextBufferTime;
 
-let FlacWorker = new Worker('static/flacworker.js');
-FlacWorker.addEventListener('message', function(e) {
-    //console.log(e.data);
-    if(e.data.message == 'decodedone') {    
-        ISDECODING = 0;
-        let incomingdata = MainAudioContext.createBuffer(e.data.channels, e.data.samples, e.data.samplerate);
-        for( let i = 0; i < e.data.channels; i++) {
-            let buf = new Float32Array(e.data.abuf[i]);
-            incomingdata.getChannelData(i).set(buf);        
-        }
-        
-        let source = MainAudioContext.createBufferSource();
-        source.connect(MainAudioContext.destination);
-        source.buffer = incomingdata;
-        if(NextBufferTime < MainAudioContext.currentTime) {
-            console.log('TOO SLOW ' + NextBufferTime + ' ' + MainAudioContext.currentTime);
-            NextBufferTime = Math.ceil(MainAudioContext.currentTime + BUFFER_S);
-	    }
-        source.start(NextBufferTime, 0);
-        NextBufferTime = NextBufferTime + source.buffer.duration;
-        console.log('queued NextBufferTime ' + NextBufferTime + ' duration ' + source.buffer.duration);
-    }
-    else if(e.data.message == 'decode_no_meta') {
-        ISDECODING = 0;
-    }        
-});
-
-//var CurrentSources;
-//var NextSources;
 
 // END globals
 
@@ -162,6 +133,224 @@ function queueTracks(tracks) {
     window.history.replaceState('playlist', 'Title', 'music?' + PTrackUrlParams.toString());
 }
 
+// Incremental loading support
+
+let FlacWorker = new Worker('static/flacworker.js');
+
+function IncrementalSetup() {    
+    var url = '';
+    if (MAX_SAMPLE_RATE) url += '&max_sample_rate=' + MAX_SAMPLE_RATE;
+    if (BITDEPTH) url += '&bitdepth=' + BITDEPTH;
+    if(USEWAV) url += '&fmt=wav';
+    url += '&gapless=1&gdriveforce=1';    
+    FlacWorker.postMessage({'message': 'setup', 'urlstart' : 'music_dl?name=', 'urlend' : url, 'urlbaseuri' : document.baseURI});     
+}
+
+function IncrementalDownloadTrack(trackname, skiptime) {
+    FlacWorker.postMessage({'message': 'download', 'trackname' : trackname, 'skiptime' : skiptime});  
+}
+
+let IncrementalTimers = [];
+let IncrementalSkiptime = null;
+let IncPlaybackIndex = 0;
+let IncJobCounter = 0;
+let IncCurJob = null;
+
+function IncrementalStartTrack(skiptime) {
+    // we're haulting/starting playback, dont mess this up with timers
+    IncrementalTimers = [];
+    IncCurJob = null;
+    IncPlaybackIndex = CurrentTrack;
+    IncrementalSkiptime = skiptime;
+    IncrementalPumpAudio();
+}
+
+function IncrementalProcessTimers() {
+    let dcount = 0;
+    for(let i = 0; i < IncrementalTimers.length; i++) {
+        if(MainAudioContext.currentTime < IncrementalTimers[i].time) {
+            break;
+        }
+        dcount++;
+        console.log('running IncTimer ' + IncrementalTimers[i].time);
+        if(IncrementalTimers[i].inctrack > 0) {
+            console.log('Increasing CurrentTrack from ' + CurrentTrack + ' to ' + (IncrementalTimers[i].inctrack + CurrentTrack));
+            CurrentTrack += IncrementalTimers[i].inctrack
+        }
+        let prevtext = CurrentTrack > 0 ? Tracks[CurrentTrack-1].trackname : '';
+        let playtext = Tracks[CurrentTrack] ? Tracks[CurrentTrack].trackname : '';
+        let nexttext = Tracks[CurrentTrack+1] ? Tracks[CurrentTrack+1].trackname : '';
+        SetPrevText(prevtext);
+        SetPlayText(playtext);
+        SetNextText(nexttext);
+        SetEndtimeText(IncrementalTimers[i].duration);
+        seekbar.min = 0;
+        seekbar.max = IncrementalTimers[i].duration;
+        RepeatAstart = IncrementalTimers[i].astart;
+        if(IncrementalTimers[i].duration == 0) {
+            SetCurtimeText(0);
+            SetPPText('IDLE');
+            SetSeekbarValue(0);
+            console.log('Reached end of queue, stopping');            
+        }
+        else {
+            console.log(playtext + ' should now we playing ' + CurrentTrack + ' ' + Tracks[CurrentTrack].trackname);
+            SetPPText('PAUSE');            
+        }
+        if(IncrementalTimers[i].sbar_update_done) {
+            SBAR_UPDATING = 0;    
+            console.log('END SBAR UPDATE');
+        }            
+    }
+    if(dcount) {
+        IncrementalTimers.splice(0,dcount);   
+    }   
+}
+
+function IncrementalGraphicsLoop() {
+    if(Tracks[CurrentTrack]) {			
+        if (SBAR_UPDATING) {
+            console.log('Not updating SBAR, SBAR_UPDATING');            
+        }
+        else {
+            IncrementalProcessTimers();
+            if(Tracks[CurrentTrack]) {
+                if(RepeatAstart === null) {
+                    RepeatAstart = -MainAudioContext.currentTime;
+                    console.log('astart not ready, forcing it.');                    
+                }
+                var time = MainAudioContext.currentTime + RepeatAstart;
+                //console.log('astart ' +  RepeatAstart, ' curtime ' + MainAudioContext.currentTime, ' time ' + time);  
+                SetCurtimeText(time);
+                SetSeekbarValue(time);                
+            }          
+        }       
+    }
+    //console.log('IncrementalGraphicsLoop looping');    
+    window.requestAnimationFrame(IncrementalGraphicsLoop);    
+}
+
+function roundUp(x, multiple) {
+	var rem = x % multiple;
+    if(rem == 0) {
+    	return x;		
+    }
+    else {
+		return x + multiple - rem;	    	
+    }		
+}
+
+FlacWorker.addEventListener('message', function(e) {
+    if((IncCurJob !== null) && (e.data.jobid == IncCurJob)) {
+        console.log('job ' + IncCurJob + ' finished message: ' + e.data.message);
+        IncCurJob = null;        
+    }
+    else {
+        console.log('job ' + e.data.jobid  + ' not needed, message: ' + e.data.message);
+        return;        
+    }
+    
+    //console.log(e.data);
+    if(e.data.message == 'decodedone') {    
+        let incomingdata = MainAudioContext.createBuffer(e.data.channels, e.data.samples, e.data.samplerate);
+        for( let i = 0; i < e.data.channels; i++) {
+            let buf = new Float32Array(e.data.abuf[i]);
+            incomingdata.getChannelData(i).set(buf);        
+        }
+        
+        let source = MainAudioContext.createBufferSource();
+        source.connect(MainAudioContext.destination);
+        source.buffer = incomingdata;
+        if(NextBufferTime < MainAudioContext.currentTime) {
+            console.log('IncrementalPumpAudio: TOO SLOW ' + NextBufferTime + ' ' + MainAudioContext.currentTime);
+            //NextBufferTime = Math.ceil(MainAudioContext.currentTime + BUFFER_S);
+            NextBufferTime = roundUp(MainAudioContext.currentTime + 0.250, 0.250);
+	    }
+        source.start(NextBufferTime, 0);
+        
+        // update text
+        let oldPlaybackIndex = IncPlaybackIndex;
+        let startsample = 0;        
+        e.data.tickevents.forEach( function(tickevent) {
+            let uiupdate = { 'tick' : tickevent.tick};            
+            if(tickevent.inctrack > 0) {
+                console.log('increasing playback index from ' + IncPlaybackIndex + ' to ' + (IncPlaybackIndex +tickevent.inctrack));
+                IncPlaybackIndex += tickevent.inctrack;                
+            }
+            if(tickevent.trackname) {
+                if(Tracks[CurrentTrack].trackname != tickevent.trackname) {
+                    console.log('CurrentTrack ' +  CurrentTrack + ' name ' + Tracks[CurrentTrack].trackname + ' diff from tick: ' + tickevent.trackname);                 
+                }              
+            }
+            if(e.data.samplerate > 0) {            
+                uiupdate.duration = tickevent.total_samples / e.data.samplerate;                
+                uiupdate.astart   = -(NextBufferTime + (startsample / e.data.samplerate));
+                if(tickevent.skipsamples !== null) {
+                    uiupdate.astart += (tickevent.skipsamples/e.data.samplerate);
+                    uiupdate.skipsamples = tickevent.skipsamples;
+                    uiupdate.sbar_update_done = 1;                    
+                }                    
+                uiupdate.time     = NextBufferTime + (startsample / e.data.samplerate);
+            }
+            else {
+                uiupdate.duration = 0;
+                uiupdate.astart   = null;
+                uiupdate.time     = NextBufferTime;                                
+            }
+            uiupdate.inctrack = tickevent.inctrack;
+            IncrementalTimers.push(uiupdate);
+            startsample += tickevent.samples;            
+        });
+            
+        //if(oldPlaybackIndex != IncPlaybackIndex) { }
+        console.log('Next to playback should be ' + IncPlaybackIndex + ' ' + (Tracks[IncPlaybackIndex] ? Tracks[IncPlaybackIndex].trackname : ''));              
+        
+        NextBufferTime = NextBufferTime + source.buffer.duration;
+        console.log('IncrementalPumpAudio: queued NextBufferTime is now ' + NextBufferTime + ' duration ' + source.buffer.duration);        
+        
+    }
+    else if(e.data.message == 'decode_no_meta') {
+
+    }        
+});
+
+function IncrementalPumpAudio() {
+    IncrementalProcessTimers();
+    if(Tracks[IncPlaybackIndex]) {
+        if(((NextBufferTime - MainAudioContext.currentTime) < 0.250) && (IncCurJob === null)) {	
+            IncCurJob = IncJobCounter++;
+            console.log('IncrementalPumpAudio: starting job ' + IncCurJob + ' skiptime ' + IncrementalSkiptime);
+            let ttracks = [];
+            for(let tindex = IncPlaybackIndex; Tracks[tindex]; tindex++) {
+                ttracks.push(Tracks[tindex].trackname);                
+            }
+            let message = {'message' : 'pumpAudio', 'tracks' : ttracks, 'repeat' : RepeatTrack, 'duration' : 0.250, 'jobid' : IncCurJob};
+            if(IncrementalSkiptime !== null) {
+                message.skiptime = IncrementalSkiptime;
+                IncrementalSkiptime = null;                
+            }
+            FlacWorker.postMessage(message);
+		}        
+    }    
+}
+
+function IncrementalOnSeekChanged() {
+    if(!SBAR_UPDATING) {
+        console.log('SBAR change event fired when !SBAR_UPDATING');
+        return;
+    }
+    
+    if(!Tracks[CurrentTrack]) return;
+    //if(!Tracks[CurrentTrack].astart) return;
+    //if(RepeatTrack && !RepeatAstart) return;
+    console.log(Tracks[CurrentTrack].trackname + ' (' + CurrentTrack + ') ' + ' seeking to ' + seekbar.value);  
+    Tracks[CurrentTrack].queue(Number(seekbar.value), MainAudioContext.currentTime);               
+    SetCurtimeText(Number(seekbar.value));
+
+   
+}
+
+// END Incremental support
 function Download(url, onLoad, onAbort, onError) {
     var request = new XMLHttpRequest();
     request.open('get', url, true);
@@ -201,7 +390,7 @@ function STAHPPossibleDownloads() {
     STAHPNextDownload();        
 };
 
-/* firefox flac decoding is bad */
+/* firefox flac decoding is bad, use our flac decoder sometimes */
 function toWav(metadata, decData) {
     var samples = interleave(decData, metadata.channels, metadata.bitsPerSample);
 	var dataView = encodeWAV(samples, metadata.sampleRate, metadata.channels, metadata.bitsPerSample);
@@ -239,314 +428,6 @@ function DecodeFlac(thedata, ondecoded) {
     ondecoded(toWav(metaData, decData));    
 }
 /*end firefox flac decoding is bad*/
-
-function roundUp(x, multiple) {
-	var rem = x % multiple;
-    if(rem == 0) {
-    	return x;		
-    }
-    else {
-		return x + multiple - rem;	    	
-    }		
-}
-
-function concatTypedArrays(a, b) { // a, b TypedArray of same type
-    var c = new (a.constructor)(a.length + b.length);
-    c.set(a, 0);
-    c.set(b, a.length);
-    return c;
-}
-
-async function TryDecodeFlacBuf(track, binData) {
-    if(typeof Flac === 'undefined') {
-        console.log('DecodeFlac, no Flac - setInterval');
-        let promise = new Promise((resolve, reject) => {
-            let itertimer;
-            function onIter() {                
-                if(typeof Flac === 'undefined') {
-                    console.log('DecodeFlac, no Flac - setInterval');
-                    return;
-                }                
-                clearInterval(itertimer);
-                resolve("success");            
-            };
-            itertimer = setInterval(onIter, 5);            
-        });
-        let result = await promise;       
-    }
-    if(!Flac.isReady()) {
-        console.log('DecodeFlac, Flac not ready, handler added');
-        let promise = new Promise((resolve, reject) => {
-            Flac.on('ready', function(libFlac){
-                resolve("suc2");
-            });
-        });    
-        let result = await promise;
-        console.log('flac loaded');        
-    }    
-    
-    track.bytesLeft -= binData.buffer.byteLength;
-    if(! track.binData) {
-        track.binData = binData;
-        track.currentDataOffset = 0;
-        track.decData = [];
-        track.decFrames = 0;
-    }
-    else {
-        track.binData = concatTypedArrays(track.binData, binData);
-    }
-	
-    var flac_ok = 1;    
-	
-    if(! track.flac_decoder) {
-        track.flac_decoder = Flac.create_libflac_decoder(false); 
-        if (track.flac_decoder != 0){
-            
-	        /** @memberOf decode */
-            function read_callback_fn(bufferSize){	          	
-                console.log('decode read callback, buffer bytes max=', bufferSize);
-                
-                var start = track.currentDataOffset;
-                var csize =track.binData.buffer.byteLength;
-                var end = track.currentDataOffset === csize? -1 : Math.min(track.currentDataOffset + bufferSize, csize);
-                
-                var _buffer;
-                var numberOfReadBytes;
-                if(end !== -1){
-                    
-                    _buffer = track.binData.subarray(track.currentDataOffset, end);
-                    numberOfReadBytes = end - track.currentDataOffset;
-                    
-                    track.currentDataOffset = end;
-                } else {
-                    console.log('no bytes left');
-                    numberOfReadBytes = 0;
-                }
-                //console.log(_buffer);
-                return {buffer: _buffer, readDataLength: numberOfReadBytes, error: false};
-            }
-            
-            /** @memberOf decode */
-            function write_callback_fn(buffer){
-                // buffer is the decoded audio data, Uint8Array
-                //console.log('decode write callback', buffer);
-                //track.decData.push(buffer);
-                track.decData.push(buffer);
-                console.log("write_callback decdata len " + track.decData.length);
-            }
-            
-            /** @memberOf decode */
-            function metadata_callback_fn(data){
-                console.info('meta data: ', data);
-                track.meta_data = data;               		
-                for(var n in track.meta_data){
-                    console.log( n + ' ' + 	track.meta_data[n]);
-                }	
-            }
-	        /** @memberOf decode */
-	        function error_callback_fn(decoder, err, client_data){
-	            console.log('decode error callback', err);
-	        }
-            var init_status = Flac.init_decoder_stream(track.flac_decoder, read_callback_fn, write_callback_fn, error_callback_fn, metadata_callback_fn);
-            
-
-		    
-		    
-            flac_ok &= init_status == 0;
-            console.log("flac init     : " + flac_ok);//DEBUG
-	    } else {
-	    	var msg = 'Error initializing the decoder.';
-	        console.error(msg);
-	    	return;
-        }        
-    }
-	
-
-	
-	function readmeta() {
-		let is_last = 0;
-		let type;
-		let flac_return = 1;
-		is_last = (track.binData[track.data_offset] & 0x80) == 0x80;
-		type = track.binData[track.data_offset] & 0x7F;
-		let size = ((track.binData[track.data_offset+1] << 16) & 0xFF0000) | ((track.binData[track.data_offset+2] << 8) & 0xFF00) | track.binData[track.data_offset+3];
-		console.log('metablock size ' + size + ' is_last ' + is_last + ' type ' + type + 'offset ' + track.data_offset);
-		if(track.binData.length < roundUp(track.data_offset + 4 + size, 8192)) {
-			console.log('not enough data for current meta');
-            return;			
-		}
-		flac_return &= Flac.FLAC__stream_decoder_process_single(track.flac_decoder);
-		state = Flac.FLAC__stream_decoder_get_state(track.flac_decoder);
-        track.data_offset += (4 + size);		
-        if(is_last) {
-            track.metaleft = 0;
-        }			
-	}
-	
-	function isframe() {
-		let synccode = ((track.binData[track.data_offset] << 6)	& 0x3FC0) | ((track.binData[track.data_offset+1] >> 2) & 0x3F);
-		return (synccode == 0x3FFE);
-	}
-	
-	
-    if(! track.meta_data) {
-		console.log('no meta');
-		if(track.binData.length < (8+34)) {			
-			console.log('not enough data for streaminfo');
-			return;
-		}
-        track.data_offset = 4;
-		track.metaleft = 1;
-        readmeta();		
-    }
-	while(track.metaleft) {		
-		if(isframe()) {
-			console.log('unexpected frame before meta was done');
-            track.metaleft = 0;
-            return;			
-		}
-		readmeta();			
-	}
-	console.log('isframe ' + isframe());
-	//await queueFlac(track, 1, 0);
-	//console.log('after await');
-	return;	
-}
-
-async function queueFlac(track, duration, skiptime) {
-	if(! track.meta_data  || track.metaleft) {
-		console.log('metadata left not queuing');
-		ISDECODING = 0;
-        return;		
-	}
-	if(duration != 1) {
-		console.log('duration of not 1 not supported');		
-	}
-	track.decData = track.decData || [];
-	duration = 1;
-	let datareq = roundUp(track.meta_data['max_framesize'], 8192);
-	let samples = track.meta_data['sampleRate'] * duration;
-	let frames  = Math.ceil(samples/track.meta_data['max_blocksize']);
-	
-	var flac_return = 1;
-	var state = 0;
-	while(((track.binData.buffer.byteLength - track.currentDataOffset) >= datareq) ||(track.bytesLeft == 0))  {
-		flac_return &= Flac.FLAC__stream_decoder_process_single(track.flac_decoder);
-        //need to check decoder state: state == 4: end of stream ( > 4: error)
-		state = Flac.FLAC__stream_decoder_get_state(track.flac_decoder);
-		if((!flac_return) || (state > 3)) {
-			if(flac_return && (state == 4)) {
-				console.log("decoding success flac_return:" + flac_return + " state " + state);
-				break;
-			}
-			console.log("decoding error flac_return:" + flac_return + " state " + state);
-			break;
-		}
-		console.log("decoded frames " + track.decData.length);
-        if(track.decData.length >= frames) {
-			let decodedsamples = 0;
-		    for(var i = 0; i < track.decData.length; i++) {
-		    	decodedsamples += (track.decData[i][0].length / 2);			
-		    }
-			console.log('decoded samples 1 ' + decodedsamples); 
-			if(decodedsamples >= samples) break;
-        }			
-	}	
-	if(track.decData.length >= frames) {
-		frames = track.decData.length;
-		let decodedsamples = 0;
-		for(var i = 0; i < track.decData.length; i++) {
-			decodedsamples += (track.decData[i][0].length / 2);			
-		}		
-		console.log('decoded samples ' + decodedsamples);		
-		
-		let leftoversamples = decodedsamples - samples;
-		console.log('decoded samples (leftover) ' + leftoversamples);
-		track.decDataSave = [];
-		// save leftoversamples for later
-		let decodedsaved = 0;
-		if(leftoversamples > 0) {
-		    let bytespersample = track.meta_data['bitsPerSample'] / 8;			
-			track.decDataSave[0] = [];
-		    for(var i = 0; i < track.meta_data['channels']; i++) {
-                track.decDataSave[0][i] =  track.decData[frames-1][i].subarray( track.decData[frames-1][i].length - (leftoversamples * bytespersample));
-                track.decData[frames-1][i] = track.decData[frames-1][i].subarray(0, track.decData[frames-1][i].length - (leftoversamples * bytespersample));               	
-		    }
-			decodedsamples = 0;
-            for(var i = 0; i < track.decDataSave.length; i++) {
-		    	decodedsamples += (track.decDataSave[i][0].length / 2);			
-		    }
-            if(decodedsamples != leftoversamples) alert(1);			
-			
-		}
-		decodedsamples = 0;
-        for(var i = 0; i < track.decData.length; i++) {
-			decodedsamples += (track.decData[i][0].length / 2);			
-		}		
-		console.log('decoded samples 2 ' + decodedsamples);	
-        
-		
-        	
-		//console.log(track.decData);
-		
-		let wav = toWav(track.meta_data, track.decData);		
-		track.decData = track.decDataSave;
-		let incomingdata = await MainAudioContext.decodeAudioData(wav);		
-		
-		
-		/*function toint16(byteA, byteB) {
-			var sign = byteB & (1 << 7);
-            var x = (((byteB & 0xFF) << 8) | (byteA & 0xFF));
-            if (sign) {
-               x = 0xFFFF0000 | x;  // fill in most significant bits with 1's
-            }
-            return x;			
-		}
-		
-		let incomingdata = MainAudioContext.createBuffer(track.meta_data['channels'], track.meta_data['sampleRate'] * duration, track.meta_data['sampleRate']);
-		let div = Math.pow(2, track.meta_data['bitsPerSample'] - 1);
-        for(var i = 0; i < incomingdata.numberOfChannels; i++) {			
-			let buf = new Float32Array(samples);
-			let bufindex = 0;           
-			for(var j = 0; j < frames; j++) {
-				//const view = new DataView(track.decData[j][i].buffer);                
-				for(var k = 0; k < track.decData[j][i].length; k += 2){
-					//let s16value = view.getInt16(k, 1);
-					let s16value = toint16(track.decData[j][i][k], track.decData[j][i][k+1]);
-                    buf[bufindex++] = (s16value / 0x7FFF);
-					//buf[bufindex++] = s16value / div;
-					//buf[bufindex++] = (s16value + 0.5) / (0x7FFF + 0.5);
-                    //buf[bufindex++] = (s16value > 0) ? (s16value / 0x7FFF) : (s16value / 0x8000); 
-                    //buf[bufindex++] = (s16value < 0) ? (s16value / 0x8000) : (s16value / 0x7FFF); 
-                    //buf[bufindex++] = (s16value >= 0x8000) ? -(0x10000 - s16value) / 0x8000 : s16value / 0x7FFF;                                                            
-					if((buf[bufindex-1] > 1) || (buf[bufindex-1] < -1)) {
-						console.log('CLAMPING FLOAT');
-						if(buf[bufindex-1] > 1) buf[bufindex-1] = 1;
-					    if(buf[bufindex-1] < -1) buf[bufindex-1] = -1; 	
-					}                  				
-				}
-
-			}
-			console.log('bufindex ' + bufindex, 'samples ' + samples);
-			incomingdata.getChannelData(i).set(buf);			
-		}
-		track.decData = track.decDataSave;
-        */        
-		
-		ISDECODING = 0;
-		var source = MainAudioContext.createBufferSource();
-        source.connect(MainAudioContext.destination);
-        source.buffer = incomingdata;
-		if(NextBufferTime < MainAudioContext.currentTime) {
-            console.log('TOO SLOW ' + NextBufferTime + ' ' + MainAudioContext.currentTime);
-		    NextBufferTime = Math.ceil(MainAudioContext.currentTime + BUFFER_S);
-		}
-		source.start(NextBufferTime, 0);
-		NextBufferTime = NextBufferTime + source.buffer.duration;
-        console.log('queued NextBufferTime ' + NextBufferTime + ' duration ' + source.buffer.duration);		
-	}	
-}
-
 
 function TrackDownload(track, onDownloaded, seg) {
     this.track = track;
@@ -636,6 +517,7 @@ function TrackDownload(track, onDownloaded, seg) {
 }
 
 function Track(trackname) {
+    //this.trackname = 'test.wav';
     this.trackname = trackname;
     if (USESEGMENTS) {
         this.sources = [];
@@ -643,19 +525,7 @@ function Track(trackname) {
     }
 
     this.updateNumSources = function() {
-        // calculate the number of sources up to the end
-        /*var time = MainAudioContext.currentTime + Tracks[CurrentTrack].astart;  
-        var startseg = Math.floor(time / this.maxsegduration) + 1;           
-        startseg = startseg || 1;
-        if(startseg < 1) {
-            console.log('startseg (' + startseg + ')less than 1, not sure what to do, setting to 1');
-            startseg = 1;
-        }
-        if(startseg != this._startseg) {
-            console.log('startseg ' + startseg +  ' _startseg ' + this._startseg);
-            alert('startseg');            
-        }
-        */         
+        // calculate the number of sources up to the end        
         var startseg = this._startseg;               
         this.numsources = this.numsegments - this._startseg + 1; // so we clear the right amount of sources     
         if(this.numsources > this.numsegments) {
@@ -938,34 +808,9 @@ function Track(trackname) {
         this.queuednext = false;
         skiptime = skiptime || 0;
         if(USEINCREMENTAL) {
-            console.log('incremental');
-            let url = new URL(geturl(this.trackname), document.baseURI).href;        
-            FlacWorker.postMessage({'message': 'download', 'trackname' : this.trackname, 'url' : url});
-            /*(async () => {
-                let response = await fetch(geturl(this.trackname));
-                let reader = response.body.getReader();
-                this.CL = response.headers.get('Content-Length');
-                console.log('CL ' + this.CL);
-                this.bytesLeft = this.CL;
-                var binData;
-                while(1) {
-                    let {value: chunk, done: readerDone} = await reader.read();
-                    if(chunk){
-                        console.log('chunk length ' + chunk.length);
-                        await TryDecodeFlacBuf(this, chunk);
-                        //binData = binData ? concatTypedArrays(binData, chunk) : chunk;                        
-                        //if(binData.length == this.CL) {
-                        //    await TryDecodeFlacBuf(this, binData);
-                        //    await TryDecodeFlacBuf(this, new Uint8Array());
-                        //}
-                    }//
-                    if(readerDone) {
-                        console.log('dl of ' + this.trackname + ' done');
-                        return;
-                    }
-                }
-                
-            })();*/            
+            console.log('incremental queue');
+            //IncrementalDownloadTrack(this.trackname, skiptime);
+            IncrementalStartTrack(skiptime);            
         }        
         else if (this.buf) {
             this.queueBuffer(this.buf, skiptime, true, true, start);
@@ -1016,37 +861,24 @@ function Track(trackname) {
 
 
 function loop() {
-    if(Tracks[CurrentTrack]) {
-
-        if(USEINCREMENTAL) {
-            //await queueFlac(Tracks[CurrentTrack], 1, 0);
-			if(((NextBufferTime - MainAudioContext.currentTime) < 1) && !ISDECODING) {	
-                console.log('setting ISDECODING to 1');          
-                ISDECODING = 1;			
-			    //queueFlac(Tracks[CurrentTrack], 1, 0);
-                console.log('sending: message in a bottle');
-                FlacWorker.postMessage({'message' : 'decode', 'trackname' : Tracks[CurrentTrack].trackname, 'duration' : 1, 'skiptime' : 0});
-			}
-
-        }			
+    if(Tracks[CurrentTrack]) {			
         if (SBAR_UPDATING) {
             console.log('Not updating SBAR, SBAR_UPDATING');            
         }
         else {
-            var astart;
+            var astart;                       
             if(!RepeatTrack || !Tracks[CurrentTrack].astart) {
                 astart = Tracks[CurrentTrack].astart;
             }
             else {
                 astart = RepeatAstart;
-            }            
-            var time = MainAudioContext.currentTime + astart;
+            }                       
+            var time = MainAudioContext.currentTime + astart;            
             SetCurtimeText(time);
             SetSeekbarValue(time);
         }       
-    }
-    setTimeout(loop, 20);
-    //window.requestAnimationFrame(loop);
+    }    
+    window.requestAnimationFrame(loop);
 }
 
 Number.prototype.toHHMMSS = function () {
@@ -1083,7 +915,12 @@ function playTrackNow(track) {
         nextbtn.click();
         BuildPTrack();
     }
-    RepeatAstart = Number.NaN; // why
+    if(!USEINCREMENTAL) {
+        RepeatAstart = Number.NaN; // why
+    }
+    else {
+        RepeatAstart = 1;
+    }
 }
 
 function playTracksNow(tracks) {    
@@ -1222,6 +1059,10 @@ seekbar.addEventListener('mousedown', function (e) {
 });
 
 seekbar.addEventListener('change', function (e) {
+    if(USEINCREMENTAL) {
+        IncrementalOnSeekChanged();        
+        return;
+    }
     if(!SBAR_UPDATING) {
         console.log('SBAR change event fired when !SBAR_UPDATING');
         return;
@@ -1337,6 +1178,9 @@ dbarea.addEventListener('click', function (e) {
     else if(USEINCREMENTAL) {
         USEINCREMENTAL = Number(USEINCREMENTAL);
         console.log('USEINCREMENTAL');
+        USEWAV = 1;
+        IncrementalSetup();
+        setInterval(IncrementalPumpAudio, 20);
     }
     else {
         console.log('USESEGMENTS');
@@ -1355,6 +1199,11 @@ dbarea.addEventListener('click', function (e) {
     }
     
     // launch the main loop for ui updates
-    window.requestAnimationFrame(loop);
+    if(!USEINCREMENTAL) {
+        window.requestAnimationFrame(loop);
+    }
+    else {
+        window.requestAnimationFrame(IncrementalGraphicsLoop);
+    }
 }
 

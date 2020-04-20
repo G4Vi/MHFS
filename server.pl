@@ -624,9 +624,9 @@ package HTTP::BS::Server::Client::Request {
             }        
         }
         # when $ipos is 0 we recieved the end of the headers: \r\n\r\n
-        if((defined $self->{'header'}{'Range'}) &&  ($self->{'header'}{'Range'} =~ /^bytes=([0-9]+)\-([0-9]*)$/)) {
+        if((defined $self->{'header'}{'Range'}) &&  ($self->{'header'}{'Range'} =~ /^bytes=([0-9]+)\-([0-9]*)$/)) {            
             $self->{'header'}{'_RangeStart'} = $1;
-            $self->{'header'}{'_RangeEnd'} = $2;                                
+            $self->{'header'}{'_RangeEnd'} = $2;      
         }
         substr($self->{'client'}{'inbuf'}, 0, 2, '');
         $self->{'on_read_ready'} = undef;
@@ -937,11 +937,10 @@ package HTTP::BS::Server::Client::Request {
     }
 
     sub SendLocalBuf {
-        my ($self, $buf, $mime) = @_;        
-        my $bytesize;
+        my ($self, $buf, $mime, $bytesize) = @_;        
         {
             use bytes;
-            $bytesize = length($buf);
+            $bytesize //= length($buf);
         }
         my $headtext;   
         my %fileitem;        
@@ -2165,6 +2164,7 @@ package MusicLibrary {
     #use ExtUtils::testlib;
     use FindBin;
     use File::Spec;
+    use List::Util qw[min max];
     use lib File::Spec->catdir($FindBin::Bin, 'Mytest', 'blib', 'lib');
     use lib File::Spec->catdir($FindBin::Bin, 'Mytest', 'blib', 'arch');
     use Mytest;    
@@ -2373,6 +2373,33 @@ package MusicLibrary {
                     return -1;                        
                 },                
             });
+        }
+        elsif(defined $request->{'qs'}{'fmt'} && ($request->{'qs'}{'fmt'}  eq 'wav')) {
+            if(!defined($TRACKINFO{$tosend}))
+            {
+                GetTrackInfo($tosend, sub {
+                    $TRACKDURATION{$tosend} = $TRACKINFO{$tosend}{'duration'};
+                    SendTrack($request, $tosend);
+                });
+                return;
+            }
+            
+            my $pv = Mytest::new($tosend);
+            my $outbuf = '';
+            my $startbyte = $request->{'header'}{'_RangeStart'};
+            my $endbyte = $request->{'header'}{'_RangeEnd'};
+            my $wavsize = (44+ $TRACKINFO{$tosend}{'TOTALSAMPLES'} * ($TRACKINFO{$tosend}{'BITSPERSAMPLE'}/8) * $TRACKINFO{$tosend}{'NUMCHANNELS'});
+            $endbyte //= $wavsize-1;
+            say "Mytest::get_wav " . $startbyte . ' ' . $endbyte;
+            $request->SendLocalBuf(Mytest::get_wav($pv, $startbyte, $endbyte), 'audio/wav', $wavsize);
+            
+            #if($startbyte < 44) {
+            #    my $hlen = min($endbyte-$startbyte+1, 44-$startbyte);
+            #    $outbuf = substr(Mytest::getWavHeader(), $startbyte, $hlen);
+            #}
+            #if($endbyte >= 44) {
+            #    $outbuf .= Mytest
+            #}            
         }
         else {
             $request->SendLocalFile($tosend);
