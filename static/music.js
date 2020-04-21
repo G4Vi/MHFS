@@ -251,7 +251,12 @@ FlacWorker.addEventListener('message', function(e) {
     }
     
     //console.log(e.data);
-    if(e.data.message == 'decodedone') {    
+    if(e.data.message == 'decodedone') {
+        if(MainAudioContext.sampleRate != e.data.samplerate) {
+            console.log('Switching MainAudioContext.sampleRate was: ' + MainAudioContext.sampleRate + ' to: ' + e.data.samplerate);
+            MainAudioContext = CreateAudioContext( {'sampleRate' : e.data.samplerate });
+            NextBufferTime = -1;
+        }            
         let incomingdata = MainAudioContext.createBuffer(e.data.channels, e.data.samples, e.data.samplerate);
         for( let i = 0; i < e.data.channels; i++) {
             let buf = new Float32Array(e.data.abuf[i]);
@@ -899,8 +904,8 @@ Number.prototype.toHHMMSS = function () {
     return str + minutes + ':' + seconds;
 }
 
-function CreateAudioContext() {
-    return (window.hasWebKit) ? new webkitAudioContext() : (typeof AudioContext != "undefined") ? new AudioContext() : null;
+function CreateAudioContext(options) {
+    return (window.hasWebKit) ? new webkitAudioContext(options) : (typeof AudioContext != "undefined") ? new AudioContext(options) : null;
 }
 
 function playTrackNow(track) {    

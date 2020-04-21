@@ -560,13 +560,14 @@ package HTTP::BS::Server::Client::Request {
                 say("raw path: $path\nraw querystring: $querystring");
                 #transformations
                 $path = uri_unescape($path);
+                my %pathStruct = ( 'unescapepath' => $path );
                 my $webpath = quotemeta $self->{'client'}{'server'}{'settings'}{'WEBPATH'};
                 $path =~ s/^$webpath\/?/\//;
                 $path =~ s/(?:\/|\\)+$//;
                 print "path: $path ";                    
                 say "querystring: $querystring";                     
                 #parse path                     
-                my %pathStruct = ( 'unsafepath' => $path);
+                $pathStruct{'unsafepath'} = $path;
                 my $abspath = abs_path('.' . $path);                  
                 if (defined $abspath) {
                    print "abs: " . $abspath;
@@ -937,14 +938,15 @@ package HTTP::BS::Server::Client::Request {
     }
 
     sub SendLocalBuf {
-        my ($self, $buf, $mime, $bytesize) = @_;        
+        my ($self, $buf, $mime, $options) = @_;        
+        my $bytesize = $options->{'bytesize'};
         {
             use bytes;
             $bytesize //= length($buf);
         }
         my $headtext;   
         my %fileitem;        
-        ($fileitem{'length'}, $headtext) = $self->_BuildHeaders($bytesize, $mime);    
+        ($fileitem{'length'}, $headtext) = $self->_BuildHeaders($bytesize, $mime, $options->{'filename'});    
         $fileitem{'buf'} = $$headtext . $buf;
         $self->_SendResponse(\%fileitem);
     }
@@ -2391,7 +2393,7 @@ package MusicLibrary {
             my $wavsize = (44+ $TRACKINFO{$tosend}{'TOTALSAMPLES'} * ($TRACKINFO{$tosend}{'BITSPERSAMPLE'}/8) * $TRACKINFO{$tosend}{'NUMCHANNELS'});
             $endbyte //= $wavsize-1;
             say "Mytest::get_wav " . $startbyte . ' ' . $endbyte;
-            $request->SendLocalBuf(Mytest::get_wav($pv, $startbyte, $endbyte), 'audio/wav', $wavsize);
+            $request->SendLocalBuf(Mytest::get_wav($pv, $startbyte, $endbyte), 'audio/wav', {'bytesize' => $wavsize});
             
             #if($startbyte < 44) {
             #    my $hlen = min($endbyte-$startbyte+1, 44-$startbyte);
@@ -3249,7 +3251,8 @@ my %VIDEOFORMATS = (
             'mp4seg' => {'lock' => 0, 'create_cmd' => '',  'create_cmd_args' => ['requestfile', 'outpathext', 'outpath'], 'ext' => 'm3u8', 
             'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/mp4seg_player.html', }, #'minsize' => '20971520'},
             
-            'noconv' => {'lock' => 0, 'ext' => '', 'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/noconv_player.html', },            
+            'noconv' => {'lock' => 0, 'ext' => '', 'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/noconv_player.html', },
+            'm3u8'   => {'lock' => 0, 'ext' => ''},            
 );
 
 # get_video formats from plugins
@@ -3372,6 +3375,13 @@ sub get_video {
             return 1;   
         }
         $video{'out_base'} = $video{'src_file'}{'name'};
+        if($video{'out_fmt'} eq 'm3u8') {
+            $video{'fullname'} = $qs->{'name'};
+            my $m3u8 = video_get_m3u8(\%video, 'http://' . $SETTINGS->{'DOMAIN'} . ':8000' . $request->{'path'}{'unescapepath'} . '?name=');
+            $request->{'outheaders'}{'Icy-Name'} = $video{'fullname'};
+            $request->SendLocalBuf($$m3u8, 'application/x-mpegURL', {'filename' => $video{'fullname'} . '.m3u8'});
+            return 1;            
+        }        
         # soon https://github.com/video-dev/hls.js/pull/1899
         $video{'out_base'} = space2us($video{'out_base'}) if ($video{'out_fmt'} eq 'hls');        
     }
@@ -3476,7 +3486,7 @@ sub get_video {
 sub video_get_format {
     my ($fmt) = @_; 
     if(!defined($fmt) || !defined($VIDEOFORMATS{$fmt})) {
-        $fmt = 'hls';
+        $fmt = 'noconv';
     }
     return $fmt;
 }
@@ -4301,9 +4311,43 @@ sub player_video {
 # returns the text of a video file item
 sub video_file_item_text {
     my ($safe_item_basename, $item_path, $fmt) = @_;
-    return '<a href="video?name=' . $item_path . '&fmt=' . $fmt . '" data-file="'. $item_path . '">' . $safe_item_basename . '</a>    <a href="get_video?name=' . $item_path . '&fmt=' . $fmt . '">DL</a>';
+    return '<a href="video?name=' . $item_path . '&fmt=' . $fmt . '" data-file="'. $item_path . '">' . $safe_item_basename . '</a>    <a href="get_video?name=' . $item_path . '&fmt=' . $fmt . '">DL</a>    <a href="get_video?name=' . $item_path . '&fmt=m3u8">M3U</a>';
 }
 
+sub video_get_m3u8 {
+    my ($video, $urlstart) = @_;
+    my $buf;
+    my $m3u8 = <<'M3U8END';
+#EXTM3U
+#EXTVLCOPT:network-caching=40000'
+M3U8END
+
+    my @files;
+    if(! -d $video->{'src_file'}{'filepath'}) {
+        push @files, $video->{'fullname'};
+    }
+    else {
+        my $root = $video->{'src_file'}{'filepath'};
+        # this is wrong. todo store in video the path
+        $root = substr($root, 0, rindex($root, '/'));
+        say 'root ' . $root;
+        output_dir_versatile($video->{'src_file'}{'filepath'}, {
+            'root' => $root,
+            'on_file' => sub {
+                my ($path, $shortpath) = @_;
+                push @files, $shortpath;            
+            }   
+        });    
+    }
+    
+    foreach my $file (@files) {
+        $m3u8 .= '#EXTINF:0, ' . $file . "\n";
+        $m3u8 .= $urlstart . $file . "\n";
+    }
+    return \$m3u8;
+}
+
+# to be removed
 sub output_dir {
     my ($path, $options) = @_;
     # get the list of files and sort
@@ -4343,7 +4387,8 @@ sub output_dir {
                 $buf .= '<li>';
                 $buf .= '<div class="row">';
                 $buf .= '<a href="#' . $$safename . '_hide" class="hide" id="' . $$safename . '_hide">' . "$$safename</a>";
-                $buf .= '<a href="#' . $$safename . '_show" class="show" id="' . $$safename . '_show">' . "$$safename</a>";                
+                $buf .= '<a href="#' . $$safename . '_show" class="show" id="' . $$safename . '_show">' . "$$safename</a>";
+                $buf .= '    <a href="get_video?name=' . $$safename . '&fmt=m3u8">M3U</a>';                
                 $buf .= '<div class="list">';
                 my $tmp = output_dir("$path/$file", $options);              
                 $buf .= $$tmp;
@@ -4356,28 +4401,19 @@ sub output_dir {
     return \$buf;
 }
 
-sub output_dir_nonrecurse {
+sub output_dir_versatile {
     my ($path, $options) = @_;
-    
     # hide the root path if desired
-    my $root = $options->{'root'};   
-    
-    
-    # set what to do for each file
-    $options->{'file_item_text'} //= sub {
-        my ($safe_item_basename, $item_path) = @_;
-        return '<a href="' . $item_path . '">' . $safe_item_basename . '</a>';     
-    };
+    my $root = $options->{'root'};  
     $options->{'min_file_size'} //= 0;
-    
-    my $buf =  "<ul>"; 
+
     my @files;
     ON_DIR:    
     # get the list of files and sort
     my $dir;
     if(! opendir($dir, $path)) {
         warn "outputdir: Cannot open directory: $path $!";
-        return \"";
+        return;
     }  
     my @newfiles = sort { uc($a) cmp uc($b)} (readdir $dir); 
     closedir($dir); 
@@ -4388,25 +4424,18 @@ sub output_dir_nonrecurse {
     }    
     @files = @files ? (@newpaths, undef, @files) : @newpaths;      
     while(@files)
-    {        
+    {
         $path = shift @files;          
-        if(! defined $path) {            
-            $buf .= "</ul>";
-            $buf .= '</div></div>';
-            $buf .= '</li>';            
+        if(! defined $path) {
+            $options->{'on_dir_end'}->() if($options->{'on_dir_end'});
             next;
-        }        
-        my $file = basename($path);       
-        my $safename = escape_html($file);                 
-        if(-d $path) {            
-            $buf .= '<li>';
-            $buf .= '<div class="row">';
-            $buf .= '<a href="#' . $$safename . '_hide" class="hide" id="' . $$safename . '_hide">' . "$$safename</a>";
-            $buf .= '<a href="#' . $$safename . '_show" class="show" id="' . $$safename . '_show">' . "$$safename</a>";                
-            $buf .= '<div class="list">';
-            $buf .= '<ul>';
+        }
+        my $file = basename($path);              
+        if(-d $path) {
+            $options->{'on_dir_start'}->($path, $file) if($options->{'on_dir_start'});
             goto ON_DIR;
         }
+        
         my $unsafePath = $path;    
         if($root) {            
             $unsafePath =~ s/^$root(\/)?//;            
@@ -4416,13 +4445,10 @@ sub output_dir_nonrecurse {
             say "size  not defined path $path file $file";
             next;
         }
-        next if( $size < $options->{'min_file_size'});   
-        my $data_file = escape_html($unsafePath);
-        $buf .= '<li>' . $options->{'file_item_text'}->($$safename, $$data_file, @{$options->{'file_item_text_opt'}}) . '</li>';    
-    }    
-    $buf .= "</ul>";
-    return \$buf;    
- 
+        next if( $size < $options->{'min_file_size'});
+        $options->{'on_file'}->($path, $unsafePath, $file) if($options->{'on_file'});  
+    }
+    return;
 }
 
 
