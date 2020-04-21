@@ -3357,7 +3357,7 @@ sub get_video {
             # VLC 2 doesn't handle redirects? VLC 3 does
             if($header->{'User-Agent'} !~ /^VLC\/2\.\d+\.\d+\s/) {                
                 my $url = 'get_video?' . $qs->{'querystring'};
-                my $qname = uri_escape($video{'src_file'}{'qname'});
+                my $qname = uri_escape($video{'src_file'}{'fullname'});
                 $url =~ s/name=[^&]+/name=$qname/;
                 say "url: $url";
                 $request->Send301($url);                
@@ -3368,18 +3368,20 @@ sub get_video {
             $request->Send404;
             return undef;
         }
+        print Dumper($video{'src_file'});
         # no conversion necessary, just SEND IT
         if($video{'out_fmt'} eq 'noconv') {
             say "NOCONV: SEND IT";
-            $request->SendFile($video{'src_file'}->{'filepath'});
+            #$request->{'outheaders'}{'Icy-Name'} = 'Ice ice baby';
+            $request->SendFile($video{'src_file'}{'filepath'});
             return 1;   
         }
         $video{'out_base'} = $video{'src_file'}{'name'};
         if($video{'out_fmt'} eq 'm3u8') {
-            $video{'fullname'} = $qs->{'name'};
             my $m3u8 = video_get_m3u8(\%video, 'http://' . $SETTINGS->{'DOMAIN'} . ':8000' . $request->{'path'}{'unescapepath'} . '?name=');
-            $request->{'outheaders'}{'Icy-Name'} = $video{'fullname'};
-            $request->SendLocalBuf($$m3u8, 'application/x-mpegURL', {'filename' => $video{'fullname'} . '.m3u8'});
+            #$request->{'outheaders'}{'Icy-Name'} = $video{'fullname'};
+            $video{'src_file'}{'ext'} = $video{'src_file'}{'ext'} ? '.'. $video{'src_file'}{'ext'} : '';
+            $request->SendLocalBuf($$m3u8, 'application/x-mpegURL', {'filename' => $video{'src_file'}{'name'} . $video{'src_file'}{'ext'} . '.m3u8'});
             return 1;            
         }        
         # soon https://github.com/video-dev/hls.js/pull/1899
@@ -3495,16 +3497,18 @@ sub video_file_lookup {
     my ($filename) = @_; 
     my @locations = ($SETTINGS->{'MEDIALIBRARIES'}{'movies'}, $SETTINGS->{'MEDIALIBRARIES'}{'tv'}, $SETTINGS->{'MEDIALIBRARIES'}{'music'});    
     my $filepath;
+    my $flocation;
     foreach my $location (@locations) {
         my $absolute = abs_path("$location/$filename");
         if($absolute && -e $absolute  && ($absolute =~ /^$location/)) {
             $filepath = $absolute;
+            $flocation = $location;
             last;
         }
     }    
     return if(! $filepath);
 
-    return media_filepath_to_src_file($filepath);  
+    return media_filepath_to_src_file($filepath, $flocation);  
 }
 
 sub video_get_streams {
@@ -3607,10 +3611,10 @@ sub video_dash_check_ready {
 }
 
 sub media_filepath_to_src_file {
-    my ($filepath) = @_;
+    my ($filepath, $flocation) = @_;
     my ($name, $loc, $ext) = fileparse($filepath, '\.[^\.]*');
     $ext =~ s/^\.//;
-    return { 'filepath' => $filepath, 'name' => $name, 'location' => $loc, 'ext' => $ext};
+    return { 'filepath' => $filepath, 'name' => $name, 'containingdir' => $loc, 'ext' => $ext, 'fullname' => substr($filepath, length($flocation)+1), 'root' => $flocation};
 }
 
 sub media_file_search {
@@ -3623,13 +3627,15 @@ sub media_file_search {
     my $filepath = FindFile(\@locations, basename($filename), $dir);
     return if(! $filepath);
     
-    my $src_file =  media_filepath_to_src_file($filepath);    
-    foreach my $location(@locations) {        
-        if($filepath =~ /^$location\/(.+)$/) {            
-            $src_file->{'qname'} = $1;
-            return $src_file;
-        }
-    }    
+    # a better find algorithm would tell us $location so we don't have to find it again
+    my $flocation;    
+    foreach my $location(@locations) {
+        if(rindex($filepath, $location, 0) == 0) {
+            $flocation = $location;
+            last;
+        }        
+    }
+    return media_filepath_to_src_file($filepath, $flocation);     
 }
 
 sub GetResource {
@@ -4275,17 +4281,11 @@ sub player_video {
         my $dir = $SETTINGS->{'MEDIALIBRARIES'}{$library};
         (-d $dir) or next;
         $buf .= "<h1>" . $libraryprint{$library} . "</h1>\n";        
-        $temp = output_dir($dir, {
-            'root' => $dir,
-            'file_item_text' => \&video_file_item_text,
-            'file_item_text_opt' => [$fmt],
-            'min_file_size' => 100000          
-        });
-        $buf .= $$temp;   
-    }
-    
-   
+        $temp = video_library_html($dir, {'fmt' => $fmt});
+        $buf .= $$temp;        
+    } 
     $buf .= '</div>';
+    
     $temp = GetResource($VIDEOFORMATS{$fmt}->{'player_html'});
     $buf .= $$temp; 
     $buf .= '<script>';
@@ -4308,10 +4308,34 @@ sub player_video {
     $request->SendLocalBuf($buf, "text/html"); 
 }
 
-# returns the text of a video file item
-sub video_file_item_text {
-    my ($safe_item_basename, $item_path, $fmt) = @_;
-    return '<a href="video?name=' . $item_path . '&fmt=' . $fmt . '" data-file="'. $item_path . '">' . $safe_item_basename . '</a>    <a href="get_video?name=' . $item_path . '&fmt=' . $fmt . '">DL</a>    <a href="get_video?name=' . $item_path . '&fmt=m3u8">M3U</a>';
+sub video_library_html {
+    my ($dir, $opt) = @_;
+    my $fmt = $opt->{'fmt'};
+    my $buf = '<ul>';
+    output_dir_versatile($dir, {
+        'root' => $dir,
+        'min_file_size' => 100000,
+        'on_dir_start' => sub {
+            my ($path, $file) = @_;
+            my $safename = escape_html($file);  
+            $buf .= '<li><div class="row">';
+            $buf .= '<a href="#' . $$safename . '_hide" class="hide" id="' . $$safename . '_hide">' . "$$safename</a>";
+            $buf .= '<a href="#' . $$safename . '_show" class="show" id="' . $$safename . '_show">' . "$$safename</a>";
+            $buf .= '    <a href="get_video?name=' . $$safename . '&fmt=m3u8">M3U</a>';                
+            $buf .= '<div class="list"><ul>';           
+        },
+        'on_dir_end' => sub {
+            $buf .= '</ul></div></div></li>';  
+        },
+        'on_file' => sub {            
+            my ($path, $unsafePath, $file) = @_;
+            my $safe_item_basename = escape_html($file);
+            my $item_path = escape_html($unsafePath);            
+            $buf .= '<li><a href="video?name='.$$item_path.'&fmt=' . $fmt . '" data-file="'. $$item_path . '">' . $$safe_item_basename . '</a>    <a href="get_video?name=' . $$item_path . '&fmt=' . $fmt . '">DL</a>    <a href="get_video?name=' . $$item_path . '&fmt=m3u8">M3U</a></li>';        
+        }    
+    });
+    $buf .=  '</ul>';
+    return \$buf;
 }
 
 sub video_get_m3u8 {
@@ -4324,15 +4348,11 @@ M3U8END
 
     my @files;
     if(! -d $video->{'src_file'}{'filepath'}) {
-        push @files, $video->{'fullname'};
+        push @files, $video->{'src_file'}{'fullname'};
     }
     else {
-        my $root = $video->{'src_file'}{'filepath'};
-        # this is wrong. todo store in video the path
-        $root = substr($root, 0, rindex($root, '/'));
-        say 'root ' . $root;
         output_dir_versatile($video->{'src_file'}{'filepath'}, {
-            'root' => $root,
+            'root' => $video->{'src_file'}{'root'},
             'on_file' => sub {
                 my ($path, $shortpath) = @_;
                 push @files, $shortpath;            
@@ -4345,60 +4365,6 @@ M3U8END
         $m3u8 .= $urlstart . $file . "\n";
     }
     return \$m3u8;
-}
-
-# to be removed
-sub output_dir {
-    my ($path, $options) = @_;
-    # get the list of files and sort
-    my $dir;
-    if(! opendir($dir, $path)) {
-        warn "outputdir: Cannot open directory: $path $!";
-        return \"";
-    }   
-    my @files = sort { uc($a) cmp uc($b)} (readdir $dir);
-    closedir($dir);
-    # hide the root path if desired
-    my $root = $options->{'root'};   
-    my $unsafeDir = $path;    
-    if($root) {
-        #say "removing root : $root";    
-        $unsafeDir =~ s/^$root(\/)?//;
-        #say "dir after $unsafeDir";
-    }
-    # set what to do for each file
-    $options->{'file_item_text'} //= sub {
-        my ($safe_item_basename, $item_path) = @_;
-        return '<a href="' . $item_path . '">' . $safe_item_basename . '</a>';     
-    };
-    $options->{'min_file_size'} //= 0;
-    # finally generate the html
-    my $buf =  "<ul>";    
-    foreach my $file (@files) {
-        if($file !~ /^..?$/) {
-        my $safename = escape_html($file);            
-            if(!(-d "$path/$file")) { 
-                next if( (-s "$path/$file") < $options->{'min_file_size'});            
-                my $unsafePath = $unsafeDir ? "$unsafeDir/$file" : $file;                
-                my $data_file = escape_html($unsafePath);
-                $buf .= '<li>' . $options->{'file_item_text'}->($$safename, $$data_file, @{$options->{'file_item_text_opt'}}) . '</li>';
-            }
-            else {
-                $buf .= '<li>';
-                $buf .= '<div class="row">';
-                $buf .= '<a href="#' . $$safename . '_hide" class="hide" id="' . $$safename . '_hide">' . "$$safename</a>";
-                $buf .= '<a href="#' . $$safename . '_show" class="show" id="' . $$safename . '_show">' . "$$safename</a>";
-                $buf .= '    <a href="get_video?name=' . $$safename . '&fmt=m3u8">M3U</a>';                
-                $buf .= '<div class="list">';
-                my $tmp = output_dir("$path/$file", $options);              
-                $buf .= $$tmp;
-                $buf .= '</div></div>';
-                $buf .= '</li>';
-            }
-        }   
-    }
-    $buf .= "</ul>";
-    return \$buf;
 }
 
 sub output_dir_versatile {
