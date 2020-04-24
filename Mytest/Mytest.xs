@@ -198,15 +198,23 @@ _mytest_get_flac_cleanup:
 
 bool _mytest_get_wav(_mytest *mytest, uint64_t start, uint64_t end)
 {
-    mytest->flacbuffersize = (end - start) + 1 + 1;	
+    if(start > end)
+    {
+        return false;
+    }
+    drflac *pFlac = mytest->pFlac;
+    mytest->flacbuffersize = (end - start) + 1 + 1;
+    if((mytest->flacbuffersize - 1)	> (44 + (pFlac->totalPCMFrameCount * pFlac->channels * (pFlac->bitsPerSample/8))))
+    {
+        return false;    
+    }
     mytest->largest_offset  = mytest->flacbuffersize - 1;
 	mytest->flacbuffer = mytest->malloc(mytest->flacbuffersize);
     if(mytest->flacbuffer == NULL)
     {
         return false;
-    }    
+    }   
     
-    drflac *pFlac = mytest->pFlac;
     uint64_t bytesleft = mytest->largest_offset;
     if(start < 44) {
         uint8_t data[44];

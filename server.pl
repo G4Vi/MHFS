@@ -2391,7 +2391,14 @@ package MusicLibrary {
             my $startbyte = $request->{'header'}{'_RangeStart'};
             my $endbyte = $request->{'header'}{'_RangeEnd'};
             my $wavsize = (44+ $TRACKINFO{$tosend}{'TOTALSAMPLES'} * ($TRACKINFO{$tosend}{'BITSPERSAMPLE'}/8) * $TRACKINFO{$tosend}{'NUMCHANNELS'});
-            $endbyte //= $wavsize-1;
+            $startbyte ||= 0;
+            if(! $endbyte) {
+                say "setting endbyte";
+                $endbyte = $wavsize-1;            
+            }
+            say "start byte" . $startbyte;
+            say "end byte " . $endbyte;
+           
             say "Mytest::get_wav " . $startbyte . ' ' . $endbyte;
             $request->SendLocalBuf(Mytest::get_wav($pv, $startbyte, $endbyte), 'audio/wav', {'bytesize' => $wavsize});
             

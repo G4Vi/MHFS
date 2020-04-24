@@ -155,14 +155,25 @@ let IncrementalSkiptime = null;
 let IncPlaybackIndex = 0;
 let IncJobCounter = 0;
 let IncCurJob = null;
+let SBARPrevValue = -1;
+
+function IncrementalAddTrack(_trackname) {
+    FlacWorker.postMessage({'message': 'pushPlaybackQueue', 'track' : _trackname});   
+}
 
 function IncrementalStartTrack(skiptime) {
     // we're haulting/starting playback, dont mess this up with timers
     IncrementalTimers = [];
     IncCurJob = null;
-    IncPlaybackIndex = CurrentTrack;
+    /*IncPlaybackIndex = CurrentTrack;
     IncrementalSkiptime = skiptime;
-    IncrementalPumpAudio();
+    IncrementalPumpAudio();*/
+    let ttracks = [];
+    for(let tindex = CurrentTrack; Tracks[tindex]; tindex++) {
+        ttracks.push(Tracks[tindex].trackname);                
+    }
+    IncCurJob = IncJobCounter++;
+    FlacWorker.postMessage({'message': 'seek', 'tracks' : ttracks, 'skiptime' : skiptime, 'duration' : 0.250, 'repeat' : RepeatTrack, 'jobid' : IncCurJob});
 }
 
 function IncrementalProcessTimers() {
@@ -191,15 +202,18 @@ function IncrementalProcessTimers() {
             SetCurtimeText(0);
             SetPPText('IDLE');
             SetSeekbarValue(0);
-            console.log('Reached end of queue, stopping');            
+            console.log('Reached end of queue, stopping'); 
+            DLImmediately = true;            
         }
         else {
             console.log(playtext + ' should now we playing ' + CurrentTrack + ' ' + Tracks[CurrentTrack].trackname);
             SetPPText('PAUSE');            
         }
         if(IncrementalTimers[i].sbar_update_done) {
-            SBAR_UPDATING = 0;    
-            console.log('END SBAR UPDATE');
+            if(SBARPrevValue == Number(seekbar.value)) {
+                SBAR_UPDATING = 0;    
+                console.log('END SBAR UPDATE');
+            }
         }            
     }
     if(dcount) {
@@ -259,7 +273,7 @@ FlacWorker.addEventListener('message', function(e) {
         }            
         let incomingdata = MainAudioContext.createBuffer(e.data.channels, e.data.samples, e.data.samplerate);
         for( let i = 0; i < e.data.channels; i++) {
-            let buf = new Float32Array(e.data.abuf[i]);
+            let buf = new Float32Array(e.data.outbuffer[i]);
             incomingdata.getChannelData(i).set(buf);        
         }
         
@@ -293,7 +307,8 @@ FlacWorker.addEventListener('message', function(e) {
                 if(tickevent.skipsamples !== null) {
                     uiupdate.astart += (tickevent.skipsamples/e.data.samplerate);
                     uiupdate.skipsamples = tickevent.skipsamples;
-                    uiupdate.sbar_update_done = 1;                    
+                    uiupdate.sbar_update_done = 1;
+                    uiupdate.jobid = e.data.jobid;                    
                 }                    
                 uiupdate.time     = NextBufferTime + (startsample / e.data.samplerate);
             }
@@ -316,20 +331,22 @@ FlacWorker.addEventListener('message', function(e) {
     }
     else if(e.data.message == 'decode_no_meta') {
 
+    } 
+    else if(e.data.message == 'at_end_of_queue') {
+        DLImmediately = true;
     }        
 });
 
 function IncrementalPumpAudio() {
     IncrementalProcessTimers();
-    if(Tracks[IncPlaybackIndex]) {
+    //if(Tracks[IncPlaybackIndex]) {
+    if(Tracks[CurrentTrack]) {
+        
         if(((NextBufferTime - MainAudioContext.currentTime) < 0.250) && (IncCurJob === null)) {	
             IncCurJob = IncJobCounter++;
             console.log('IncrementalPumpAudio: starting job ' + IncCurJob + ' skiptime ' + IncrementalSkiptime);
-            let ttracks = [];
-            for(let tindex = IncPlaybackIndex; Tracks[tindex]; tindex++) {
-                ttracks.push(Tracks[tindex].trackname);                
-            }
-            let message = {'message' : 'pumpAudio', 'tracks' : ttracks, 'repeat' : RepeatTrack, 'duration' : 0.250, 'jobid' : IncCurJob};
+            
+            let message = {'message' : 'pumpAudio', 'repeat' : RepeatTrack, 'duration' : 0.250, 'jobid' : IncCurJob};
             if(IncrementalSkiptime !== null) {
                 message.skiptime = IncrementalSkiptime;
                 IncrementalSkiptime = null;                
@@ -351,8 +368,7 @@ function IncrementalOnSeekChanged() {
     console.log(Tracks[CurrentTrack].trackname + ' (' + CurrentTrack + ') ' + ' seeking to ' + seekbar.value);  
     Tracks[CurrentTrack].queue(Number(seekbar.value), MainAudioContext.currentTime);               
     SetCurtimeText(Number(seekbar.value));
-
-   
+    SBARPrevValue = Number(seekbar.value); 
 }
 
 // END Incremental support
@@ -719,7 +735,7 @@ function Track(trackname) {
                 SetEndtimeText(0);
                 SetSeekbarValue(0);
                 SetPPText('IDLE');            
-                console.log('reached end of queue, stopping');
+                console.log('reached end of queue, stopping');                
                 return;
             }            
         }
@@ -955,6 +971,9 @@ function geturl(trackname) {
 
 function _queueTrack(_trackname) {
     var track = new Track(_trackname);
+    if(USEINCREMENTAL) {
+        IncrementalAddTrack(_trackname);
+    }
     Tracks.push(track);
     if (DLImmediately) {
         if(Tracks[CurrentTrack] && ((typeof Tracks[CurrentTrack].isDownloaded === 'undefined') || Tracks[CurrentTrack].isDownloaded )) {
