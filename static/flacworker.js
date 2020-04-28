@@ -31,15 +31,17 @@ function toint16(byteA, byteB) {
 let PlaybackQueue = [];
 let DownloadController = new AbortController();
 let DownloadStopSignal = DownloadController.signal;
+let CacheTimer;
 
 function WavDecoder(trackname, starttime) {
     this.trackname = trackname;
     this._url = getURL(trackname);
     this._AudioStartOffset = 44;
     this.maxBufferSize = 4*1048576;
-    this.buffer = new Uint8Array(this.maxBufferSize);
+    this.buffer = new Uint8Array(this.maxBufferSize*2);
     this.bufferSize = 0;
     this.starttime = starttime;
+    this._ReadOffset = 0;
     
     this.readHeader = function() {
         let asbytes = new DataView(this.buffer.buffer);
@@ -52,7 +54,7 @@ function WavDecoder(trackname, starttime) {
         this.totalPCMframes = this._AudioDataSize /  (this._BytesPerSample * this.channels);
         console.log('WAV :');
         console.log(this);
-        this._ReadOffset = 44;
+        //this._ReadOffset = 44;
         
         // remove the header from the buffer
         if(this.bufferSize == 44) {
@@ -76,6 +78,7 @@ function WavDecoder(trackname, starttime) {
         let reader = response.body.getReader();
         this._reader = reader;
         this.skipsamples = dessample;
+        await DoCache(20, -1);
         return true;  
     };
     
@@ -101,10 +104,12 @@ function WavDecoder(trackname, starttime) {
                console.log('chunk length ' + chunk.length); 
                this.buffer.set(chunk, this.bufferSize);
                this.bufferSize += chunk.length;
+               this._ReadOffset += chunk.length;
                if(this.bufferSize >= 44) {
-                   this.readHeader();
+                   this.readHeader();                   
                    if(this.starttime == 0) {
-                       this._reader = reader;                       
+                       this._reader = reader;
+                       await DoCache(20, -1);       
                        return true;
                    }
                    break;
@@ -116,15 +121,39 @@ function WavDecoder(trackname, starttime) {
         }
         
         let dessample = Math.floor(this.starttime * this.samplerate);
-        return await this.softseek(dessample);
-                      
+        return await this.softseek(dessample);                   
     };
     
-    this.cache = async function(bytesToCache) {
-        if(this.bufferSize == this.maxBufferSize) {
+    /*
+    this.fillCache = function(bytesToCache) {
+        if(this.bufferSize >= this.maxBufferSize) {
             console.log('no more bytes to cache in ' + this.trackname);
-            return 0;            
+            //return 0;
+            return this.bufferSize;             
         }
+        let bufferBytesLeft = this.maxBufferSize - this.bufferSize;
+        bytesToCache = (bufferBytesLeft < bytesToCache) ? bufferBytesLeft : bytesToCache;
+        let bytesleft = this._size - this._ReadOffset;
+        let bytesdesired = (bytesleft > bytesToCache) ? bytesToCache : bytesleft;
+        if((bytesdesired > 0) &&  {
+            console.log('copying from xhr');
+            let bytesdownloaded = 0;
+            let download = this.xhr.response;
+            if(download.length > this.
+            
+        }           
+    }
+    */
+    
+    this.cache = async function(bytesToCache) {
+        if(this.bufferSize >= this.maxBufferSize) {
+            console.log('no more bytes to cache in ' + this.trackname);
+            //return 0;
+            
+            return this.bufferSize;             
+        }
+        let bufferBytesLeft = this.maxBufferSize - this.bufferSize;
+        bytesToCache = (bufferBytesLeft < bytesToCache) ? bufferBytesLeft : bytesToCache;
         let bytesleft = this._size - this._ReadOffset;
         let bytesdesired = (bytesleft > bytesToCache) ? bytesToCache : bytesleft;
         let bytesdownloaded = 0;
@@ -133,7 +162,11 @@ function WavDecoder(trackname, starttime) {
            if(chunk){
                this._ReadOffset += chunk.length;
                console.log('chunk length ' + chunk.length);
-               bytesdownloaded += chunk.length;               
+               bytesdownloaded += chunk.length;
+               if((chunk.length + this.bufferSize) > this.buffer.length) {
+                   console.log('what the fuck, trying to overrun buffer');
+                   break;
+               }                   
                this.buffer.set(chunk, this.bufferSize);
                this.bufferSize += chunk.length;              
            }
@@ -141,10 +174,37 @@ function WavDecoder(trackname, starttime) {
                return 0;
            }       
         }
+        console.log('cache size ' + this.bufferSize);  
+       
         return this.bufferSize;        
     }
     
+   
     this.read = async function(samples, outbuffer, outbufindex) {    
+        let samples_left = Math.floor(this.bufferSize + this._size  - this._ReadOffset) / (this.channels * this._BytesPerSample);
+        console.log('samples_left: ' + samples_left + ' totalsamples ' + this.totalPCMframes);
+        if(samples_left < samples) {
+            console.log('clamped samples to ' + samples_left);
+            samples = samples_left;            
+        }
+        let pcmsize = (samples * this.channels * this._BytesPerSample);
+        let isLast = 0;
+        if(samples == samples_left) {
+            console.log('set isLast');
+            isLast = 1;
+        }
+        let isStart = 0;
+        if(samples_left == this.totalPCMframes) {
+            console.log('set isStart');
+            isStart = 1;            
+        }
+        
+        if(this.bufferSize < pcmsize) {
+            console.log('not enough data');
+            return false;            
+        }
+        
+        /*
         let lastindex = (samples * this.channels * this._BytesPerSample) + this._ReadOffset - 1;
         if(lastindex > (this._size - 1)) {
             lastindex = this._size - 1;
@@ -166,10 +226,10 @@ function WavDecoder(trackname, starttime) {
             isLast = 1;
         }
         console.log('lastIndex ' + lastindex);        
-        
+        */
         
         // download more if necessary
-        while(this.bufferSize < pcmsize) {
+        /*while(this.bufferSize < pcmsize) {
            let {value: chunk, done: readerDone} = await this._reader.read();
            if(chunk){
                console.log('chunk length ' + chunk.length); 
@@ -184,7 +244,7 @@ function WavDecoder(trackname, starttime) {
         this._ReadOffset += pcmsize;
         if(this._ReadOffset == this._size) {
             console.log('read entire file ' + this.trackname);            
-        }
+        }*/
         
         // create a buffer to output the raw data to
         let dataarr = new Uint8Array(pcmsize); 
@@ -244,9 +304,8 @@ function PlaybackItem(trackname) {
     };        
 }
 
-async function Cache() {
-    let cachebytes = 4*1048576;
-    let jobid = -1;
+async function Cache(cachebytes) {
+    let jobid = -1;    
     for(i = 0; i < PlaybackQueue.length; i++) {
         let playbackItem = PlaybackQueue[i];
         if(playbackItem.decoder === null) {
@@ -265,10 +324,33 @@ async function Cache() {
             }
         }
         cachebytes -= await playbackItem.decoder.cache(cachebytes);
-        if(cachebytes == 0) {
+        if(cachebytes <= 0) {
             break;
-        }        
+        }
+        if(playbackItem.decoder._ReadOffset == playbackItem.decoder._size) {
+            continue;        
+        }
+        else {
+            //playbackItem.decoder.cache(cachebytes);
+            break;
+        }           
     }  
+}
+
+async function DoCache(ms, cachebytes) {
+    if(CacheTimer) {        
+        clearTimeout(CacheTimer);
+    }
+    
+    if(cachebytes == -1) {
+        console.log('fast start cache bytes');
+        //cachebytes = 1048576;
+        cachebytes = 1048576/2;         
+    }   
+    await Cache(cachebytes);
+    CacheTimer = setTimeout( function() {
+        DoCache(ms, (4*1048576));        
+    }, ms);
 }
 
 async function pumpAudioAll(duration, jobid) {
@@ -375,6 +457,9 @@ async function pumpAudioAll(duration, jobid) {
      
     let dessamples = samples;
     // if there's still desired samples at this point, encode silence
+    if(remsamples > 0) {
+        console.log('encoding ' + remsamples + ' of silence ');
+    }
     for(let j = 0; j < channels; j++) {
         let buf = new Float32Array(outbuffer[j]);
         let bufindex = dessamples - remsamples;
@@ -392,6 +477,13 @@ async function pumpAudioAll(duration, jobid) {
     result.tickevents = tickevents;
     result.samples = samples;
     result.outbuffer = outbuffer;
+    
+    // hack
+    if(samples == 0) {
+        self.postMessage({'message': 'no_data', 'jobid' : jobid});
+        return;
+    }
+    
     console.log('FlacWorker: outputting samples: ' + samples + ' samplerate: ' + samplerate + ' channels: ' + channels);    
     self.postMessage(result, outbuffer);        
 }
@@ -404,17 +496,9 @@ async function Seek(skiptime, tracks, duration, jobid) {
     DownloadController.abort();
     DownloadController = new AbortController();
     DownloadStopSignal = DownloadController.signal;
-    //DownloadController.abort();
-    /*if(tracks.length == PlaybackQueue.length) {
-        PlaybackQueue[0].starttime = skiptime; 
-        await PlaybackQueue[0].decoder.softseek();
-        pumpAudioAll(duration, jobid);
-
-    }        
-    if(tracks.length != PlaybackQueue.length) 
-    */
     skiptime = skiptime || 0;
-    if((tracks.length == PlaybackQueue.length) && (PlaybackQueue[0].decoder) && (PlaybackQueue[0].iscreated)) {        
+    //if((tracks.length == PlaybackQueue.length) && (PlaybackQueue[0].decoder) && (PlaybackQueue[0].iscreated)) {
+    if(0){        
         let dessample = Math.floor(skiptime * PlaybackQueue[0].decoder.samplerate);
         await PlaybackQueue[0].decoder.softseek(dessample);        
     }
@@ -434,15 +518,6 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-async function doCache() {
-    while(1) {
-        console.log('doing cache');
-        await Cache();
-        await sleep(100);        
-    }   
-}
-
-
 self.addEventListener('message', function(e) {
   if(e.data.message == 'pumpAudio') {
       let skiptime = e.data.skiptime;
@@ -461,6 +536,5 @@ self.addEventListener('message', function(e) {
       URLSTART = e.data.urlstart;
       URLEND   = e.data.urlend;
       URLBASEURI = e.data.urlbaseuri;
-      //doCache();
   }      
 }, false);

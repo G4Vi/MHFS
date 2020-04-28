@@ -972,7 +972,23 @@ function geturl(trackname) {
 function _queueTrack(_trackname) {
     var track = new Track(_trackname);
     if(USEINCREMENTAL) {
-        IncrementalAddTrack(_trackname);
+        
+        let hastrack = Tracks[CurrentTrack];
+        Tracks.push(track);        
+        if(!hastrack) {
+            IncrementalStartTrack(0);            
+        }
+        else {
+            IncrementalAddTrack(_trackname);            
+        }
+        
+        if ((CurrentTrack + 1) == (Tracks.length - 1)) {
+            SetNextText(Tracks[Tracks.length - 1].trackname);
+        }
+        else if (CurrentTrack == (Tracks.length - 1)) {
+            SetPlayText(Tracks[CurrentTrack].trackname + ' {![LOADING]!}');
+        }
+        return;
     }
     Tracks.push(track);
     if (DLImmediately) {
