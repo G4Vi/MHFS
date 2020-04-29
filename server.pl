@@ -951,6 +951,16 @@ package HTTP::BS::Server::Client::Request {
         $self->_SendResponse(\%fileitem);
     }
     
+    sub SendCallback {
+        my ($self, $callback, $options) = @_;
+        my $headtext;   
+        my %fileitem;        
+        ($fileitem{'length'}, $headtext) = $self->_BuildHeaders($options->{'size'}, $options->{'mime'}, $options->{'filename'});    
+        $fileitem{'buf'} = $$headtext;
+        $fileitem{'cb'} = $callback;
+        $self->_SendResponse(\%fileitem);        
+    }
+    
     sub SendAsTar {
         my ($self, $requestfile) = @_;
         my $tarsize = $self->{'client'}{'server'}{'settings'}{'BINDIR'} . '/tarsize/tarsize.sh';
@@ -1553,7 +1563,11 @@ package HTTP::BS::Server::Client {
                         }
                     }                                        
                 }
-            }        
+            }
+            elsif(defined $dataitem->{'cb'}) {
+                $buf = $dataitem->{'cb'}->($dataitem);
+                $bytesToSend = length $buf;                
+            }
                   
         } while(defined $buf);        
         $client->{'request'}{'response'} = undef;
@@ -2400,15 +2414,26 @@ package MusicLibrary {
             say "end byte " . $endbyte;
            
             say "Mytest::get_wav " . $startbyte . ' ' . $endbyte;
-            $request->SendLocalBuf(Mytest::get_wav($pv, $startbyte, $endbyte), 'audio/wav', {'bytesize' => $wavsize});
             
-            #if($startbyte < 44) {
-            #    my $hlen = min($endbyte-$startbyte+1, 44-$startbyte);
-            #    $outbuf = substr(Mytest::getWavHeader(), $startbyte, $hlen);
-            #}
-            #if($endbyte >= 44) {
-            #    $outbuf .= Mytest
-            #}            
+            #$request->SendLocalBuf(Mytest::get_wav($pv, $startbyte, $endbyte), 'audio/wav', {'bytesize' => $wavsize});
+            my $maxsendsize = 1048576/2;
+            $request->SendCallback(sub{
+                my ($fileitem) = @_;
+                my $actual_endbyte = $startbyte + $maxsendsize - 1;
+                if($actual_endbyte >= $endbyte) {
+                    $actual_endbyte = $endbyte; 
+                    $fileitem->{'cb'} = undef;
+                    say "SendCallback last send";
+                }                
+                my $actual_startbyte = $startbyte;
+                $startbyte = $actual_endbyte;
+                say "SendCallback get_wav " . $actual_startbyte . ' ' . $actual_endbyte;               
+                return Mytest::get_wav($pv, $actual_startbyte, $actual_endbyte);
+            }, {
+                'mime' => 'audio/wav',
+                'size' => $wavsize,            
+            });
+                      
         }
         else {
             $request->SendLocalFile($tosend);
