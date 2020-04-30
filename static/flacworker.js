@@ -78,7 +78,7 @@ function WavDecoder(trackname, starttime) {
         let reader = response.body.getReader();
         this._reader = reader;
         this.skipsamples = dessample;
-        await DoCache(20, -1);
+        //await DoCache(20, -1);
         return true;  
     };
     
@@ -109,7 +109,7 @@ function WavDecoder(trackname, starttime) {
                    this.readHeader();                   
                    if(this.starttime == 0) {
                        this._reader = reader;
-                       await DoCache(20, -1);       
+                       //await DoCache(20, -1);       
                        return true;
                    }
                    break;
@@ -337,6 +337,7 @@ async function Cache(cachebytes) {
     }  
 }
 
+/*
 async function DoCache(ms, cachebytes) {
     if(CacheTimer) {        
         clearTimeout(CacheTimer);
@@ -351,14 +352,35 @@ async function DoCache(ms, cachebytes) {
     CacheTimer = setTimeout( function() {
         DoCache(ms, (4*1048576));        
     }, ms);
+}*/
+
+let ISCACHING = 0;
+async function DoCache(size) {
+    if(ISCACHING) {
+        console.log('currently caching, not starting new cache');
+        return;        
+    }
+    ISCACHING = 1;
+    size = (size) ? size : 4*1048576;
+    try {
+        await Cache(size);
+    } catch(e) {
+        console.log('DoCache ' + e);        
+    }
+    ISCACHING = 0;
 }
 
+let PUMPRUNNING = 0;
 async function pumpAudioAll(duration, jobid) {
-    
+    if(PUMPRUNNING) {
+        console.log('pump running');
+        return;
+    }
     if(PlaybackQueue.length == 0) {
          self.postMessage({'message': 'at_end_of_queue', 'jobid' : jobid});
          return;         
     }
+    PUMPRUNNING = 1;
     
     let samplerate = 0;
     let channels = 0;
@@ -374,8 +396,8 @@ async function pumpAudioAll(duration, jobid) {
     
     for(let i = 0; i < PlaybackQueue.length; i++) {
         let playbackItem = PlaybackQueue[i];
-        if(playbackItem.decoder === null) {
-            console.log('job id: ' + jobid + ' waiting for decoder');
+        if(!playbackItem.iscreated) {
+            /*console.log('job id: ' + jobid + ' waiting for decoder');
             try {
                 await playbackItem.CreateDecoder();
                 console.log('job id: ' + jobid + ' decoder created');
@@ -387,7 +409,23 @@ async function pumpAudioAll(duration, jobid) {
             if(!playbackItem.decoder) {
                 console.log('job id: ' + jobid + ' decoder create failed');
                 continue;                
+            }*/
+            
+            if(remsamples == samples) {
+                console.log('await docache');
+                await DoCache(1048576/2);
+                if(!playbackItem.iscreated) {
+                    console.log('did not encode any samples');
+                    PUMPRUNNING = 0;
+                    self.postMessage({'message': 'no_data', 'jobid' : jobid});
+                    return;
+                }             
             }
+            else {                
+                break;
+            }
+            
+            
         }
         
         if( i == 0) {
@@ -479,13 +517,15 @@ async function pumpAudioAll(duration, jobid) {
     result.outbuffer = outbuffer;
     
     // hack
-    if(samples == 0) {
+    /*if(samples == 0) {
         self.postMessage({'message': 'no_data', 'jobid' : jobid});
         return;
-    }
+    }*/
     
-    console.log('FlacWorker: outputting samples: ' + samples + ' samplerate: ' + samplerate + ' channels: ' + channels);    
-    self.postMessage(result, outbuffer);        
+    console.log('FlacWorker: outputting samples: ' + samples + ' samplerate: ' + samplerate + ' channels: ' + channels);
+    PUMPRUNNING = 0;    
+    self.postMessage(result, outbuffer);
+    DoCache();    
 }
 
 async function Seek(skiptime, tracks, duration, jobid) {
