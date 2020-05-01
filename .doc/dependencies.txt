@@ -1,11 +1,12 @@
-perl modules:
-Any::URI::Escape 
-apt-get install libany-uri-escape-perl
-htmml escape?
-JSON
-Storable
-IO::AIO apt-get install libio-aio-perl 
+needed perl modules:
+Any::URI::Escape - apt-get install libany-uri-escape-perl
+html escape?
+IO::AIO - apt-get install libio-aio-perl 
 #Unicode::Escape - apt-get install libunicode-escape-perl
+
+optional perl modules:
+JSON::XS 
+
 binaries:
 ffmpeg
 sox

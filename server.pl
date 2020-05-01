@@ -288,51 +288,7 @@ package HTTP::BS::Server {
         });
         
         return 1;    
-    }
-
-    sub getMIME {
-        my ($self, $filename) = @_;
-        
-        my %audioexts = ( 'mp3' => 'audio/mp3', 
-            'flac' => 'audio/flac',
-            'opus' => 'audio',
-            'ogg'  => 'audio/ogg');
-    
-        my %videoexts = ('mp4' => 'video/mp4',
-            'mkv'  => 'video/mp4',
-            'ts'   => 'video/mp2t',
-            'webm' => 'video/webm',
-            'flv'  => 'video/x-flv');
-    
-        my %otherexts = ('html' => 'text/html; charset=utf-8',
-            'json' => 'text/json',
-            'js'   => 'application/javascript',
-            'txt' => 'text/plain',
-            'pdf' => 'application/pdf',
-            'jpg' => 'image/jpeg',
-            'png' => 'image/png',
-            'gif' => 'image/gif',
-            'bmp' => 'image/bmp',
-            'tar' => 'application/x-tar',
-            'mpd' => 'application/dash+xml',
-            'm3u8' => 'application/x-mpegURL',
-            'm3u8_v' => 'application/x-mpegURL',
-            'wasm'  => 'application/wasm');
-    
-        
-    
-        my ($ext) = $filename =~ /\.([^.]+)$/;
-    
-        my %combined = (%audioexts, %videoexts, %otherexts);
-        return $combined{$ext} if defined($combined{$ext});    
-       
-        if(open(my $filecmd, '-|', 'file', '-b', '--mime-type', $filename)) {
-            my $mime = <$filecmd>;
-            chomp $mime;        
-            return $mime;
-        }
-        return 'text/plain';
-    }
+    }    
     
     1;
 }
@@ -342,8 +298,9 @@ package HTTP::BS::Server::Util {
     use feature 'say';
     use Exporter 'import';
     use File::Find;
+    use File::Basename;
     use Cwd qw(abs_path getcwd);
-    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'shell_stdout', 'shell_escape', 'ssh_stdout', 'pid_running', 'escape_html_noquote');
+    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'shell_stdout', 'shell_escape', 'ssh_stdout', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME');
     # single threaded locks
     sub LOCK_GET_LOCKDATA {
         my ($filename) = @_;
@@ -480,7 +437,7 @@ package HTTP::BS::Server::Util {
     sub shell_stdout {
         return do {
         local $/ = undef;
-        print "shell_stdout: ";
+        print "shell_stdout (BLOCKING): ";
         print "$_ " foreach @_;
         print "\n";
         my $pid = open(my $cmdh, '-|', @_);
@@ -504,6 +461,130 @@ package HTTP::BS::Server::Util {
         ($cmd) =~ s/'/'"'"'/g;
         return $cmd;
     }
+
+    sub output_dir_versatile {
+        my ($path, $options) = @_;
+        # hide the root path if desired
+        my $root = $options->{'root'};  
+        $options->{'min_file_size'} //= 0;
+    
+        my @files;
+        ON_DIR:    
+        # get the list of files and sort
+        my $dir;
+        if(! opendir($dir, $path)) {
+            warn "outputdir: Cannot open directory: $path $!";
+            return;
+        }  
+        my @newfiles = sort { uc($a) cmp uc($b)} (readdir $dir); 
+        closedir($dir); 
+        my @newpaths = ();
+        foreach my $file (@newfiles) {
+            next if($file =~ /^..?$/);
+            push @newpaths, "$path/$file";        
+        }    
+        @files = @files ? (@newpaths, undef, @files) : @newpaths;      
+        while(@files)
+        {
+            $path = shift @files;          
+            if(! defined $path) {
+                $options->{'on_dir_end'}->() if($options->{'on_dir_end'});
+                next;
+            }
+            my $file = basename($path);              
+            if(-d $path) {
+                $options->{'on_dir_start'}->($path, $file) if($options->{'on_dir_start'});
+                goto ON_DIR;
+            }
+            
+            my $unsafePath = $path;    
+            if($root) {            
+                $unsafePath =~ s/^$root(\/)?//;            
+            }
+            my $size = -s $path;
+            if(! defined $size) {
+                say "size  not defined path $path file $file";
+                next;
+            }
+            next if( $size < $options->{'min_file_size'});
+            $options->{'on_file'}->($path, $unsafePath, $file) if($options->{'on_file'});  
+        }
+        return;
+    }
+
+    # perform multiple async actions at the same time.
+    # continue on with $result_func on failure or completion of all actions
+    sub do_multiples {
+        my ($multiples, $result_func) = @_;    
+        my %data;
+        my @mkeys = keys %{$multiples};
+        foreach my $multiple (@mkeys) {
+            my $multiple_cb = sub {
+                my ($res) = @_;
+                $data{$multiple} = $res;
+                # return failure if this multiple failed
+                if(! defined $data{$multiple}) {
+                    $result_func->(undef);
+                    return;          
+                }
+                # yield if not all the results in             
+                foreach my $m2 (@mkeys) {
+                    return if(! defined $data{$m2});            
+                }
+                # all results in we can continue
+                $result_func->(\%data);            
+            };
+            say "launching multiple key: $multiple";
+            $multiples->{$multiple}->($multiple_cb);  
+        }
+    }
+
+    sub getMIME {
+        my ($filename) = @_;
+        
+        my %audioexts = ( 'mp3' => 'audio/mp3', 
+            'flac' => 'audio/flac',
+            'opus' => 'audio',
+            'ogg'  => 'audio/ogg');
+    
+        my %videoexts = ('mp4' => 'video/mp4',
+            'mkv'  => 'video/mp4',
+            'ts'   => 'video/mp2t',
+            'webm' => 'video/webm',
+            'flv'  => 'video/x-flv');
+    
+        my %otherexts = ('html' => 'text/html; charset=utf-8',
+            'json' => 'text/json',
+            'js'   => 'application/javascript',
+            'txt' => 'text/plain',
+            'pdf' => 'application/pdf',
+            'jpg' => 'image/jpeg',
+            'png' => 'image/png',
+            'gif' => 'image/gif',
+            'bmp' => 'image/bmp',
+            'tar' => 'application/x-tar',
+            'mpd' => 'application/dash+xml',
+            'm3u8' => 'application/x-mpegURL',
+            'm3u8_v' => 'application/x-mpegURL',
+            'wasm'  => 'application/wasm');
+    
+        
+    
+        my ($ext) = $filename =~ /\.([^.]+)$/;
+    
+        my %combined = (%audioexts, %videoexts, %otherexts);
+        return $combined{$ext} if defined($combined{$ext});    
+        
+        say "getMIME (BLOCKING)";
+        # we shouldn't need a process to determine the mime type ...
+        if(open(my $filecmd, '-|', 'file', '-b', '--mime-type', $filename)) {
+            my $mime = <$filecmd>;
+            chomp $mime;        
+            return $mime;
+        }
+        return 'text/plain';
+    }
+    1;
 }
 
 package HTTP::BS::Server::Client::Request {
@@ -518,7 +599,6 @@ package HTTP::BS::Server::Client::Request {
     use IO::Poll qw(POLLIN POLLOUT POLLHUP);
     use Data::Dumper;
     use Scalar::Util qw(weaken);
-    use IPC::Open3;
     use Symbol 'gensym';
     use Devel::Peek;
     use constant {
@@ -751,7 +831,7 @@ package HTTP::BS::Server::Client::Request {
         my ($self) = @_;
         my $client = $self->{'client'};
         my $data = "HTTP/1.1 403 Forbidden\r\n";        
-        my $mime = $client->{'server'}->getMIME('.html');
+        my $mime = getMIME('.html');
         $data .= "Content-Type: $mime\r\n";
         if($self->{'header'}{'Connection'} && ($self->{'header'}{'Connection'} eq 'close')) {
             $data .= "Connection: close\r\n";
@@ -769,7 +849,7 @@ package HTTP::BS::Server::Client::Request {
         my ($self) = @_;
         my $client = $self->{'client'};
         my $data = "HTTP/1.1 404 File Not Found\r\n";
-        my $mime = $client->{'server'}->getMIME('.html');
+        my $mime = getMIME('.html');
         $data .= "Content-Type: $mime\r\n";
         if($self->{'header'}{'Connection'} && ($self->{'header'}{'Connection'} eq 'close')) {
             $data .= "Connection: close\r\n";
@@ -844,7 +924,7 @@ package HTTP::BS::Server::Client::Request {
          
         # build the header based on whether we are sending a full response or range request
         my $headtext;    
-        my $mime = $client->{'server'}->getMIME($requestfile);        
+        my $mime = getMIME($requestfile);        
          
         ($fileitem{'length'}, $headtext) = $self->_BuildHeaders($filelength, $mime, basename($requestfile), $requestfile);        
         say "fileitem length: " . $fileitem{'length'};
@@ -855,7 +935,7 @@ package HTTP::BS::Server::Client::Request {
 
     sub SendPipe {
         my ($self, $FH, $filename, $filelength, $mime) = @_;
-        $mime //= $self->{'client'}{'server'}->getMIME($filename);
+        $mime //= getMIME($filename);
         my $start = $self->{'header'}{'_RangeStart'};
         my $end = $self->{'header'}{'_RangeEnd'};
         binmode($FH);
@@ -891,6 +971,7 @@ package HTTP::BS::Server::Client::Request {
         else{
             @cmd = (@sshcmd, 'cat', $fullescapedname);
         }
+        say "SendFromSSH (BLOCKING)";
         open(my $cmdh, '-|', @cmd) or die("SendFromSSH $!");
         
         $self->SendPipe($cmdh, basename($filename), $size);            
@@ -1840,7 +1921,7 @@ package HTTP::BS::Server::Process {
             $prochandlers->{'STDIN'} = sub {
                 # how to deadlock
                 my ($in) = @_;
-                say "output_process stdin";
+                say "output_process stdin. Possible DEADLOCK location";
                 print $in $stdin; # this could block               
                 return 0;        
             };   
@@ -2168,7 +2249,6 @@ package MusicLibrary {
     use Encode qw(decode encode);
     use Any::URI::Escape;
     use URI::Escape;
-    use IPC::Open3;
     use Storable;
     use Fcntl ':mode';  
     use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
@@ -2307,7 +2387,19 @@ package MusicLibrary {
 
     sub SendLibrary {
         my ($self, $request) = @_;
-        return $request->SendLocalBuf($self->{'html'}, "text/html; charset=utf-8");
+
+        if($request->{'qs'}{'forcerefresh'}) {
+            say "MusicLibrary: forcerefresh";
+            $self->BuildLibraries(); 
+        }
+
+        if($request->{'qs'}{'legacy'}) {
+            say "MusicLibrary: legacy";
+            return $request->SendLocalBuf($self->{'html'}, "text/html; charset=utf-8");
+        }
+        else {
+            return $request->SendLocalBuf($self->{'html_gapless'}, "text/html; charset=utf-8");
+        }
     }
     
     my $SEGMENT_DURATION = 5;
@@ -2768,29 +2860,10 @@ package MusicLibrary {
         $self->BuildLibraries();
         say $pstart ."done building libraries";
         $self->{'routes'} = [
-            [ '/music_legacy', sub {
-                my ($request) = @_;
-                return $self->SendLibrary($request);        
-            }],
-            [ '/music_force', sub {
-                my ($request) = @_;
-                $self->BuildLibraries(); 
-                return $self->SendLibrary($request);
-            }],
-            [ '/music_gapless', sub {
-               my ($request) = @_;
-               $request->SendLocalBuf($self->{'html_gapless'}, "text/html; charset=utf-8");
-            
-            }],
             ['/music', sub {
                 my ($request) = @_;
                 if($request->{'method'} ne 'PUT') { 
-                    foreach my $route (@{$self->{'routes'}}) {
-                        if($route->[0] eq '/music_gapless') {
-                            $route->[1]->($request);
-                            last;
-                        }
-                    }
+                    return $self->SendLibrary($request);
                 }
                 else {
                     $request->PUTBuf(sub {
@@ -3247,11 +3320,13 @@ my %RESOURCES; # Caching of resources
 # load plugins
 my @plugins;
 {
-my $GDRIVEPLUGIN = GDRIVE->new($SETTINGS);
-push (@plugins, $GDRIVEPLUGIN) if($GDRIVEPLUGIN);
-push @plugins, MusicLibrary->new($SETTINGS);
-my $YOUTUBEPLUGIN = Youtube->new($SETTINGS);
-push (@plugins, $YOUTUBEPLUGIN) if($YOUTUBEPLUGIN);
+    my @pluginnames = ('GDRIVE', 'MusicLibrary', 'Youtube');
+    foreach my $plugin (@pluginnames) {
+        next if(defined $SETTINGS->{$plugin}{'enabled'} && ($SETTINGS->{$plugin}{'enabled'} == '0'));
+        my $loaded = $plugin->new($SETTINGS);
+        next if(! $loaded);
+        push @plugins, $loaded;
+    }
 }
 
 # make the temp dirs
@@ -3464,7 +3539,8 @@ sub get_video {
         }
         print "$_ " foreach @cmd;
         print "\n";           
-        video_get_streams(\%video);
+        #video_get_streams(\%video);
+        video_on_streams(\%video, $request, sub {
         if($fmt eq 'hls') {                    
             $video{'on_exists'} = \&video_hls_write_master_playlist;                                         
         }
@@ -3507,7 +3583,8 @@ sub get_video {
             $request->Send404;
             return undef;                   
         });
-        say "get_video: added timer " . $video{'out_filepath'};                  
+        say "get_video: added timer " . $video{'out_filepath'};
+        });                  
     }
     else {
         say "out_fmt: " . $video{'out_fmt'};
@@ -3543,54 +3620,57 @@ sub video_file_lookup {
     return media_filepath_to_src_file($filepath, $flocation);  
 }
 
-sub video_get_streams {
-    my ($video) = @_;
-    my $input_file = $video->{'src_file'}{'filepath'};    
-    my @command = ('ffmpeg', '-i', $input_file);    
-    my $pid = open3(my $in, my $out, my $err = gensym, @command) or say "BAD FFMPEG";
+sub video_on_streams {
+    my ($video, $request, $continue) = @_;
     $video->{'audio'} = [];
     $video->{'video'} = [];
     $video->{'subtitle'} = [];
-    
-    my $current_stream;
-    my $current_element;
-    while(my $eline = <$err>) {      
-       if($eline =~ /^\s*Stream\s#0:(\d+)(?:\((.+)\)){0,1}:\s(.+):\s(.+)(.*)$/) {           
-           my $type = $3;
-           $current_stream = $1;
-           $current_element = { 'sindex' => $current_stream, 'lang' => $2, 'fmt' => $4, 'additional' => $5, 'metadata' => '' };
-           $current_element->{'is_default'} = 1 if($current_element->{'fmt'} =~ /\(default\)$/i);
-           $current_element->{'is_forced'} = 1 if($current_element->{'fmt'} =~ /FORCED/i);
-           if($type =~ /audio/i) {
-               push @{$video->{'audio'}} , $current_element;       
+    my $input_file = $video->{'src_file'}{'filepath'};    
+    my @command = ('ffmpeg', '-i', $input_file);
+    my $evp = $request->{'client'}{'server'}{'evp'};
+    HTTP::BS::Server::Process->new_output_process($evp, \@command, sub {
+        my ($output, $error) = @_;
+        my @lines = split(/\n/, $error);
+        my $current_stream;
+        my $current_element;
+        foreach my $eline (@lines) {
+           if($eline =~ /^\s*Stream\s#0:(\d+)(?:\((.+)\)){0,1}:\s(.+):\s(.+)(.*)$/) {           
+               my $type = $3;
+               $current_stream = $1;
+               $current_element = { 'sindex' => $current_stream, 'lang' => $2, 'fmt' => $4, 'additional' => $5, 'metadata' => '' };
+               $current_element->{'is_default'} = 1 if($current_element->{'fmt'} =~ /\(default\)$/i);
+               $current_element->{'is_forced'} = 1 if($current_element->{'fmt'} =~ /FORCED/i);
+               if($type =~ /audio/i) {
+                   push @{$video->{'audio'}} , $current_element;       
+               }
+               elsif($type =~ /video/i) {
+                   push @{$video->{'video'}} , $current_element;
+               }
+               elsif($type =~ /subtitle/i) {           
+                   push @{$video->{'subtitle'}} , $current_element;
+               }
+               say $eline;       
            }
-           elsif($type =~ /video/i) {
-               push @{$video->{'video'}} , $current_element;
-           }
-           elsif($type =~ /subtitle/i) {           
-               push @{$video->{'subtitle'}} , $current_element;
-           }
-           say $eline;       
-       }
-       elsif($eline =~ /^\s+Duration:\s+(\d\d):(\d\d):(\d\d)\.(\d\d)/) {
-           #TODO add support for over day long video
-           $video->{'duration'} //= "PT$1H$2M$3.$4S";
-           write_file($video->{'out_location'} . '/duration',  $video->{'duration'});        
-       }     
-       elsif(defined $current_stream) {
-           if($eline !~ /^\s\s+/) {
-               $current_stream = undef;
-               $current_element = undef;
-               next;                
-           }      
-           $current_element->{'metadata'} .= $eline;
-           if($eline =~ /\s+title\s*:\s*(.+)$/) {            
-               $current_element->{'title'} = $1;
-           }
-       }              
-    }
-    print Dumper($video);
-    return $video;
+           elsif($eline =~ /^\s+Duration:\s+(\d\d):(\d\d):(\d\d)\.(\d\d)/) {
+               #TODO add support for over day long video
+               $video->{'duration'} //= "PT$1H$2M$3.$4S";
+               write_file($video->{'out_location'} . '/duration',  $video->{'duration'});        
+           }     
+           elsif(defined $current_stream) {
+               if($eline !~ /^\s\s+/) {
+                   $current_stream = undef;
+                   $current_element = undef;
+                   next;                
+               }      
+               $current_element->{'metadata'} .= $eline;
+               if($eline =~ /\s+title\s*:\s*(.+)$/) {            
+                   $current_element->{'title'} = $1;
+               }
+           }              
+        }
+        print Dumper($video);
+        $continue->();
+    });
 }
 
 sub video_hls_write_master_playlist {
@@ -3675,10 +3755,6 @@ sub GetResource {
     $RESOURCES{$filename} //= read_file($filename); 
     return \$RESOURCES{$filename};
 }
-
-
-
-
 
 sub ptp_request {
     my ($evp, $url, $handler, $tried_login) = @_;
@@ -3840,7 +3916,7 @@ sub torrent_d_delete_tied {
 }
 
 
-sub torrent_d_name{
+sub torrent_d_name {
     my ($evp, $infohash, $callback) = @_;
     rtxmlrpc($evp, ['d.name', $infohash], sub {
         my ($output) = @_;
@@ -3995,33 +4071,6 @@ sub play_in_browser_link {
     return '<a href="video?name=' . $torrent_path . '&fmt=hls">HLS (Watch in browser)</a>' if(is_video($file));
     return '<a href="music?ptrack=' . $torrent_path . '">Play in MHFS Music</a>' if(is_mhfs_music_playable($file));
     return 'N/A';
-}
-
-# perform multiple async actions at the same time.
-# continue on with $result_func on failure or completion of all actions
-sub do_multiples{
-    my ($multiples, $result_func) = @_;    
-    my %data;
-    my @mkeys = keys %{$multiples};
-    foreach my $multiple (@mkeys) {
-        my $multiple_cb = sub {
-            my ($res) = @_;
-            $data{$multiple} = $res;
-            # return failure if this multiple failed
-            if(! defined $data{$multiple}) {
-                $result_func->(undef);
-                return;          
-            }
-            # yield if not all the results in             
-            foreach my $m2 (@mkeys) {
-                return if(! defined $data{$m2});            
-            }
-            # all results in we can continue
-            $result_func->(\%data);            
-        };
-        say "launching multiple key: $multiple";
-        $multiples->{$multiple}->($multiple_cb);  
-    }
 }
 
 sub torrent_on_contents {
@@ -4399,55 +4448,7 @@ M3U8END
     return \$m3u8;
 }
 
-sub output_dir_versatile {
-    my ($path, $options) = @_;
-    # hide the root path if desired
-    my $root = $options->{'root'};  
-    $options->{'min_file_size'} //= 0;
 
-    my @files;
-    ON_DIR:    
-    # get the list of files and sort
-    my $dir;
-    if(! opendir($dir, $path)) {
-        warn "outputdir: Cannot open directory: $path $!";
-        return;
-    }  
-    my @newfiles = sort { uc($a) cmp uc($b)} (readdir $dir); 
-    closedir($dir); 
-    my @newpaths = ();
-    foreach my $file (@newfiles) {
-        next if($file =~ /^..?$/);
-        push @newpaths, "$path/$file";        
-    }    
-    @files = @files ? (@newpaths, undef, @files) : @newpaths;      
-    while(@files)
-    {
-        $path = shift @files;          
-        if(! defined $path) {
-            $options->{'on_dir_end'}->() if($options->{'on_dir_end'});
-            next;
-        }
-        my $file = basename($path);              
-        if(-d $path) {
-            $options->{'on_dir_start'}->($path, $file) if($options->{'on_dir_start'});
-            goto ON_DIR;
-        }
-        
-        my $unsafePath = $path;    
-        if($root) {            
-            $unsafePath =~ s/^$root(\/)?//;            
-        }
-        my $size = -s $path;
-        if(! defined $size) {
-            say "size  not defined path $path file $file";
-            next;
-        }
-        next if( $size < $options->{'min_file_size'});
-        $options->{'on_file'}->($path, $unsafePath, $file) if($options->{'on_file'});  
-    }
-    return;
-}
 
 
 

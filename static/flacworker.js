@@ -31,7 +31,6 @@ function toint16(byteA, byteB) {
 let PlaybackQueue = [];
 let DownloadController = new AbortController();
 let DownloadStopSignal = DownloadController.signal;
-let CacheTimer;
 
 function WavDecoder(trackname, starttime) {
     this.trackname = trackname;
@@ -69,24 +68,24 @@ function WavDecoder(trackname, starttime) {
     this.softseek = async function(dessample) {
         this.bufferSize = 0;
         this._ReadOffset = this._AudioStartOffset + (dessample * this.channels * this._BytesPerSample);
-        let request = new Request(this._url, {
+        /*let request = new Request(this._url, {
             method :  'GET',
             headers : { 'Range': ('bytes='+this._ReadOffset+'-')},
             signal: DownloadStopSignal         
         });
         let response = await fetch(request);
         let reader = response.body.getReader();
-        this._reader = reader;
+        this._reader = reader;*/
         this.skipsamples = dessample;
         //await DoCache(20, -1);
         return true;  
     };
     
     this.seek = async function() {
-        let range = this.starttime == 0 ? 'bytes=0-' : 'bytes=0-43';
+        //let range = this.starttime == 0 ? 'bytes=0-' : 'bytes=0-43';
         let request = new Request(this._url, {
             method :  'GET',
-            headers : { 'Range': range},
+            headers : { 'Range': 'bytes=0-43'},
             signal: DownloadStopSignal            
         });
         let response = await fetch(request);
@@ -108,7 +107,7 @@ function WavDecoder(trackname, starttime) {
                if(this.bufferSize >= 44) {
                    this.readHeader();                   
                    if(this.starttime == 0) {
-                       this._reader = reader;
+                       //this._reader = reader;
                        //await DoCache(20, -1);       
                        return true;
                    }
@@ -122,29 +121,8 @@ function WavDecoder(trackname, starttime) {
         
         let dessample = Math.floor(this.starttime * this.samplerate);
         return await this.softseek(dessample);                   
-    };
-    
-    /*
-    this.fillCache = function(bytesToCache) {
-        if(this.bufferSize >= this.maxBufferSize) {
-            console.log('no more bytes to cache in ' + this.trackname);
-            //return 0;
-            return this.bufferSize;             
-        }
-        let bufferBytesLeft = this.maxBufferSize - this.bufferSize;
-        bytesToCache = (bufferBytesLeft < bytesToCache) ? bufferBytesLeft : bytesToCache;
-        let bytesleft = this._size - this._ReadOffset;
-        let bytesdesired = (bytesleft > bytesToCache) ? bytesToCache : bytesleft;
-        if((bytesdesired > 0) &&  {
-            console.log('copying from xhr');
-            let bytesdownloaded = 0;
-            let download = this.xhr.response;
-            if(download.length > this.
-            
-        }           
-    }
-    */
-    
+    };    
+   
     this.cache = async function(bytesToCache) {
         if(this.bufferSize >= this.maxBufferSize) {
             console.log('no more bytes to cache in ' + this.trackname);
@@ -157,8 +135,26 @@ function WavDecoder(trackname, starttime) {
         let bytesleft = this._size - this._ReadOffset;
         let bytesdesired = (bytesleft > bytesToCache) ? bytesToCache : bytesleft;
         let bytesdownloaded = 0;
+
+        if(bytesdesired == 0) {
+            console.log('no more bytes to cache - cached whole: ' + this.trackname);        
+            return this.bufferSize;
+        }
+        let endoffset = this._ReadOffset + bytesdesired - 1;
+        let request = new Request(this._url, {
+            method :  'GET',
+            headers : { 'Range': ('bytes='+this._ReadOffset+'-'+endoffset)},
+            signal: DownloadStopSignal         
+        });
+        let response;
+        for(let i = 0; i < 5; i++) {
+            response = await fetch(request);
+            if(response.status == 206) break;
+            console.log('Not 206, got: ' + response.status + ' retrying ');
+        }        
+        let reader = response.body.getReader();        
         while(bytesdownloaded < bytesdesired) {
-           let {value: chunk, done: readerDone} = await this._reader.read();
+           let {value: chunk, done: readerDone} = await reader.read();
            if(chunk){
                this._ReadOffset += chunk.length;
                console.log('chunk length ' + chunk.length);
@@ -177,6 +173,12 @@ function WavDecoder(trackname, starttime) {
         console.log('cache size ' + this.bufferSize);  
        
         return this.bufferSize;        
+    }
+
+    this.samplesready = function(remsamples) {
+        let readysamples = Math.floor(this.bufferSize / (this.channels * this._BytesPerSample));
+        if(readysamples >= remsamples) return true;
+        return ((this._ReadOffset == this._size) && (readysamples > 0));
     }
     
    
@@ -337,23 +339,6 @@ async function Cache(cachebytes) {
     }  
 }
 
-/*
-async function DoCache(ms, cachebytes) {
-    if(CacheTimer) {        
-        clearTimeout(CacheTimer);
-    }
-    
-    if(cachebytes == -1) {
-        console.log('fast start cache bytes');
-        //cachebytes = 1048576;
-        cachebytes = 1048576/2;         
-    }   
-    await Cache(cachebytes);
-    CacheTimer = setTimeout( function() {
-        DoCache(ms, (4*1048576));        
-    }, ms);
-}*/
-
 let ISCACHING = 0;
 async function DoCache(size) {
     if(ISCACHING) {
@@ -393,10 +378,22 @@ async function pumpAudioAll(duration, jobid) {
     let tickevents = [];
     let tick = 0;
     let tickindex = 0;
+
+    // if the current track isn't created wait for it. 
+    if(!PlaybackQueue[0].iscreated || (!PlaybackQueue[0].decoder.samplesready(remsamples))) {
+        console.log('await docache');
+        await DoCache(1048576/2);
+        if(!PlaybackQueue[0].iscreated || (!PlaybackQueue[0].decoder.samplesready(remsamples))) {
+            console.log('await docache did not get us the required samples');
+            PUMPRUNNING = 0;
+            self.postMessage({'message': 'no_data', 'jobid' : jobid});
+            return;
+        }
+    }
     
     for(let i = 0; i < PlaybackQueue.length; i++) {
         let playbackItem = PlaybackQueue[i];
-        if(!playbackItem.iscreated) {
+        if((!playbackItem.iscreated) || (!playbackItem.decoder.samplesready(remsamples))) {
             /*console.log('job id: ' + jobid + ' waiting for decoder');
             try {
                 await playbackItem.CreateDecoder();
@@ -410,20 +407,8 @@ async function pumpAudioAll(duration, jobid) {
                 console.log('job id: ' + jobid + ' decoder create failed');
                 continue;                
             }*/
-            
-            if(remsamples == samples) {
-                console.log('await docache');
-                await DoCache(1048576/2);
-                if(!playbackItem.iscreated) {
-                    console.log('did not encode any samples');
-                    PUMPRUNNING = 0;
-                    self.postMessage({'message': 'no_data', 'jobid' : jobid});
-                    return;
-                }             
-            }
-            else {                
-                break;
-            }
+            console.log('samples for ' + i + ' not ready, not queuing yet');
+            break;
             
             
         }
@@ -514,14 +499,8 @@ async function pumpAudioAll(duration, jobid) {
     result.remsamples = remsamples;
     result.tickevents = tickevents;
     result.samples = samples;
-    result.outbuffer = outbuffer;
-    
-    // hack
-    /*if(samples == 0) {
-        self.postMessage({'message': 'no_data', 'jobid' : jobid});
-        return;
-    }*/
-    
+    result.outbuffer = outbuffer;    
+   
     console.log('FlacWorker: outputting samples: ' + samples + ' samplerate: ' + samplerate + ' channels: ' + channels);
     PUMPRUNNING = 0;    
     self.postMessage(result, outbuffer);
