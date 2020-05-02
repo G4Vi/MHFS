@@ -143,30 +143,6 @@ package EventLoop::Poll {
     1;
 }
 
-package HTTP::BS::Server::AIO {
-    use strict; use warnings;
-    use feature 'say';
-    use IO::Poll qw(POLLIN POLLOUT POLLHUP);
-    use IO::AIO;
-    use IO::Handle;
-    sub new {
-        my ($class, $evp) = @_;
-        my %self;
-        bless \%self, $class;
-        
-        $evp->set(IO::Handle->new_from_fd(IO::AIO::poll_fileno, 'r'), \%self, POLLIN);
-    }
-
-    sub onReadReady {
-        #say "executing poll_cb";
-        IO::AIO::poll_cb;
-    }
-
-
-
-    1;
-}
-
 package HTTP::BS::Server {
     use strict; use warnings;
     use feature 'say';
@@ -205,7 +181,6 @@ package HTTP::BS::Server {
         bless \%self, $class;
 
         $evp->set($sock, \%self, POLLIN);
-        $self{'ioaio'} = HTTP::BS::Server::AIO->new($evp);     
 
         # load the plugins        
         foreach my $plugin (@{$plugins}) {
@@ -2256,7 +2231,6 @@ package MusicLibrary {
     use POSIX qw/ceil/;
     use Storable qw( freeze thaw);
     use Encode qw(encode_utf8);
-    use IO::AIO;
     #use ExtUtils::testlib;
     use FindBin;
     use File::Spec;
@@ -2561,19 +2535,15 @@ package MusicLibrary {
 
     sub GetTrackInfo {
         my ($file, $continue) = @_;
-        aio_open($file, IO::AIO::O_RDONLY, 0 , sub {
-            my ($fh) = @_;
-            $fh or die "aio_open failed";
-            my $buf = '';
-            aio_read($fh, 8, 34,$buf, 0, sub {                    
-                $_[0] == 34 or die "short read";
-                my $info = parseStreamInfo($buf);
-                $info->{'duration'} = $info->{'TOTALSAMPLES'}/$info->{'SAMPLERATE'}; 
-                $TRACKINFO{$file} = $info;
-                print Dumper($info); 
-                $continue->();                                      
-            });
-        });
+        open(my $fh, '<', $file) or die "open failed";
+        my $buf = '';
+        seek($fh, 8, 0) or die "seek failed";
+        (read($fh, $buf, 34) == 34) or die "short read";
+        my $info = parseStreamInfo($buf);
+        $info->{'duration'} = $info->{'TOTALSAMPLES'}/$info->{'SAMPLERATE'}; 
+        $TRACKINFO{$file} = $info;
+        print Dumper($info); 
+        $continue->(); 
     }
 
     sub onSampleRates {

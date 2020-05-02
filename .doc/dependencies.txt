@@ -1,7 +1,7 @@
-needed perl modules:
+needed noncore perl modules:
 Any::URI::Escape - apt-get install libany-uri-escape-perl
 html escape?
-IO::AIO - apt-get install libio-aio-perl 
+
 #Unicode::Escape - apt-get install libunicode-escape-perl
 
 optional perl modules:
@@ -14,3 +14,5 @@ stunnel
 youtube-dl for Youtube plugin
 
 
+# no longer needed
+IO::AIO - apt-get install libio-aio-perl 
