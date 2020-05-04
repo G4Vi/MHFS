@@ -1,4 +1,83 @@
 #!/usr/bin/perl
+package EventLoop::Poll::Linux::Timer {
+    use strict; use warnings;
+    use IO::Poll qw(POLLIN POLLOUT POLLHUP);
+    use POSIX qw/floor/;
+    use Devel::Peek;
+    use feature 'say';
+    use constant {
+        _clock_REALTIME  => 0,
+        _clock_MONOTONIC => 1,
+        _clock_BOOTTIME  => 7,
+        _clock_REALTIME_ALARM => 8,
+        _clock_BOOTTIME_ALARM => 9,
+     
+        _ENOTTY => 25,  #constant for Linux?
+    };
+    # x86_64 numbers
+    my $timerfd_create_no = 283;
+    my $TFD_CLOEXEC = 0x80000;
+    my $TFD_NONBLOCK = 0x800;
+    my $timerfd_settime_no = 286;  
+
+    sub new {
+        my ($class, $evp) = @_;
+        my $timerfd = syscall($timerfd_create_no,  _clock_MONOTONIC, $TFD_NONBLOCK | $TFD_CLOEXEC);
+        $timerfd != -1 or die("failed to create timerfd: $!");
+        my $timerhandle = IO::Handle->new_from_fd($timerfd, "r");
+        $timerhandle or die("failed to turn timerfd into a file handle"); 
+        my %self = ('timerfd' => $timerfd, 'timerhandle' => $timerhandle);
+        bless \%self, $class;
+
+        $evp->set($self{'timerhandle'}, \%self, POLLIN);
+        $self{'evp'} = $evp;
+        return \%self;
+    }
+
+    sub packitimerspec {
+       my ($times) = @_; 
+       my $it_interval_sec  = floor($times->{'it_interval'});
+       my $it_interval_nsec = floor(($times->{'it_interval'} - $it_interval_sec) * 1000000000);
+       my $it_value_sec = floor($times->{'it_value'});
+       my $it_value_nsec = floor(($times->{'it_value'} - $it_value_sec) * 1000000000);
+       say "packing $it_interval_sec, $it_interval_nsec, $it_value_sec, $it_value_nsec";
+       return pack 'qqqq', $it_interval_sec, $it_interval_nsec, $it_value_sec, $it_value_nsec;
+   }
+
+    sub settime_linux {
+        my ($self, $start, $interval) = @_;
+        my $new_value = packitimerspec({'it_interval' => $interval, 'it_value' => $start});
+        #Dump($new_value);
+        my $settime_success = syscall($timerfd_settime_no, $self->{'timerfd'}, 0, $new_value,0);
+        ($settime_success == 0) or die("timerfd_settime failed: $!");
+    }
+
+    sub onReadReady {
+        my ($self) = @_;
+        my $nread;
+        my $buf;
+        while($nread = sysread($self->{'timerhandle'}, $buf, 8)) {
+            if($nread < 8) {
+                say "timer hit, ignoring $nread bytes";
+                next;
+            }
+            my $expirations = unpack 'Q', $buf;
+            say "Linux::Timer there were $expirations expirations";
+        }
+        if(! defined $nread) {
+            if( ! $!{EAGAIN}) {
+                say "sysread failed with $!";
+            }
+            
+        }
+        $self->{'evp'}->check_timers;
+        return 1;
+    };
+
+
+
+1;
+};
 
 # You must provide event handlers for the events you are listening for
 # return undef to have them removed from poll's structures
@@ -8,20 +87,19 @@ package EventLoop::Poll {
     use IO::Poll qw(POLLIN POLLOUT POLLHUP);
     use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
     use Scalar::Util qw(looks_like_number);
-    use Data::Dumper;
+    use Data::Dumper;    
+    use Devel::Peek;
 
     our $POLLRDHUP = 0;
-    our $ALWAYSMASK = ($POLLRDHUP | POLLHUP);    
+    our $ALWAYSMASK = ($POLLRDHUP | POLLHUP);
     
     sub new {
-        my ($class) = @_;
-        
+        my ($class) = @_;        
         my %self = ('poll' => IO::Poll->new(), 'fh_map' => {}, 'timers' => []);
-        bless \%self, $class;              
-        
+        bless \%self, $class;
         return \%self;   
     }
-    
+
     sub set {
         my ($self, $handle, $obj, $events) = @_;
         $self->{'poll'}->mask($handle, $events);
@@ -38,107 +116,183 @@ package EventLoop::Poll {
         $self->{'poll'}->remove($handle);        
         $self->{'fh_map'}{$handle} = undef;          
     }
+
+    
+   sub _insert_timer {
+       my ($self, $timer) = @_;
+       my $i;
+       for($i = 0; defined($self->{'timers'}[$i]) && ($timer->{'desired'} >= $self->{'timers'}[$i]{'desired'}); $i++) { }
+       splice @{$self->{'timers'}}, $i, 0, ($timer);
+       return $i;   
+   }
+   
     
     # all times are relative, is 0 is set as the interval, it will be run every main loop iteration
     # return undef in the callback to delete the timer
     sub add_timer {
-        my ($self, $start, $interval, $callback) = @_;
+        my ($self, $start, $interval, $callback) = @_;        
         my $current_time = clock_gettime(CLOCK_MONOTONIC);
         my $desired = $current_time + $start;
-        my $timer = { 'desired' => $desired, 'interval' => $interval, 'callback' => $callback };
-        my $i;
-        for($i = 0; defined($self->{'timers'}[$i]) && ($desired >= $self->{'timers'}[$i]{'desired'}); $i++) { }
-        splice @{$self->{'timers'}}, $i, 0, ($timer);   
+        my $timer = { 'desired' => $desired, 'interval' => $interval, 'callback' => $callback };    
+        return _insert_timer($self, $timer);        
     }
+
+    
     
     sub requeue_timers {
         my ($self, $timers, $current_time) = @_;
         foreach my $timer (@$timers) {
             $timer->{'desired'} = $current_time + $timer->{'interval'};
-            my $i;
-            for($i = 0; defined($self->{'timers'}[$i]) && ($timer->{'desired'} >= $self->{'timers'}[$i]{'desired'}); $i++) { }
-            splice @{$self->{'timers'}}, $i, 0, ($timer);       
-        }         
-    }    
-   
-    sub run {
-        my ($self, $loop_interval) = @_;
-        
-        my $poll = $self->{'poll'};
-    
-        for(;;)
-        {            
-            # check timers
-            my @requeue_timers;
-            my $current_time =  clock_gettime(CLOCK_MONOTONIC);            
-            while(my $timer = shift (@{$self->{'timers'}})  ) {
-                if($current_time >= $timer->{'desired'}) {
-                    if(defined $timer->{'callback'}->($timer, $current_time)) { # callback may change interval
-                        push @requeue_timers, $timer;                    
-                    }               
-                }
-                else {
-                    unshift @{$self->{'timers'}}, $timer;
-                    last;
-                }                
-            }
-            $self->requeue_timers(\@requeue_timers, $current_time);           
-               
-            
-            # check all the handles  
-            #say "loop";
-            my $pollret = $poll->poll($loop_interval);
-            if($pollret > 0){                             
-                foreach my $handle ($poll->handles()) {
-                    my $revents = $poll->events($handle);
-                    my $obj = $self->{'fh_map'}{$handle};                    
+            _insert_timer($self, $timer);    
+        }               
+    }
 
-                    if($revents & POLLIN) { 
-                        #say "read Ready " .$$;                                                                  
-                        if(! defined($obj->onReadReady)) {
-                            $self->remove($handle);
-                            say "poll has " . scalar ( $self->{'poll'}->handles) . " handles";  
-                            next;
-                        }                      
-                    }
-                    
-                    if($revents & POLLOUT) {
-                        #say "writeReady";                        
-                        if(! defined($obj->onWriteReady)) {
-                            $self->remove($handle);
-                             say "poll has " . scalar ( $self->{'poll'}->handles) . " handles";  
-                            next;
-                        }                                  
-                    }
-                    
-                    if($revents & (POLLHUP | $POLLRDHUP )) { 
-                        say "Hangup $handle";                   
-                        $obj->onHangUp();
-                        $self->remove($handle);
-                        say "poll has " . scalar ( $self->{'poll'}->handles) . " handles";                        
-                    }                   
-
-                    #if(! looks_like_number($revents ) ) {
-                    #    if(! defined $obj->{'route_default'}) {           
-                    #        say "client no events;
-                    #    }                        
-                    #}           
-                }
-        
-            }
-            elsif($pollret == 0) {
-                #say "pollret == 0";
+    sub check_timers {
+        my ($self) = @_;
+        my @requeue_timers;
+        my $timerhit = 0;
+        my $current_time =  clock_gettime(CLOCK_MONOTONIC);            
+        while(my $timer = shift (@{$self->{'timers'}})  ) {                
+            if($current_time >= $timer->{'desired'}) {
+                say "running timer";
+                $timerhit = 1;
+                if(defined $timer->{'callback'}->($timer, $current_time)) { # callback may change interval
+                    push @requeue_timers, $timer;                    
+                }               
             }
             else {
-                say "Poll ERROR";
-                #return undef;
-            }  
+                unshift @{$self->{'timers'}}, $timer;
+                last;
+            }                
         }
-    
-    
+        if($timerhit) {
+            $self->requeue_timers(\@requeue_timers, $current_time); 
+        } 
     }
+
+    sub do_poll {
+        my ($self, $loop_interval, $poll) = @_;
+        my $pollret = $poll->poll($loop_interval);
+        if($pollret > 0){                             
+            foreach my $handle ($poll->handles()) {
+                my $revents = $poll->events($handle);
+                my $obj = $self->{'fh_map'}{$handle};                    
+                if($revents & POLLIN) { 
+                    #say "read Ready " .$$;                                                                  
+                    if(! defined($obj->onReadReady)) {
+                        $self->remove($handle);
+                        say "poll has " . scalar ( $self->{'poll'}->handles) . " handles";  
+                        next;
+                    }                      
+                }
+                
+                if($revents & POLLOUT) {
+                    #say "writeReady";                        
+                    if(! defined($obj->onWriteReady)) {
+                        $self->remove($handle);
+                         say "poll has " . scalar ( $self->{'poll'}->handles) . " handles";  
+                        next;
+                    }                                  
+                }
+                
+                if($revents & (POLLHUP | $POLLRDHUP )) { 
+                    say "Hangup $handle";                   
+                    $obj->onHangUp();
+                    $self->remove($handle);
+                    say "poll has " . scalar ( $self->{'poll'}->handles) . " handles";                        
+                }                   
+                #if(! looks_like_number($revents ) ) {
+                #    if(! defined $obj->{'route_default'}) {           
+                #        say "client no events;
+                #    }                        
+                #}           
+            }
     
+        }
+        elsif($pollret == 0) {
+            #say "pollret == 0";
+        }
+        else {
+            say "Poll ERROR";
+            #return undef;
+        }
+    }   
+   
+    sub run {
+        my ($self, $loop_interval) = @_;        
+        my $poll = $self->{'poll'};    
+        for(;;)
+        {           
+            print "do_poll";
+            if($self->{'timers'}) {
+                say " timers " . scalar(@{$self->{'timers'}});                    
+            }
+            else {
+                print "\n";
+            }  
+            check_timers($self);         
+            do_poll($self, $loop_interval, $poll);           
+        }  
+    }
+
+    BEGIN {    
+        use Config;
+        say $Config{archname};
+        #if(index($Config{archname}, 'x86_64-linux') != -1) {
+        if(0) {
+            say "LINUX_X86_64: enabling timerfd support";
+            my $new_ = \&new;
+            *new = sub {
+                my $self = $new_->(@_);         
+                $self->{'evp_timer'} = EventLoop::Poll::Linux::Timer->new($self);
+                return $self;
+            };
+            
+            my $add_timer_ = \&add_timer;
+            *add_timer = sub {
+                if($add_timer_->(@_) == 0) {
+                    my ($self, $start) = @_;
+                    say "add_timer, updating linux timer to $start";                
+                    $self->{'evp_timer'}->settime_linux($start, 0);
+                }
+            };
     
+            my $requeue_timers_ = \&requeue_timers;
+            *requeue_timers = sub {
+                $requeue_timers_->(@_);
+                my ($self, $timers, $current_time) = @_;
+                if($timers->[0]) {
+                    my $start = $timers->[0]{'desired'} - $current_time;
+                    say "requeue_timers, updating linux timer to $start";
+                    $self->{'evp_timer'}->settime_linux($start, 0);
+                }  
+            };
+    
+            *run = sub {
+                my ($self) = @_;        
+                my $poll = $self->{'poll'};    
+                for(;;)
+                {
+                    print "do_poll LINUX_X86_64 $$";
+                    if($self->{'timers'}) {
+                        say " timers " . scalar(@{$self->{'timers'}});                    
+                    }
+                    else {
+                        print "\n";
+                    } 
+                    if(scalar(@{$self->{'timers'}}) >= scalar ( $self->{'poll'}->handles)) {
+                        die scalar ( $self->{'poll'}->handles);
+                    }
+
+                    do_poll($self, -1, $poll);           
+                }
+            };    
+    
+        }
+        else {
+            say "Not LINUX_X86_64, no timerfd support";
+        }    
+    }   
 
     1;
 }
