@@ -220,18 +220,26 @@ package EventLoop::Poll {
     }   
    
     sub run {
-        my ($self, $loop_interval) = @_;        
+        my ($self, $loop_interval) = @_;
+        my $default_lp_interval = $loop_interval // -1;        
         my $poll = $self->{'poll'};    
         for(;;)
-        {           
-            print "do_poll";
+        {   
+            check_timers($self);        
+            print "do_poll $$";
             if($self->{'timers'}) {
                 say " timers " . scalar(@{$self->{'timers'}});                    
             }
             else {
                 print "\n";
             }  
-            check_timers($self);         
+            # we don't need to expire until a timer is expiring
+            if(@{$self->{'timers'}}) {
+                $loop_interval = $self->{'timers'}[0]{'desired'} - clock_gettime(CLOCK_MONOTONIC);
+            }
+            else {
+                $loop_interval = $default_lp_interval;
+            }         
             do_poll($self, $loop_interval, $poll);           
         }  
     }
@@ -270,7 +278,8 @@ package EventLoop::Poll {
             };
     
             *run = sub {
-                my ($self) = @_;        
+                my ($self, $loop_interval) = @_;
+                $loop_interval //= -1;        
                 my $poll = $self->{'poll'};    
                 for(;;)
                 {
@@ -282,7 +291,7 @@ package EventLoop::Poll {
                         print "\n";
                     }                
 
-                    do_poll($self, -1, $poll);           
+                    do_poll($self, $loop_interval, $poll);           
                 }
             };    
     
@@ -364,7 +373,7 @@ package HTTP::BS::Server {
             $plugin->{'server'} = \%self;             
         }            
         
-        $evp->run(0.1);
+        $evp->run();
         
         return \%self;
     }
