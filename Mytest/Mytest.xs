@@ -45,12 +45,6 @@ _mytest *_mytest_new(_mytest *mytest, const char *filename, malloc_ptr mymalloc,
 
 FLAC__StreamEncoderWriteStatus writecb(const FLAC__StreamEncoder *encoder, const FLAC__byte buffer[], size_t bytes, unsigned samples, unsigned current_frame, void *client_data)
 {
-    static maxbytes;
-    if(bytes > maxbytes)
-    {
-        maxbytes = bytes;
-        fprintf(stderr, "writecb maxbytes %u %u\n", maxbytes, samples);
-    }
     //fprintf(stderr, "writecb %u %u\n", bytes, samples);
     _mytest *mytest = (_mytest*)client_data;
     // + 1 for terminating 0
@@ -156,7 +150,7 @@ bool _mytest_get_flac(_mytest *mytest, uint64_t start, size_t count)
         goto _mytest_get_flac_cleanup;    
     } 
     
-    fprintf(stderr, "seeked to absolute, allocating %u\n", count * pFlac->channels * sizeof(int16_t));
+    fprintf(stderr, "seeked to absolute, allocating %lu\n", count * pFlac->channels * sizeof(int16_t));
     int16_t *raw16Samples = malloc((size_t)count * pFlac->channels * sizeof(int16_t));
     if(raw16Samples == NULL)
     {
@@ -401,7 +395,7 @@ get_flac(mytest, start, count)
 		SV *data = NULL;		
 		if(_mytest_get_flac(mytest, start, count))
 		{
-			fprintf(stderr, "flacbuffer at %p largest_offset %p\n", mytest->flacbuffer,mytest->largest_offset);
+			fprintf(stderr, "flacbuffer at %p largest_offset %"PRIu64"\n", mytest->flacbuffer,mytest->largest_offset);
 			mytest->flacbuffer[mytest->largest_offset] = '\0';
 			data = newSV(0);
 			sv_usepvn_flags(data, (char*)mytest->flacbuffer, mytest->largest_offset, SV_SMAGIC | SV_HAS_TRAILING_NUL);

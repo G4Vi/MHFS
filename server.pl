@@ -15,14 +15,16 @@ package EventLoop::Poll::Linux::Timer {
         _ENOTTY => 25,  #constant for Linux?
     };
     # x86_64 numbers
-    my $timerfd_create_no = 283;
+    require 'syscall.ph';
+    #my $timerfd_create_no = 283;
+    #my $timerfd_settime_no = 286; 
     my $TFD_CLOEXEC = 0x80000;
-    my $TFD_NONBLOCK = 0x800;
-    my $timerfd_settime_no = 286;  
+    my $TFD_NONBLOCK = 0x800;     
 
     sub new {
         my ($class, $evp) = @_;
-        my $timerfd = syscall($timerfd_create_no,  _clock_MONOTONIC, $TFD_NONBLOCK | $TFD_CLOEXEC);
+        say 'timerfd_create ' . SYS_timerfd_create();
+        my $timerfd = syscall(SYS_timerfd_create(), _clock_MONOTONIC, $TFD_NONBLOCK | $TFD_CLOEXEC);       
         $timerfd != -1 or die("failed to create timerfd: $!");
         my $timerhandle = IO::Handle->new_from_fd($timerfd, "r");
         $timerhandle or die("failed to turn timerfd into a file handle"); 
@@ -36,9 +38,9 @@ package EventLoop::Poll::Linux::Timer {
 
     sub packitimerspec {
        my ($times) = @_; 
-       my $it_interval_sec  = floor($times->{'it_interval'});
+       my $it_interval_sec  = int($times->{'it_interval'});
        my $it_interval_nsec = floor(($times->{'it_interval'} - $it_interval_sec) * 1000000000);
-       my $it_value_sec = floor($times->{'it_value'});
+       my $it_value_sec = int($times->{'it_value'});
        my $it_value_nsec = floor(($times->{'it_value'} - $it_value_sec) * 1000000000);
        say "packing $it_interval_sec, $it_interval_nsec, $it_value_sec, $it_value_nsec";
        return pack 'qqqq', $it_interval_sec, $it_interval_nsec, $it_value_sec, $it_value_nsec;
@@ -47,8 +49,9 @@ package EventLoop::Poll::Linux::Timer {
     sub settime_linux {
         my ($self, $start, $interval) = @_;
         my $new_value = packitimerspec({'it_interval' => $interval, 'it_value' => $start});
-        #Dump($new_value);
-        my $settime_success = syscall($timerfd_settime_no, $self->{'timerfd'}, 0, $new_value,0);
+        #Dump($new_value);       
+        say "timerfd_settime " . SYS_timerfd_settime();
+        my $settime_success = syscall(SYS_timerfd_settime(), $self->{'timerfd'}, 0, $new_value,0);
         ($settime_success == 0) or die("timerfd_settime failed: $!");
     }
 
@@ -73,9 +76,7 @@ package EventLoop::Poll::Linux::Timer {
         $self->{'evp'}->check_timers;
         return 1;
     };
-
-
-
+    
 1;
 };
 
@@ -238,8 +239,8 @@ package EventLoop::Poll {
     BEGIN {    
         use Config;
         say $Config{archname};
-        #if(index($Config{archname}, 'x86_64-linux') != -1) {
-        if(0) {
+        if(index($Config{archname}, 'x86_64-linux') != -1) {
+        #if(0) {
             say "LINUX_X86_64: enabling timerfd support";
             my $new_ = \&new;
             *new = sub {
@@ -261,11 +262,11 @@ package EventLoop::Poll {
             *requeue_timers = sub {
                 $requeue_timers_->(@_);
                 my ($self, $timers, $current_time) = @_;
-                if($timers->[0]) {
-                    my $start = $timers->[0]{'desired'} - $current_time;
+                if(@{$self->{'timers'}}) {
+                    my $start = $self->{'timers'}[0]{'desired'} - $current_time;
                     say "requeue_timers, updating linux timer to $start";
                     $self->{'evp_timer'}->settime_linux($start, 0);
-                }  
+                }                                   
             };
     
             *run = sub {
@@ -279,10 +280,7 @@ package EventLoop::Poll {
                     }
                     else {
                         print "\n";
-                    } 
-                    if(scalar(@{$self->{'timers'}}) >= scalar ( $self->{'poll'}->handles)) {
-                        die scalar ( $self->{'poll'}->handles);
-                    }
+                    }                
 
                     do_poll($self, -1, $poll);           
                 }
