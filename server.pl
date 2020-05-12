@@ -2427,9 +2427,34 @@ package MusicLibrary {
             }
             return undef if( $size eq 0);
             return [basename($path), $size, \@tree];
-       } 
+       }        
+    }
+
+    sub BuildLibrary2 {
+        my ($path) = @_;
+        #my %hash;
+        # recursive disk read is expensive ... do it in another process
+        my $data = `find /media/storage/music -type f -printf "%P\\n%s\\n"`;
+
+        # determine if any changes occured since last time        
+        #mtime
+        #size
+        #inode number
+        #file mode
+        #owner uid and gid
         
-}
+        #my @lines = split('\n', $data);
+        #for(my $i = 0; $i < scalar(@lines); $i+=2) {
+        #    my @fparts = split('/', $lines[$i]);
+        #    my $item = \%hash;
+        #    foreach my $fpart (@fparts) {
+        #        $item = $item->{$fpart};
+        #    }
+        #    $item->{_size} = $lines[$i+1];
+        #}
+#
+        #print Dumper(\%hash);
+    }
 
     sub GetPrompt {
         my ($out, $dir) = @_;
@@ -2987,9 +3012,11 @@ package MusicLibrary {
         foreach my $source(@{$self->{'sources'}}) {
             $source->{'SendFile'} //= $sendFiles{$source->{'type'}};        
         }
-        say $pstart . "building music library";
+        say $pstart . "building music library " . clock_gettime(CLOCK_MONOTONIC);
         $self->BuildLibraries();
-        say $pstart ."done building libraries";
+        #$self->BuildLibrary2();
+        say $pstart ."done building libraries " . clock_gettime(CLOCK_MONOTONIC);;
+        
         $self->{'routes'} = [
             ['/music', sub {
                 my ($request) = @_;
