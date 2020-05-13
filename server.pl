@@ -2377,7 +2377,9 @@ package MusicLibrary {
     use Cwd qw(abs_path getcwd);
     use File::Find;
     use Data::Dumper;
+    use Fcntl ':mode';
     use File::stat;
+    
     use File::Basename;
     use Scalar::Util qw(looks_like_number);   
     HTTP::BS::Server::Util->import();
@@ -2431,10 +2433,34 @@ package MusicLibrary {
     }
 
     sub BuildLibrary2 {
-        my ($path) = @_;
-        #my %hash;
+        my ($self, $path) = @_;
         # recursive disk read is expensive ... do it in another process
-        my $data = `find /media/storage/music -type f -printf "%P\\n%s\\n"`;
+        #my $data = `find /media/storage/music -type f -printf "%P\\n%s\\n"`;
+        my @scan = ($path);
+        while(@scan) {
+            my $file = shift @scan;
+            my $node = $self->{'libs'}{$path}{'files'}{$file};
+            my $finfo = stat($file);
+            if(S_ISDIR($finfo)) {
+                if(($finfo->{'mtime'} ne $node->{'mtime'}) || ($finfo->{'uid'} ne $node->{'uid'}) || ($finfo->{'gid'} ne $node->{'gid'}) || ($finfo->{'ino'} ne $node->{'ino'}) || ($finfo->{'mode'} ne $node->{'mode'})) {
+                    $self->{'libs'}{$path}{'files'}{$file} = $finfo;
+                    $node = $self->{'libs'}{$path}{'files'}{$file};
+                    # directory changed reread it
+                    my $dir;
+                    if(! opendir($dir, $file)) {
+                        warn "outputdir: Cannot open directory: $file $!";
+                        return undef;
+                    }
+                    my @files = sort { uc($a) cmp uc($b)} (readdir $dir);
+                    $node->{'files'} = \@files;                    
+                }
+                push(@scan, @{$node->{'files'}}) if (@{$node->{'files'}});
+            }
+            elsif(($finfo->{'mtime'} ne $node->{'mtime'}) || ($finfo->{'uid'} ne $node->{'uid'}) || ($finfo->{'gid'} ne $node->{'gid'}) || ($finfo->{'ino'} ne $node->{'ino'}) || ($finfo->{'mode'} ne $node->{'mode'}) || ($finfo->{'size'} ne $node->{'size'})) {
+                $self->{'libs'}{$path}{'files'}{$file} = $finfo;
+            }
+        }
+    
 
         # determine if any changes occured since last time        
         #mtime
@@ -2442,18 +2468,7 @@ package MusicLibrary {
         #inode number
         #file mode
         #owner uid and gid
-        
-        #my @lines = split('\n', $data);
-        #for(my $i = 0; $i < scalar(@lines); $i+=2) {
-        #    my @fparts = split('/', $lines[$i]);
-        #    my $item = \%hash;
-        #    foreach my $fpart (@fparts) {
-        #        $item = $item->{$fpart};
-        #    }
-        #    $item->{_size} = $lines[$i+1];
-        #}
-#
-        #print Dumper(\%hash);
+
     }
 
     sub GetPrompt {
