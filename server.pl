@@ -345,18 +345,6 @@ package HTTP::BS::Server {
 
         # load the plugins        
         foreach my $plugin (@{$plugins}) {
-            if($settings->{'ISCHILD'}) {
-                if(! $plugin->can('childnew')) {
-                    say 'plugin(' . ref($plugin) . '): cant childnew';
-                    $plugin->{'timers'} = undef;
-                    $plugin->{'uploader'} = undef;
-                    $plugin->{'routes'} = undef;                
-                }
-                else {
-                    $plugin->childnew;
-                }                
-            }
-
         
             foreach my $timer (@{$plugin->{'timers'}}) {
                 say 'plugin(' . ref($plugin) . '): adding timer';                              
@@ -2727,10 +2715,6 @@ package MusicLibrary {
     my %TRACKINFO;
     sub SendTrack {
         my ($request, $tosend) = @_;        
-        #my $gapless = $request->{'qs'}{'gapless'};            
-        #if($gapless) {
-        #    $request->SendFile($tosend);
-        #}
         if(defined $request->{'qs'}{'part'}) {
             if(!defined($TRACKINFO{$tosend}))
             {
@@ -3108,25 +3092,6 @@ package MusicLibrary {
         $request->Send404;
     }
 
-    sub UpdateLibraries {        
-        my ($self, $data) = @_;
-        my $temp = thaw($data);
-        if(scalar(@{$temp}) != scalar(@{$self->{'sources'}})) {
-            say "incorrect number of sources, not updating library";
-            return;                            
-        }                        
-        foreach my $source (@{$self->{'sources'}}) {
-            say "updating library " . $source->{'folder'};
-            $source->{'lib'} = shift @{$temp};                       
-        }
-    }
-
-    sub UpdateHTML {
-        my ($self, $data) = @_;
-        say "updating html";
-        $self->{'html_gapless'} = $data;
-    }
-
     sub UpdateLibrariesAsync {
         my ($self, $evp, $onUpdateEnd) = @_;
         HTTP::BS::Server::Process->new_output_child($evp, sub {
@@ -3167,29 +3132,8 @@ package MusicLibrary {
             }           
             $onUpdateEnd->();
         });
-    }
-    
-    sub childnew {
-        my ($self) = @_;
-        $self->{'timers'} = [
-            [ 5, 60, sub {                
-                $self->BuildLibraries();
-                my @mlibs;
-                foreach my $source (@{$self->{'sources'}}) {
-                    push @mlibs, $source->{'lib'};                
-                }
-                my $putdata = freeze(\@mlibs);                
-                BS::Socket::HTTP::Client->put_buf($self->{'server'}, $self->{'settings'}{'P_URL'}, [
-                    ["/api/music.storable", sub {
-                    }, $putdata],
-                    ["/music", sub {
-                    }, $self->{'html_gapless'}]
-                ]);
-                return 1;
-            }],
-        ];
-    }
-    
+    }    
+  
     sub new {
         my ($class, $settings) = @_;
         my $self =  {'settings' => $settings};
@@ -3206,40 +3150,12 @@ package MusicLibrary {
         $self->{'routes'} = [
             ['/music', sub {
                 my ($request) = @_;
-                if($request->{'method'} ne 'PUT') { 
-                    return $self->SendLibrary($request);
-                }
-                else {
-                    $request->PUTBuf(sub {
-                        my ($data) = @_;
-                        $request->SendLocalBuf("api call successful", "text/html; charset=utf-8");
-                        $self->UpdateHTML($data);
-                    });
-                }                
+                return $self->SendLibrary($request);                               
             }],
             [ '/music_dl', sub {
                 my ($request) = @_;
                 return $self->SendFromLibrary($request);
-            }],
-            [ '/api/music.storable', sub {
-                my ($request) = @_;
-                if($request->{'method'} eq 'PUT') {                    
-                    $request->PUTBuf(sub {
-                        my ($data) = @_;
-                        $request->SendLocalBuf("api call successful", "text/html; charset=utf-8");
-                        $self->UpdateLibraries($data);
-                    });
-                }
-                else {
-                    # warning blocks
-                    $self->BuildLibraries();
-                    my @mlibs;
-                    foreach my $source (@{$self->{'sources'}}) {
-                        push @mlibs, $source->{'lib'};                
-                    }                
-                    $request->SendLocalBuf(freeze(\@mlibs), 'application/octet-stream');
-                }                              
-            }],             
+            }],                         
         ];
 
         $self->{'timers'} = [
@@ -3756,28 +3672,7 @@ my @routes = (
     }
 );
 
-# finally start the server
-$SETTINGS->{'CPORT'} //= $SETTINGS->{'PORT'} + 1;
-$SETTINGS->{'CHOST'} //= '127.0.0.1';
-$SETTINGS->{'CDOMAIN'} //= $SETTINGS->{'CHOST'};
-if(0){
-#if(fork() == 0) {
-    $SETTINGS->{'PHOST'} = $SETTINGS->{'HOST'};
-    $SETTINGS->{'HOST'} = $SETTINGS->{'CHOST'};
-    $SETTINGS->{'CHORT'} = undef;
-    $SETTINGS->{'PPORT'} = $SETTINGS->{'PORT'};
-    $SETTINGS->{'PORT'} = $SETTINGS->{'CPORT'};
-    $SETTINGS->{'CPORT'} = undef;
-    $SETTINGS->{'PDOMAIN'} = $SETTINGS->{'DOMAIN'};
-    $SETTINGS->{'DOMAIN'} = $SETTINGS->{'CDOMAIN'};
-    $SETTINGS->{'CDOMAIN'} = undef;
-    $SETTINGS->{'ISCHILD'} = 1;
-    $SETTINGS->{'P_URL'} = "http://".$SETTINGS->{'PDOMAIN'}.':'.$SETTINGS->{'PPORT'};    
-}
-else {
-    $SETTINGS->{'C_URL'} = "http://".$SETTINGS->{'CDOMAIN'}.':'.$SETTINGS->{'CPORT'};
-}
-    
+# finally start the server   
 my $server = HTTP::BS::Server->new($SETTINGS, \@routes, \@plugins);
 
 # really acquire media file (with search) and convert
