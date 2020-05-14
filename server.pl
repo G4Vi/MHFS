@@ -157,7 +157,7 @@ package EventLoop::Poll {
             if($current_time >= $timer->{'desired'}) {
                 say "running timer";
                 $timerhit = 1;
-                if(defined $timer->{'callback'}->($timer, $current_time)) { # callback may change interval
+                if(defined $timer->{'callback'}->($timer, $current_time, $self)) { # callback may change interval
                     push @requeue_timers, $timer;                    
                 }               
             }
@@ -1972,40 +1972,47 @@ package HTTP::BS::Server::Process {
                 say "PID $child reaped (No func) $exitcode"; 
             }        
         }    
-    };    
+    };
+
+    sub _setup_handlers {
+        my ($self, $in, $out, $err, $fddispatch) = @_;
+        my $pid = $self->{'pid'};
+        my $evp = $self->{'evp'};
+
+        if($fddispatch->{'SIGCHLD'}) {
+            say "PID $pid custom SIGCHLD handler";
+            $CHILDREN{$pid} = $fddispatch->{'SIGCHLD'};            
+        }    
+        if($fddispatch->{'STDIN'}) {            
+            $self->{'fd'}{'stdin'} = HTTP::BS::Server::FD::Writer->new($self, $in, $fddispatch->{'STDIN'});
+            $evp->set($in, $self->{'fd'}{'stdin'}, POLLOUT | $EventLoop::Poll::ALWAYSMASK);                       
+        }
+        else {                       
+            $self->{'fd'}{'stdin'}{'fd'} = $in;        
+        }
+        if($fddispatch->{'STDOUT'}) {        
+            $self->{'fd'}{'stdout'} = HTTP::BS::Server::FD::Reader->new($self, $out, $fddispatch->{'STDOUT'}); 
+            $evp->set($out, $self->{'fd'}{'stdout'}, POLLIN | $EventLoop::Poll::ALWAYSMASK);            
+        }
+        else {
+            $self->{'fd'}{'stdout'}{'fd'} = $out;        
+        }
+        if($fddispatch->{'STDERR'}) {
+            $self->{'fd'}{'stderr'} = HTTP::BS::Server::FD::Reader->new($self, $err, $fddispatch->{'STDERR'});
+            $evp->set($err, $self->{'fd'}{'stderr'}, POLLIN | $EventLoop::Poll::ALWAYSMASK);       
+        }
+        else {
+            $self->{'fd'}{'stderr'}{'fd'} = $err;
+        } 
+    }    
     
     sub new {
         my ($class, $torun, $evp, $fddispatch) = @_;        
         my %self = ('time' => clock_gettime(CLOCK_MONOTONIC), 'evp' => $evp);             
-        my $pid = open3(my $in, my $out, my $err = gensym, @$torun) or die "BAD process";
-        if($fddispatch->{'SIGCHLD'}) {
-            say "PID $pid custom SIGCHLD handler";
-            $CHILDREN{$pid} = $fddispatch->{'SIGCHLD'};            
-        }
+        my $pid = open3(my $in, my $out, my $err = gensym, @$torun) or die "BAD process";        
         $self{'pid'} = $pid;
-        say 'PID '. $pid . ' NEW PROCESS: ' . $torun->[0];    
-        if($fddispatch->{'STDIN'}) {            
-            $self{'fd'}{'stdin'} = HTTP::BS::Server::FD::Writer->new(\%self, $in, $fddispatch->{'STDIN'});
-            $evp->set($in, $self{'fd'}{'stdin'}, POLLOUT | $EventLoop::Poll::ALWAYSMASK);                       
-        }
-        else {                       
-            $self{'fd'}{'stdin'}{'fd'} = $in;        
-        }
-        if($fddispatch->{'STDOUT'}) {        
-            $self{'fd'}{'stdout'} = HTTP::BS::Server::FD::Reader->new(\%self, $out, $fddispatch->{'STDOUT'}); 
-            $evp->set($out, $self{'fd'}{'stdout'}, POLLIN | $EventLoop::Poll::ALWAYSMASK);            
-        }
-        else {
-            $self{'fd'}{'stdout'}{'fd'} = $out;        
-        }
-        if($fddispatch->{'STDERR'}) {
-            $self{'fd'}{'stderr'} = HTTP::BS::Server::FD::Reader->new(\%self, $err, $fddispatch->{'STDERR'});
-            $evp->set($err, $self{'fd'}{'stderr'}, POLLIN | $EventLoop::Poll::ALWAYSMASK);       
-        }
-        else {
-            $self{'fd'}{'stderr'}{'fd'} = $err;
-        }
-               
+        say 'PID '. $pid . ' NEW PROCESS: ' . $torun->[0];
+        _setup_handlers(\%self, $in, $out, $err, $fddispatch);               
         return bless \%self, $class;
     }
 
@@ -2077,7 +2084,107 @@ package HTTP::BS::Server::Process {
         $flags |= Fcntl::O_NONBLOCK;
         (0 == fcntl($handle, Fcntl::F_SETFL, $flags)) or return undef;
         return $process;
-    } 
+    }
+
+    sub new_child {
+        my ($class, $func, $evp, $fddispatch) = @_;        
+        my %self = ('time' => clock_gettime(CLOCK_MONOTONIC), 'evp' => $evp);
+        # inreader/inwriter   is the parent to child data channel
+        # outreader/outwriter is the child to parent data channel
+        # errreader/errwriter is the child to parent log channel    
+        pipe(my $inreader, my $inwriter)   or die("pipe failed $!");
+        pipe(my $outreader, my $outwriter) or die("pipe failed $!");
+        pipe(my $errreader, my $errwriter) or die("pipe failed $!");
+        my $pid = fork();
+        if($pid == 0) {
+            close($inwriter);
+            close($outreader);
+            close($errreader);
+            open(STDIN,  "<&", $inreader) or die("Can't dup \$inreader to STDIN");
+            open(STDOUT, ">&", $errwriter) or die("Can't dup \$errwriter to STDOUT");
+            open(STDERR, ">&", $errwriter) or die("Can't dup \$errwriter to STDERR");
+            $func->($outwriter);
+            exit 0;
+        }
+        close($inreader);
+        close($outwriter);
+        close($errwriter);             
+       
+        $self{'pid'} = $pid;
+        say 'PID '. $pid . ' NEW CHILD';
+        _setup_handlers(\%self, $inwriter, $outreader, $errreader, $fddispatch);               
+        return bless \%self, $class;
+    }
+
+    sub new_output_child {       
+        my ($class, $evp, $func, $handler, $stdin) = @_;
+        my $stdout;
+        my $stderr;
+        my $process;
+        
+        my $prochandlers = {
+        'STDOUT' => sub {
+            my ($handle) = @_;
+            my $buf;
+            say "begin stdout read";
+            while(read($handle, $buf, 100)) {
+                $stdout .= $buf;        
+            }
+            say "broke out stdout";
+            return 1;        
+        },
+        'STDERR' => sub {
+            my ($handle) = @_;
+            my $buf;
+            say "begin stderr read";
+            while(read($handle, $buf, 100)) {
+                $stderr .= $buf;        
+            }
+            say "broke out stderr";
+            return 1;
+        },        
+        'SIGCHLD' => sub {
+            my $obuf;
+            my $handle = $process->{'fd'}{'stdout'}{'fd'};
+            while(read($handle, $obuf, 100000)) {
+                $stdout .= $obuf; 
+                say "stdout sigchld read";            
+            }
+            my $ebuf;
+            $handle = $process->{'fd'}{'stderr'}{'fd'};
+            while(read($handle, $ebuf, 100000)) {
+                $stderr .= $ebuf;
+                say "stderr sigchld read";              
+            }
+            $handler->($stdout, $stderr);         
+        },      
+        };
+        
+        if($stdin) {
+            $prochandlers->{'STDIN'} = sub {
+                # how to deadlock
+                my ($in) = @_;
+                say "output_process stdin. Possible DEADLOCK location";
+                print $in $stdin; # this could block               
+                return 0;        
+            };   
+        }
+        
+        $process =  $class->new_child($func, $evp, $prochandlers);
+        
+        my $flags = 0;
+        my $handle = $process->{'fd'}{'stderr'}{'fd'};
+        return unless defined $handle ;
+        (0 == fcntl($handle, Fcntl::F_GETFL, $flags)) or return undef;
+        $flags |= Fcntl::O_NONBLOCK;
+        (0 == fcntl($handle, Fcntl::F_SETFL, $flags)) or return undef;
+        $handle = $process->{'fd'}{'stdout'}{'fd'};
+        return unless defined $handle ;
+        (0 == fcntl($handle, Fcntl::F_GETFL, $flags)) or return undef;
+        $flags |= Fcntl::O_NONBLOCK;
+        (0 == fcntl($handle, Fcntl::F_SETFL, $flags)) or return undef;
+        return $process;
+    }  
 
     sub remove {
         my ($self, $fd) = @_;
@@ -2439,12 +2546,13 @@ package MusicLibrary {
         my @scan = ($path);
         while(@scan) {
             my $file = shift @scan;
-            my $node = $self->{'libs'}{$path}{'files'}{$file};
+            my $snode = $self->{'libs'}{$path}{'files'}{$file}{'stat'};
+            #say 'stat ' . $file;
             my $finfo = stat($file);
-            if(S_ISDIR($finfo)) {
-                if(($finfo->{'mtime'} ne $node->{'mtime'}) || ($finfo->{'uid'} ne $node->{'uid'}) || ($finfo->{'gid'} ne $node->{'gid'}) || ($finfo->{'ino'} ne $node->{'ino'}) || ($finfo->{'mode'} ne $node->{'mode'})) {
-                    $self->{'libs'}{$path}{'files'}{$file} = $finfo;
-                    $node = $self->{'libs'}{$path}{'files'}{$file};
+            #print Dumper($finfo);
+            if(S_ISDIR($finfo->mode)) {                
+                if((!$snode) || ($finfo->mtime ne $snode->mtime) || ($finfo->uid ne $snode->uid) || ($finfo->gid ne $snode->gid) || ($finfo->ino ne $snode->ino) || ($finfo->mode ne $snode->mode)) {
+                    $self->{'libs'}{$path}{'files'}{$file}{'stat'} = $finfo;                    
                     # directory changed reread it
                     my $dir;
                     if(! opendir($dir, $file)) {
@@ -2452,14 +2560,23 @@ package MusicLibrary {
                         return undef;
                     }
                     my @files = sort { uc($a) cmp uc($b)} (readdir $dir);
-                    $node->{'files'} = \@files;                    
+                    my @fullfiles;
+                    foreach my $ffile (@files) {
+                        next if(($ffile eq '.') || ($ffile eq '..'));
+                        push @fullfiles, $file.'/'.$ffile;
+                    }
+                    $self->{'libs'}{$path}{'files'}{$file}{'files'} = \@fullfiles;                   
                 }
-                push(@scan, @{$node->{'files'}}) if (@{$node->{'files'}});
+                my $fref = $self->{'libs'}{$path}{'files'}{$file}{'files'};
+                push(@scan, @{$fref}) if (@{$fref});
             }
-            elsif(($finfo->{'mtime'} ne $node->{'mtime'}) || ($finfo->{'uid'} ne $node->{'uid'}) || ($finfo->{'gid'} ne $node->{'gid'}) || ($finfo->{'ino'} ne $node->{'ino'}) || ($finfo->{'mode'} ne $node->{'mode'}) || ($finfo->{'size'} ne $node->{'size'})) {
-                $self->{'libs'}{$path}{'files'}{$file} = $finfo;
+            elsif((!$snode) || ($finfo->mtime ne $snode->mtime) || ($finfo->uid ne $snode->uid) || ($finfo->gid ne $snode->gid) || ($finfo->ino ne $snode->ino) || ($finfo->mode ne $snode->mode) || ($finfo->size ne $snode->size)) {
+                $self->{'libs'}{$path}{'files'}{$file}{'stat'} = $finfo;
             }
         }
+
+        #print Dumper($self->{'libs'}{$path});
+        #die;
     
 
         # determine if any changes occured since last time        
@@ -2563,9 +2680,19 @@ package MusicLibrary {
     sub SendLibrary {
         my ($self, $request) = @_;
 
+        # maybe not allow everyone to do this, it blocks the main thread
         if($request->{'qs'}{'forcerefresh'}) {
             say "MusicLibrary: forcerefresh";
             $self->BuildLibraries(); 
+        }
+        elsif($request->{'qs'}{'refresh'}) {
+            say "MusicLibrary: refresh";
+            UpdateLibrariesAsync($self, $request->{'client'}{'server'}{'evp'}, sub {
+                say "MusicLibrary: refresh done";
+                $request->{'qs'}{'refresh'} = 0;
+                SendLibrary($self, $request);
+            });
+            return 1;
         }
 
         if($request->{'qs'}{'legacy'}) {
@@ -2884,7 +3011,11 @@ package MusicLibrary {
             my $lib;
             my $folder = quotemeta $source->{'folder'};
             if($source->{'type'} eq 'local') {
-                $lib = BuildLibrary($source->{'folder'});                    
+                say "MusicLibrary: building music " . clock_gettime(CLOCK_MONOTONIC);
+                #$self->BuildLibrary2($source->{'folder'});
+                #$self->BuildLibrary2($source->{'folder'});                
+                $lib = BuildLibrary($source->{'folder'});
+                say "MusicLibrary: done building music " . clock_gettime(CLOCK_MONOTONIC);
             }
             elsif($source->{'type'} eq 'ssh') {
                 $lib = $self->BuildRemoteLibrary($source);               
@@ -2995,6 +3126,48 @@ package MusicLibrary {
         say "updating html";
         $self->{'html_gapless'} = $data;
     }
+
+    sub UpdateLibrariesAsync {
+        my ($self, $evp, $onUpdateEnd) = @_;
+        HTTP::BS::Server::Process->new_output_child($evp, sub {
+            # done in child
+            my ($datachannel) = @_;
+            $self->BuildLibraries();
+            print STDERR "Building libraries\n";
+            my @mlibs;
+            foreach my $source (@{$self->{'sources'}}) {
+                push @mlibs, $source->{'lib'};                
+            }
+            print STDERR "freezing\n";
+            my %updatedlibrary = ('libs' => \@mlibs, 'html_gapless' => $self->{'html_gapless'}, 'html' => $self->{'html'});
+            my $pipedata = freeze(\%updatedlibrary);
+            print STDERR "outputting on pipe\n";  
+            print $datachannel $pipedata;
+            exit 0;
+        }, sub {
+            my ($out, $err) = @_;                    
+            say "From child err: $err";
+            my $unthawed = thaw($out);
+            if($unthawed && $unthawed->{'libs'} && $self->{'html_gapless'} && $unthawed->{'html'}){
+                my $temp = $unthawed->{'libs'};
+                if(scalar(@{$temp}) != scalar(@{$self->{'sources'}})) {
+                    say "incorrect number of sources, not updating library";                                                
+                }
+                else {                        
+                    foreach my $source (@{$self->{'sources'}}) {
+                        say "updating library " . $source->{'folder'};
+                        $source->{'lib'} = shift @{$temp};                       
+                    }
+                    $self->{'html_gapless'} = $unthawed->{'html_gapless'};
+                    $self->{'html'} = $unthawed->{'html'};
+                }
+            }
+            else {
+                say "failed to unthaw, library not updated.";
+            }           
+            $onUpdateEnd->();
+        });
+    }
     
     sub childnew {
         my ($self) = @_;
@@ -3028,10 +3201,8 @@ package MusicLibrary {
             $source->{'SendFile'} //= $sendFiles{$source->{'type'}};        
         }
         say $pstart . "building music library " . clock_gettime(CLOCK_MONOTONIC);
-        $self->BuildLibraries();
-        #$self->BuildLibrary2();
-        say $pstart ."done building libraries " . clock_gettime(CLOCK_MONOTONIC);;
-        
+        $self->BuildLibraries();        
+        say $pstart ."done building libraries " . clock_gettime(CLOCK_MONOTONIC);        
         $self->{'routes'} = [
             ['/music', sub {
                 my ($request) = @_;
@@ -3071,28 +3242,15 @@ package MusicLibrary {
             }],             
         ];
 
-        #$self->{'timers'} = [
-        #    [ 5, 60, sub {
-        #        if($settings->{'ISCHILD'}) {
-        #            say "removing timer ISCHILD";
-        #            return undef;
-        #        }
-        #        say "refresh library timer";                
-        #        
-        #        BS::Socket::HTTP::Client->get($self->{'server'}, $settings->{'C_URL'}, [
-        #            ["/api/music.storable", sub {                        
-        #                unshift @_, $self;
-        #                &UpdateLibraries;
-        #            }],
-        #            ['/music', sub {
-        #                unshift @_, $self;
-        #                &UpdateHTML;                        
-        #            }],
-        #        ]);                             
-        #        say "launched library update";
-        #        return 1;
-        #    }],
-        #];
+        $self->{'timers'} = [
+            [3, 300, sub {
+                my ($timer, $current_time, $evp) = @_;
+                say "refresh library timer";                
+                UpdateLibrariesAsync($self, $evp, sub {
+                    say "refresh library timer done";
+                });
+            }],
+        ];
         
         return $self;
     }
@@ -3602,8 +3760,8 @@ my @routes = (
 $SETTINGS->{'CPORT'} //= $SETTINGS->{'PORT'} + 1;
 $SETTINGS->{'CHOST'} //= '127.0.0.1';
 $SETTINGS->{'CDOMAIN'} //= $SETTINGS->{'CHOST'};
-#if(0){
-if(fork() == 0) {
+if(0){
+#if(fork() == 0) {
     $SETTINGS->{'PHOST'} = $SETTINGS->{'HOST'};
     $SETTINGS->{'HOST'} = $SETTINGS->{'CHOST'};
     $SETTINGS->{'CHORT'} = undef;
