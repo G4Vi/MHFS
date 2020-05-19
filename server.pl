@@ -2794,7 +2794,11 @@ package MusicLibrary {
             say "Mytest::get_wav " . $startbyte . ' ' . $endbyte;
             
             #$request->SendLocalBuf(Mytest::get_wav($pv, $startbyte, $endbyte), 'audio/wav', {'bytesize' => $wavsize});
-            my $maxsendsize = 1048576/2;
+            my $maxsendsize;
+            $maxsendsize = 1048576/2;
+            #$maxsendsize = 262144 * ($TRACKINFO{$tosend}{'BITSPERSAMPLE'}/8) * $TRACKINFO{$tosend}{'NUMCHANNELS'};
+            #$maxsendsize = 138807728;
+            say "maxsendsize $maxsendsize " . ' bytespersample ' . ($TRACKINFO{$tosend}{'BITSPERSAMPLE'}/8) . ' numchannels ' . $TRACKINFO{$tosend}{'NUMCHANNELS'};
             $request->SendCallback(sub{
                 my ($fileitem) = @_;
                 my $actual_endbyte = $startbyte + $maxsendsize - 1;
@@ -2804,7 +2808,7 @@ package MusicLibrary {
                     say "SendCallback last send";
                 }                
                 my $actual_startbyte = $startbyte;
-                $startbyte = $actual_endbyte;
+                $startbyte = $actual_endbyte+1;
                 say "SendCallback get_wav " . $actual_startbyte . ' ' . $actual_endbyte;               
                 return Mytest::get_wav($pv, $actual_startbyte, $actual_endbyte);
             }, {
@@ -2909,6 +2913,27 @@ package MusicLibrary {
             $bitdepth = $max_sample_rate > 48000 ? 24 : 16;        
         }        
         say "using bitdepth $bitdepth";
+        
+        # check to see if the raw file fullfills the requirements
+        if(!defined($TRACKINFO{$file}))
+        {
+            GetTrackInfo($file, sub {
+                $TRACKDURATION{$file} = $TRACKINFO{$file}{'duration'};
+                SendLocalTrack($request, $file);
+            });
+            return;
+        }
+        my $samplerate = $TRACKINFO{$file}{'SAMPLERATE'};
+        my $inbitdepth = $TRACKINFO{$file}{'BITSPERSAMPLE'};        
+        say "input: samplerate $samplerate inbitdepth $inbitdepth";
+        say "maxsamplerate $max_sample_rate bitdepth $bitdepth";                    
+        if(($samplerate <= $max_sample_rate) && ($inbitdepth <= $bitdepth)) {
+            say "samplerate is <= max_sample_rate, not resampling";
+            SendTrack($request, $file);
+            return;               
+        }
+        
+        # determine the acceptable samplerate, bitdepth combinations to send
         my %rates = (
             '48000' => [192000, 96000, 48000],
             '44100' => [176400, 88200, 44100]        
@@ -2929,26 +2954,8 @@ package MusicLibrary {
                 SendTrack($request, $tmpfile);
                 return;
             }                      
-        }
+        }        
 
-        if(!defined($TRACKINFO{$file}))
-        {
-            GetTrackInfo($file, sub {
-                $TRACKDURATION{$file} = $TRACKINFO{$file}{'duration'};
-                SendLocalTrack($request, $file);
-            });
-            return;
-        }
-
-        my $samplerate = $TRACKINFO{$file}{'SAMPLERATE'};
-        my $inbitdepth = $TRACKINFO{$file}{'BITSPERSAMPLE'};        
-        say "input: samplerate $samplerate inbitdepth $inbitdepth";
-        say "maxsamplerate $max_sample_rate bitdepth $bitdepth";                    
-        if(($samplerate <= $max_sample_rate) && ($inbitdepth <= $bitdepth)) {
-            say "samplerate is <= max_sample_rate, not resampling";
-            SendTrack($request, $file);
-            return;               
-        }      
         # resampling
         my $desiredrate;
         RATE_FACTOR: foreach my $key (keys %rates) {

@@ -90,6 +90,22 @@ bool _mytest_get_flac(_mytest *mytest, uint64_t start, size_t count)
     mytest->file_offset     = 0;
     mytest->largest_offset  = 0;
 	mytest->flacbuffersize = count * sizeof(FLAC__int32);		
+    drflac *pFlac = mytest->pFlac;
+    unsigned samplesize;
+    if(pFlac->bitsPerSample == 16)
+    {
+        samplesize = 2;
+    }
+    else if(pFlac->bitsPerSample == 24)
+    {
+        samplesize = 4;
+    }
+    else
+    {
+        fprintf(stderr, "ERROR: Bits Per Sample of %u, not supported\n", pFlac->bitsPerSample);
+        return false;
+    }
+
 	mytest->flacbuffer = mytest->malloc(mytest->flacbuffersize);
     if(mytest->flacbuffer == NULL)
     {
@@ -105,7 +121,7 @@ bool _mytest_get_flac(_mytest *mytest, uint64_t start, size_t count)
 
     FLAC__bool ok = true;
 	FLAC__StreamEncoderInitStatus init_status;
-    drflac *pFlac = mytest->pFlac;
+    
 	//ok &= FLAC__stream_encoder_set_verify(mytest->encoder, true);
 	ok &= FLAC__stream_encoder_set_verify(mytest->encoder, false);
 	ok &= FLAC__stream_encoder_set_compression_level(mytest->encoder, 5);
@@ -125,55 +141,62 @@ bool _mytest_get_flac(_mytest *mytest, uint64_t start, size_t count)
 		goto _mytest_get_flac_cleanup;
 	}
 
-    // read in the desired amount of samples   
-    // todo handle 24 bits
-    
-    /*
+   
     if(!drflac_seek_to_pcm_frame(pFlac, start))
     {
         goto _mytest_get_flac_cleanup;    
-    }   
-    fprintf(stderr, "seeked to absolute, allocating %u\n", count * pFlac->channels * sizeof(int32_t));
-    int32_t *rawSamples = mytest->malloc((size_t)count * pFlac->channels * sizeof(int32_t));
+    }    
+
+    long unsigned rawSamplesSize = count * pFlac->channels * samplesize;
+    fprintf(stderr, "seeked to absolute, allocating %lu\n", rawSamplesSize);
+    void *rawSamples = malloc(rawSamplesSize);
     if(rawSamples == NULL)
     {
         goto _mytest_get_flac_cleanup;
-    }    
-    if(drflac_read_pcm_frames_s32(mytest->pFlac, count, rawSamples) != count)
-    {
-        goto _mytest_get_flac_cleanup;       
     }
-    */
-    
-    if(!drflac_seek_to_pcm_frame(pFlac, start))
-    {
-        goto _mytest_get_flac_cleanup;    
-    } 
-    
-    fprintf(stderr, "seeked to absolute, allocating %lu\n", count * pFlac->channels * sizeof(int16_t));
-    int16_t *raw16Samples = malloc((size_t)count * pFlac->channels * sizeof(int16_t));
-    if(raw16Samples == NULL)
+    FLAC__int32 *fbuffer = malloc(sizeof(FLAC__int32)*count * pFlac->channels);
+    if(fbuffer == NULL)
     {
         goto _mytest_get_flac_cleanup;
-    }    
-    if(drflac_read_pcm_frames_s16(mytest->pFlac, count, raw16Samples) != count)
-    {
-        free(raw16Samples);
-        goto _mytest_get_flac_cleanup;       
     }
-    FLAC__int32 *fbuffer = malloc(sizeof(FLAC__int32)*count * pFlac->channels);    
-    for(unsigned i = 0; i < (count * pFlac->channels) ; i++)
+    if(pFlac->bitsPerSample == 16)
     {
-        fbuffer[i] = raw16Samples[i];       
+        int16_t *raw16Samples = (int16_t*)rawSamples;
+        if(drflac_read_pcm_frames_s16(mytest->pFlac, count, raw16Samples) != count)
+        {
+            free(fbuffer);
+            free(rawSamples);
+            goto _mytest_get_flac_cleanup;       
+        }
+        for(unsigned i = 0; i < (count * pFlac->channels) ; i++)
+        {
+            fbuffer[i] = raw16Samples[i];       
+        }
     }
+    else
+    {
+        int32_t *raw32Samples = (int32_t*)rawSamples;
+        if(drflac_read_pcm_frames_s32(mytest->pFlac, count, raw32Samples) != count)
+        {
+            free(fbuffer);
+            free(rawSamples);
+            goto _mytest_get_flac_cleanup;       
+        }
+        for(unsigned i = 0; i < (count * pFlac->channels) ; i++)
+        {
+            // drflac outputs 24 bit audio to the higher bits of int32_t, we need it in the lower bits of FLAC__int32
+            fbuffer[i] = (raw32Samples[i] >> 8) & 0xFFFFFF;
+        }
+    }   
+    
     if(!FLAC__stream_encoder_process_interleaved(mytest->encoder, fbuffer, count))
     {
         fprintf(stderr, "   state: %s\n", FLAC__StreamEncoderStateString[FLAC__stream_encoder_get_state(mytest->encoder)]);
         free(fbuffer);
-        free(raw16Samples);
+        free(rawSamples);
         goto _mytest_get_flac_cleanup;        
     }
-    free(raw16Samples);
+    free(rawSamples);
     free(fbuffer);   
     
     if(FLAC__stream_encoder_finish(mytest->encoder))
@@ -211,9 +234,11 @@ bool _mytest_get_wav(_mytest *mytest, uint64_t start, uint64_t end)
     
     uint64_t bytesleft = mytest->largest_offset;
     if(start < 44) {
+        // WAVE_FORMAT_EXTENSIBLE doesn't exist
+        uint32_t audio_data_size = pFlac->totalPCMFrameCount * pFlac->channels * (pFlac->bitsPerSample/8);
         uint8_t data[44];
         memcpy(data, "RIFF", 4);
-        uint32_t chunksize = (pFlac->totalPCMFrameCount * pFlac->channels * sizeof(int16_t)) + 36;
+        uint32_t chunksize = audio_data_size + 36;
         memcpy(&data[4], &chunksize, 4);
         memcpy(&data[8], "WAVEfmt ", 8);
         uint32_t pcm = 16;
@@ -231,8 +256,7 @@ bool _mytest_get_wav(_mytest *mytest, uint64_t start, uint64_t end)
         uint16_t bitspersample = pFlac->bitsPerSample;
         memcpy(&data[34], &bitspersample, 2);
         memcpy(&data[36], "data", 4);
-        uint32_t totalsize = pFlac->totalPCMFrameCount * pFlac->channels * sizeof(int16_t);
-        memcpy(&data[40], &totalsize, 4);
+        memcpy(&data[40], &audio_data_size, 4);
         unsigned tcopy = MIN(44, end+1) - start;
         memcpy(&mytest->flacbuffer[start], data, tcopy);
         bytesleft -= tcopy;         
@@ -265,19 +289,60 @@ bool _mytest_get_wav(_mytest *mytest, uint64_t start, uint64_t end)
         {
             return false;   
         }
-        int16_t *raw16Samples = malloc((size_t)count * pFlac->channels * sizeof(int16_t));
-        if(raw16Samples == NULL)
-        {
-            return false;
-        }    
-        if(drflac_read_pcm_frames_s16(mytest->pFlac, count, raw16Samples) != count)
-        {
+
+        // faster routine for 16 bitdepth
+        if(pFlac->bitsPerSample == 16) {        
+            int16_t *raw16Samples = malloc((size_t)count * pFlac->channels * sizeof(int16_t));
+            if(raw16Samples == NULL)
+            {
+                return false;
+            }    
+            if(drflac_read_pcm_frames_s16(mytest->pFlac, count, raw16Samples) != count)
+            {
+                free(raw16Samples);
+                return false;     
+            }
+            uint8_t *tbuf = (uint8_t*)raw16Samples;
+            memcpy(&mytest->flacbuffer[mytest->largest_offset-bytesleft],  tbuf + skipbytes, (size_t)bytesleft);       
             free(raw16Samples);
-            return false;     
         }
-        uint8_t *tbuf = (uint8_t*)raw16Samples;
-        memcpy(&mytest->flacbuffer[mytest->largest_offset-bytesleft],  tbuf + skipbytes, (size_t)bytesleft);       
-        free(raw16Samples);
+        else
+        // handle other bitdepths
+        {
+            int32_t *raw32Samples = malloc((size_t)count * pFlac->channels * sizeof(int32_t));
+            if(raw32Samples == NULL)
+            {
+                return false;
+            }    
+            if(drflac_read_pcm_frames_s32(mytest->pFlac, count, raw32Samples) != count)
+            {
+                free(raw32Samples);
+                return false;     
+            }
+            unsigned bytespersample = (pFlac->bitsPerSample/8);
+            unsigned localskipbytes = 0;
+            unsigned ss = 0;
+            if(start > 44) {
+                localskipbytes = (start - 44) % pcmframesize;
+                ss = localskipbytes / bytespersample;
+                localskipbytes = localskipbytes % bytespersample;                
+            }
+            unsigned flacbufferpos = mytest->largest_offset-bytesleft;
+            for(unsigned i = ss; i < (count * pFlac->channels) ; i++)
+            {              
+                unsigned tocopy = bytesleft > bytespersample ? bytespersample : bytesleft;
+                tocopy -= localskipbytes;
+                // drflac outputs to the higher bits of int32_t, skip over the unused lower bits
+                unsigned alwaysskipbytes = sizeof(int32_t) - bytespersample;
+                uint8_t *sample = ((uint8_t*)(&raw32Samples[i])) + alwaysskipbytes + localskipbytes;
+                localskipbytes = 0;
+                memcpy(&mytest->flacbuffer[flacbufferpos], sample, tocopy);                
+                bytesleft -= tocopy;
+                if(bytesleft == 0) break;
+                flacbufferpos += tocopy;
+            }
+            free(raw32Samples);
+        }
     }
     
     return true;
