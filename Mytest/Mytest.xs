@@ -261,91 +261,60 @@ bool _mytest_get_wav(_mytest *mytest, uint64_t start, uint64_t end)
         memcpy(&mytest->flacbuffer[start], data, tcopy);
         bytesleft -= tcopy;         
     }
-    unsigned pcmframesize = (pFlac->channels * (pFlac->bitsPerSample/8));
-    uint32_t count = bytesleft / pcmframesize;
-    if((bytesleft % pcmframesize) > 0)  {
-        count++;
+    if(bytesleft == 0)
+    {
+        return true;
     }
-    fprintf(stderr, "decoding %u samples\n", count);
-    if(count) {
-        unsigned startsample;
-        unsigned skipbytes;
-        if(start < 44) {
-            startsample = 0;
-            skipbytes = 0;            
-        }
-        else {
-            uint64_t startbyte = start - 44;
-            startsample = startbyte / (pFlac->channels * (pFlac->bitsPerSample/8));
-            skipbytes = 0;
-            /*skipbytes = (startbyte+1) % (pFlac->channels * (pFlac->bitsPerSample/8));
-            if(skipbytes > 0) {
-                startsample++;
-                fprintf(stderr, "skipbytes %u\n", skipbytes);
-            }
-            */
-        }
-        if(!drflac_seek_to_pcm_frame(pFlac, startsample))
-        {
-            return false;   
-        }
 
-        // faster routine for 16 bitdepth
-        if(pFlac->bitsPerSample == 16) {        
-            int16_t *raw16Samples = malloc((size_t)count * pFlac->channels * sizeof(int16_t));
-            if(raw16Samples == NULL)
-            {
-                return false;
-            }    
-            if(drflac_read_pcm_frames_s16(mytest->pFlac, count, raw16Samples) != count)
-            {
-                free(raw16Samples);
-                return false;     
-            }
-            uint8_t *tbuf = (uint8_t*)raw16Samples;
-            memcpy(&mytest->flacbuffer[mytest->largest_offset-bytesleft],  tbuf + skipbytes, (size_t)bytesleft);       
-            free(raw16Samples);
-        }
-        else
-        // handle other bitdepths
-        {
-            int32_t *raw32Samples = malloc((size_t)count * pFlac->channels * sizeof(int32_t));
-            if(raw32Samples == NULL)
-            {
-                return false;
-            }    
-            if(drflac_read_pcm_frames_s32(mytest->pFlac, count, raw32Samples) != count)
-            {
-                free(raw32Samples);
-                return false;     
-            }
-            unsigned bytespersample = (pFlac->bitsPerSample/8);
-            unsigned localskipbytes = 0;
-            unsigned ss = 0;
-            if(start > 44) {
-                localskipbytes = (start - 44) % pcmframesize;
-                ss = localskipbytes / bytespersample;
-                localskipbytes = localskipbytes % bytespersample;                
-            }
-            unsigned flacbufferpos = mytest->largest_offset-bytesleft;
-            for(unsigned i = ss; i < (count * pFlac->channels) ; i++)
-            {              
-                unsigned tocopy = bytesleft > bytespersample ? bytespersample : bytesleft;
-                tocopy -= localskipbytes;
-                // drflac outputs to the higher bits of int32_t, skip over the unused lower bits
-                unsigned alwaysskipbytes = sizeof(int32_t) - bytespersample;
-                uint8_t *sample = ((uint8_t*)(&raw32Samples[i])) + alwaysskipbytes + localskipbytes;
-                localskipbytes = 0;
-                memcpy(&mytest->flacbuffer[flacbufferpos], sample, tocopy);                
-                bytesleft -= tocopy;
-                if(bytesleft == 0) break;
-                flacbufferpos += tocopy;
-            }
-            free(raw32Samples);
-        }
+
+    unsigned samplesize = (pFlac->bitsPerSample/8);
+    unsigned pcmframesize = (pFlac->channels * (pFlac->bitsPerSample/8));
+    unsigned startframe = 0;
+    unsigned skipsample = 0;
+    unsigned skipbytes  = 0;
+    if(start > 44)
+    {
+        startframe = (start-44) / pcmframesize;
+        skipbytes = (start-44) % pcmframesize;
+        skipsample = skipbytes / samplesize;
+        skipbytes = skipbytes % samplesize;
+        fprintf(stderr, "skipping %u samples and %u bytes\n", skipsample, skipbytes);   
     }
+    unsigned endframe = (end-44) / pcmframesize;
+    unsigned framecount = endframe - startframe + 1;
     
-    return true;
+    fprintf(stderr, "startframe %u endframe %u framecount %u\n", startframe, endframe, framecount);
+    if(!drflac_seek_to_pcm_frame(pFlac, startframe))
+    {
+        return false;   
+    }
+
+    // TODO faster routine for 16 bit samples
+    {
+        int32_t *raw32Samples = malloc(framecount * pFlac->channels * sizeof(int32_t));
+        if(raw32Samples == NULL)
+        {
+            return false;
+        }        
+        if(drflac_read_pcm_frames_s32(mytest->pFlac, framecount, raw32Samples) != framecount)
+        {
+            free(raw32Samples);
+            return false;     
+        }
+        unsigned sample_byte_index = sizeof(int32_t) - samplesize;
+        unsigned flacbufferpos = mytest->largest_offset-bytesleft;
+        for(unsigned sampleindex = skipsample; bytesleft > 0; sampleindex++)
+        {
+            unsigned tocopy = (bytesleft > samplesize ? samplesize : bytesleft) - skipbytes;
+            uint8_t *sample = ((uint8_t*)(&raw32Samples[sampleindex])) + sample_byte_index + skipbytes;
+            skipbytes = 0;
+            memcpy(&mytest->flacbuffer[flacbufferpos], sample, tocopy);                
+            bytesleft -= tocopy;           
+            flacbufferpos += tocopy;
+        }
+        free(raw32Samples);
+    }
+    return true;    
 }
 
 void * _mytest_get_wav_seg(_mytest *mytest, uint64_t start, size_t count)

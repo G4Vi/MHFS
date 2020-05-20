@@ -2796,8 +2796,10 @@ package MusicLibrary {
             #$request->SendLocalBuf(Mytest::get_wav($pv, $startbyte, $endbyte), 'audio/wav', {'bytesize' => $wavsize});
             my $maxsendsize;
             $maxsendsize = 1048576/2;
+            #$maxsendsize = 524290;
+
             #$maxsendsize = 262144 * ($TRACKINFO{$tosend}{'BITSPERSAMPLE'}/8) * $TRACKINFO{$tosend}{'NUMCHANNELS'};
-            #$maxsendsize = 138807728;
+            #$maxsendsize = 42000;
             say "maxsendsize $maxsendsize " . ' bytespersample ' . ($TRACKINFO{$tosend}{'BITSPERSAMPLE'}/8) . ' numchannels ' . $TRACKINFO{$tosend}{'NUMCHANNELS'};
             $request->SendCallback(sub{
                 my ($fileitem) = @_;
