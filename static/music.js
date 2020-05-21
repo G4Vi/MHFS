@@ -783,6 +783,7 @@ function Track(trackname) {
             skiptime = (skiptime % this.maxsegduration);
             console.log('Scheduling ' + this.trackname + 'at ' + start + ' segment timeskipped ' + skiptime);
         }         
+
         source.start(start, skiptime);
         var timeleft = source.buffer.duration - skiptime;        
         NextBufferTime = start + timeleft;
@@ -921,7 +922,11 @@ Number.prototype.toHHMMSS = function () {
 }
 
 function CreateAudioContext(options) {
-    return (window.hasWebKit) ? new webkitAudioContext(options) : (typeof AudioContext != "undefined") ? new AudioContext(options) : null;
+    let mycontext = (window.hasWebKit) ? new webkitAudioContext(options) : (typeof AudioContext != "undefined") ? new AudioContext(options) : null;
+    //if(mycontext.state === 'suspended') {
+    //    alert('I am suspended');
+    //}
+    return mycontext;
 }
 
 function playTrackNow(track) {    

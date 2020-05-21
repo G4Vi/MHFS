@@ -2661,8 +2661,7 @@ package MusicLibrary {
         }
         
         $self->{'html'} = encode_utf8($buf .  read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_bottom.html'));         
-        #$self->{'html_gapless'} = $buf . read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_bottom_gapless.html');
-        $self->{'html_gapless'} = encode_utf8($buf . read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_bottom_better.html'));
+        $self->{'html_gapless'} = encode_utf8($buf . read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_bottom_gapless.html'));
     }
 
     sub SendLibrary {
