@@ -411,116 +411,7 @@ function STAHPPossibleDownloads() {
     STAHPNextDownload();        
 };
 
-const sleep = m => new Promise(r => setTimeout(r, m));
-
 /* firefox flac decoding is bad, use our flac decoder sometimes */
-function toint16(byteA, byteB) {
-    var sign = byteB & (1 << 7);
-    var x = (((byteB & 0xFF) << 8) | (byteA & 0xFF));
-    if (sign) {
-       x = 0xFFFF0000 | x;  // fill in most significant bits with 1's
-    }
-    return x;
-}
-
-/*
-DataView.prototype.getInt24 = function(pos, littleEndian) {
-    this.getInt16(pos, val >> 8, littleEndian);
-    this.getInt8(pos+2, val & ~4294967040, littleEndian); // this "magic number" masks off the first 16 bits
-}*/
-
-function toint24(byteA, byteB, byteC) {
-    let sign = byteC & (1 << 7);
-    let x = ((byteC & 0xFF) << 16) | ((byteB & 0xFF) << 8) | (byteA & 0xFF);
-    if (sign) {
-       x = 0xFF000000 | x;  // fill in most significant bits with 1's
-       //throw('x is ' + x + ' byteA ' + byteA + ' byteB '+ byteB + ' byteC ' + byteC);
-    }
-    return x;
-}
-
-function waitForEvent(obj, event) {
-    return new Promise(function(resolve) {
-        obj.on(event, function() {
-            resolve();
-        });
-    });
-}
-
-async function FLACToFloat32(thedata) {
-    while(typeof Flac === 'undefined') {
-        console.log('FLACToFloat32, no Flac sleeping 5');
-        await sleep(5);
-    }
-    if(!Flac.isReady()) {
-        await waitForEvent(Flac, 'ready');
-    }
-    let decData = [];
-    let result = decodeFlac(thedata, decData, false);
-    //console.log('decoded data array: ', decData);
-    if(result.error){
-        console.log(result.error);
-        return;
-    }
-    let metaData = result.metaData;
-        if(metaData){
-                for(var n in metaData){
-                        console.log( n + ' ' +  metaData[n]);
-                }
-    }
-
-    let chanData = [];
-    let chanIndex = [];
-    for(let i = 0; i < metaData.channels; i++) {
-        chanData[i] = new Float32Array(metaData.total_samples);
-        chanIndex[i] = 0;
-    }
-
-    if(metaData.bitsPerSample == 16) {
-        for(let i = 0; i < decData.length; i++) {
-            for(let j = 0; j < metaData.channels; j++) {
-                for(let k = 0; k < decData[i][j].length; k+=2) {
-                    chanData[j][chanIndex[j]] = toint16(decData[i][j][k], decData[i][j][k+1]) / 0x7FFF;
-                    if((chanData[j][chanIndex[j]] > 1) || (chanData[j][chanIndex[j]] < -1)) {
-                        console.log('CLAMPING FLOAT');
-                        if(chanData[j][chanIndex[j]] > 1) chanData[j][chanIndex[j]] = 1;
-                        if(chanData[j][chanIndex[j]] < -1) chanData[j][chanIndex[j]] = -1;
-                    }
-                    chanIndex[j]++;
-                }
-            }
-        }
-    }
-    else if(metaData.bitsPerSample == 24) {
-        for(let i = 0; i < decData.length; i++) {
-            for(let j = 0; j < metaData.channels; j++) {
-                for(let k = 0; k < decData[i][j].length; k+=3) {
-                    chanData[j][chanIndex[j]] = toint24(decData[i][j][k], decData[i][j][k+1],decData[i][j][k+2]) / 0x7FFFFF;
-                    if((chanData[j][chanIndex[j]] > 1) || (chanData[j][chanIndex[j]] < -1)) {
-                        console.log('CLAMPING FLOAT');
-                        if(chanData[j][chanIndex[j]] > 1) chanData[j][chanIndex[j]] = 1;
-                        if(chanData[j][chanIndex[j]] < -1) chanData[j][chanIndex[j]] = -1;
-                    }
-                    //console.log(chanData[j][chanIndex[j]]);
-                    chanIndex[j]++;
-                }
-            }
-        }
-    }
-    else {
-        throw(metaData.bitsPerSample + " bps not handled");
-    }
-
-    //console.log(chanData);
-    //throw('done');
-    /*if(MainAudioContext.sampleRate != metaData.sampleRate) {
-        MainAudioContext = CreateAudioContext( {'sampleRate' : metaData.sampleRate });
-    }*/
-
-    return [metaData, chanData];
-}
-
-
 function toWav(metadata, decData) {
     var samples = interleave(decData, metadata.channels, metadata.bitsPerSample);
 	var dataView = encodeWAV(samples, metadata.sampleRate, metadata.channels, metadata.bitsPerSample);
@@ -557,34 +448,6 @@ function DecodeFlac(thedata, ondecoded) {
 	}
     ondecoded(toWav(metaData, decData));    
 }
-
-async function DecodeFlacAsync(thedata) {
-    while(typeof Flac === 'undefined') {
-        console.log('DecodeFlacAsync, no Flac sleeping 5');
-        await sleep(5);
-    }
-    if(!Flac.isReady()) {
-        await waitForEvent(Flac, 'ready');
-    }
-
-    var decData = [];
-        var result = decodeFlac(thedata, decData, false);
-    console.log('decoded data array: ', decData);
-
-        if(result.error){
-                console.log(result.error);
-        }
-
-        var metaData = result.metaData;
-        if(metaData){
-                for(var n in metaData){
-                        console.log( n + ' ' +  metaData[n]);
-                }
-    }
-
-    return toWav(metaData, decData);
-}
-
 /*end firefox flac decoding is bad*/
 
 function TrackDownload(track, onDownloaded, seg) {
@@ -655,113 +518,9 @@ function TrackDownload(track, onDownloaded, seg) {
             track.numsegments = Number(req.getResponseHeader('X-MHFS-NUMSEGMENTS'));
             track.maxsegduration = Number(req.getResponseHeader('X-MHFS-MAXSEGDURATION'));         
               
-            var todec = Array.from(new Uint8Array(req.response)); // ArrayBuffers gets trashed for some stupid reason
-            async function webAudioDecode() {
-                let res;
-                try {
-                    res = await MainAudioContext.decodeAudioData(req.response);
-                    console.log('webAudioDecode success');
-                }
-                catch(error) {
-                }
-                return res;
-            }
-
-            async function OGfallbackDecode() {
-                let res;
-                try {
-                    let wav = await DecodeFlacAsync(Uint8Array.from(todec));
-                    res = MainAudioContext.decodeAudioData(wav);
-                    console.log('OGfallbackDecode success');
-                }
-                catch(error) {
-                }
-                return res;
-            }
-
-            async function fallbackDecode() {
-                let fdecoded = await FLACToFloat32(Uint8Array.from(todec));
-                if(fdecoded) {
-                    let metadata = fdecoded[0];
-                    let chandata = fdecoded[1];
-                    
-                    if(MainAudioContext.sampleRate != metadata.sampleRate) {
-                        MainAudioContext = CreateAudioContext( {'sampleRate' : metadata.sampleRate });
-                    }
-                    
-                    
-                    let buf = MainAudioContext.createBuffer(metadata.channels, metadata.total_samples, metadata.sampleRate);
-                    for(let i = 0; i < metadata.channels; i++){
-                        buf.getChannelData(i).set(chandata[i]);
-                    }
-                    
-                    console.log('fallbackDecode success');
-                    return buf;
-                }
-            }
-            
-            
-            (async function(){
-                
-                /*if(MainAudioContext.sampleRate != 96000) {
-                    MainAudioContext = CreateAudioContext( {'sampleRate' : 96000 });
-                }*/
-                
-                /*let webaudio = await webAudioDecode();
-                if(webaudio) {
-                    console.log(webaudio.getChannelData(0));
-                    console.log(webaudio.getChannelData(1));
-                    console.log(webaudio);
-                }*/
-                
-                /*
-                let ogfallback = await OGfallbackDecode();
-                if(ogfallback) {
-                    console.log(ogfallback.getChannelData(0));
-                    console.log(ogfallback.getChannelData(1));
-                    console.log(ogfallback);
-                }
-                */
-                
-                /*
-                let fallback = await fallbackDecode();
-                if(fallback) {
-                    console.log(fallback.getChannelData(0));
-                    console.log(fallback.getChannelData(1));
-                    console.log(fallback);
-                }
-                */
-                
-                /*for(let i = 0; i < 480000; i++) {
-                    let d1 = (webaudio.getChannelData(0)[i] - fallback.getChannelData(0)[i]);
-                    if((d1 > 0.1) || (d1 < -0.1)) {
-                        alert('we deviated');
-                    }
-                    let d2 = (webaudio.getChannelData(1)[i] - fallback.getChannelData(1)[i]);
-                    if((d2 > 0.1) || (d2 < -0.1)) {
-                        alert('we deviated');
-                    }
-                }
-                */
-                
-
-                let decoded = (await webAudioDecode()) || (await fallbackDecode());
-                //let decoded = ogfallback;
-                //let decoded = fallback;
-                //let decoded = webaudio;
-                if(decoded) {
-                    onDecoded(decoded);                    
-                }
-                else {
-                    console.log('DL ' + toDL + ' (part) decode failed (CRITICAL). Redownloading');
-                    redoDL();
-                }
-            })();
-            
-
-            /*
-            MainAudioContext.decodeAudioData(req.response, onDecoded, function () {
-                // firefox fails to decode small flac segments so fallback to software               
+            var todec = Array.from(new Uint8Array(req.response)); // ArrayBuffers gets trashed for some stupid reason        
+            //MainAudioContext.decodeAudioData(req.response, onDecoded, function () {
+                /* firefox fails to decode small flac segments so fallback to software */                
                 console.log('DL ' + toDL + ' (part) decode failed. Attempting Software Decode');                
                 DecodeFlac(Uint8Array.from(todec), function(wav) {                
                     MainAudioContext.decodeAudioData(wav, onDecoded, function () {
@@ -769,10 +528,7 @@ function TrackDownload(track, onDownloaded, seg) {
                         redoDL();                
                     });
                 });
-            });
-            */
-            
-            
+            //});
         }, function(){}, function(){
             redoDL();            
         });
