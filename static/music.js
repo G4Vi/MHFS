@@ -491,7 +491,7 @@ async function FLACToFloat32(thedata) {
             }
         }
     }
-    else if(metaData.bitsPerSample == 24) {
+    /*else if(metaData.bitsPerSample == 24) {
         for(let i = 0; i < decData.length; i++) {
             for(let j = 0; j < metaData.channels; j++) {
                 for(let k = 0; k < decData[i][j].length; k+=3) {
@@ -506,7 +506,7 @@ async function FLACToFloat32(thedata) {
                 }
             }
         }
-    }
+    }*/
     else {
         throw(metaData.bitsPerSample + " bps not handled");
     }
@@ -700,6 +700,20 @@ function TrackDownload(track, onDownloaded, seg) {
                 }
             }
             
+            /*
+            MainAudioContext.decodeAudioData(req.response, onDecoded, function () {
+                // firefox fails to decode small flac segments so fallback to software               
+                console.log('DL ' + toDL + ' (part) decode failed. Attempting Software Decode');                
+                DecodeFlac(Uint8Array.from(todec), function(wav) {                
+                    MainAudioContext.decodeAudioData(wav, onDecoded, function () {
+                        console.log('DL ' + toDL + ' (part) decode failed (CRITICAL). Redownloading');
+                        redoDL();                
+                    });
+                });
+            });
+            return;
+            */
+            
             
             (async function(){
                 
@@ -723,14 +737,15 @@ function TrackDownload(track, onDownloaded, seg) {
                 }
                 */
                 
-                /*
-                let fallback = await fallbackDecode();
+                
+                /*let fallback = await fallbackDecode();
                 if(fallback) {
                     console.log(fallback.getChannelData(0));
                     console.log(fallback.getChannelData(1));
                     console.log(fallback);
-                }
-                */
+                }*/
+                
+                
                 
                 /*for(let i = 0; i < 480000; i++) {
                     let d1 = (webaudio.getChannelData(0)[i] - fallback.getChannelData(0)[i]);
@@ -756,22 +771,7 @@ function TrackDownload(track, onDownloaded, seg) {
                     console.log('DL ' + toDL + ' (part) decode failed (CRITICAL). Redownloading');
                     redoDL();
                 }
-            })();
-            
-
-            /*
-            MainAudioContext.decodeAudioData(req.response, onDecoded, function () {
-                // firefox fails to decode small flac segments so fallback to software               
-                console.log('DL ' + toDL + ' (part) decode failed. Attempting Software Decode');                
-                DecodeFlac(Uint8Array.from(todec), function(wav) {                
-                    MainAudioContext.decodeAudioData(wav, onDecoded, function () {
-                        console.log('DL ' + toDL + ' (part) decode failed (CRITICAL). Redownloading');
-                        redoDL();                
-                    });
-                });
-            });
-            */
-            
+            })();         
             
         }, function(){}, function(){
             redoDL();            
