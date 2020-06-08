@@ -456,7 +456,7 @@ async function FLACToFloat32(thedata) {
         await waitForEvent(Flac, 'ready');
     }
     let decData = [];
-    let result = decodeFlac(thedata, decData, false);
+    let result = decodeFlac(thedata, decData, true);
     //console.log('decoded data array: ', decData);
     if(result.error){
         console.log(result.error);
@@ -728,6 +728,7 @@ function TrackDownload(track, onDownloaded, seg) {
                     console.log(webaudio);
                 }*/
                 
+                
                 /*
                 let ogfallback = await OGfallbackDecode();
                 if(ogfallback) {
@@ -738,13 +739,14 @@ function TrackDownload(track, onDownloaded, seg) {
                 */
                 
                 
-                /*let fallback = await fallbackDecode();
+                /*
+                let fallback = await fallbackDecode();
                 if(fallback) {
                     console.log(fallback.getChannelData(0));
                     console.log(fallback.getChannelData(1));
                     console.log(fallback);
-                }*/
-                
+                }
+                */
                 
                 
                 /*for(let i = 0; i < 480000; i++) {
@@ -760,7 +762,9 @@ function TrackDownload(track, onDownloaded, seg) {
                 */
                 
 
-                let decoded = (await webAudioDecode()) || (await fallbackDecode());
+                //let decoded = (await webAudioDecode()) || (await fallbackDecode());
+                let decoded = (await webAudioDecode()) || (await OGfallbackDecode());
+                //let decoded = await OGfallbackDecode();
                 //let decoded = ogfallback;
                 //let decoded = fallback;
                 //let decoded = webaudio;
