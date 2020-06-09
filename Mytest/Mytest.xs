@@ -184,8 +184,16 @@ bool _mytest_get_flac(_mytest *mytest, uint64_t start, size_t count)
         }
         for(unsigned i = 0; i < (count * pFlac->channels) ; i++)
         {
-            // drflac outputs 24 bit audio to the higher bits of int32_t, we need it in the lower bits of FLAC__int32
-            fbuffer[i] = (raw32Samples[i] >> 8) & 0xFFFFFF;
+            // drflac outputs 24 bit audio to the higher bits of int32_t, we need it represented as a normal integer for libflac
+            uint32_t sample;
+            memcpy(&sample, &raw32Samples[i], 4);
+            sample = (sample >> 8);
+            // sign extension
+            if(sample & (1 << 23))
+            {
+                sample |= 0xFF000000;
+            }
+            memcpy(&fbuffer[i], &sample, 4);            
         }
     }   
     
