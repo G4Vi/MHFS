@@ -18,6 +18,7 @@
 <script src="static/music.js"></script>
 
 <!-- libflac.js for alternative flac decoding on failure -->
+<!--
 <script src="static/libflac.js/util/data-util.js"></script>
 <script src="static/libflac.js/decode-func.js"></script>
 <script src="static/libflac.js/util/check-support.js"></script>
@@ -38,25 +39,4 @@
     var libFile = global.FLAC_SCRIPT_LOCATION.replace('//','/') + lib;
     global.document.write('<'+'script src="'+libFile+'" type="text/javascript"'+'><'+'/script'+'>');
 </script>
-
-<script type="text/javascript">
-     /*async function tryPlay() {
-     try {
-        await document.getElementById("silence").play();
-        console.log('autoplay should work');
-     }
-     catch(err) {
-      console.log('autoplay borked: ' + err);
-      alert("click OK and anywhere on the page to play");
-      function enableAudio() {
-          MainAudioContext.resume();
-          document.removeEventListener('click', enableAudio);
-      }
-
-      document.addEventListener('click', enableAudio);      
-     }
-   }
-   tryPlay();*/
-    
-</script>
-
+-->

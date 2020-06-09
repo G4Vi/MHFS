@@ -527,40 +527,11 @@ function toWav(metadata, decData) {
     return dataView.buffer;
 }
 
-// Flac to wav
-function DecodeFlac(thedata, ondecoded) {
-    if(typeof Flac === 'undefined') {
-        console.log('DecodeFlac, no Flac - setTimeout');
-        setTimeout(function(){ DecodeFlac( thedata, ondecoded);}, 5);               
-        return;
-    }
-    else if(!Flac.isReady()) {
-        console.log('DecodeFlac, Flac not ready, handler added');
-        Flac.on('ready', function(libFlac){
-            DecodeFlac( thedata, ondecoded);  
-        });
-        return;
-    }
-    var decData = [];
-	var result = decodeFlac(thedata, decData, false);
-    console.log('decoded data array: ', decData);
-	
-	if(result.error){
-		console.log(result.error);
-	}
-
-	var metaData = result.metaData;
-	if(metaData){		
-		for(var n in metaData){
-			console.log( n + ' ' + 	metaData[n]);
-		}		
-	}
-    ondecoded(toWav(metaData, decData));    
-}
-
-async function DecodeFlacAsync(thedata) {
+let MusicWorker = new Worker('static/worker_music.js');
+async function FlacToWav(thedata) {
+    /*
     while(typeof Flac === 'undefined') {
-        console.log('DecodeFlacAsync, no Flac sleeping 5');
+        console.log('FlacToWav: no libflac.js sleeping 5');
         await sleep(5);
     }
     if(!Flac.isReady()) {
@@ -568,21 +539,32 @@ async function DecodeFlacAsync(thedata) {
     }
 
     var decData = [];
-        var result = decodeFlac(thedata, decData, false);
+    var result = decodeFlac(thedata, decData, false);
     console.log('decoded data array: ', decData);
 
-        if(result.error){
-                console.log(result.error);
-        }
-
-        var metaData = result.metaData;
-        if(metaData){
-                for(var n in metaData){
-                        console.log( n + ' ' +  metaData[n]);
-                }
+    if(result.error){
+            console.log(result.error);
     }
 
+    var metaData = result.metaData;
+    if(metaData){
+        for(var n in metaData){
+                console.log( n + ' ' +  metaData[n]);
+        }
+    }
     return toWav(metaData, decData);
+    */
+    let myp = new Promise(function(resolve) {       
+        MusicWorker.onmessage = function(event) {
+            if(event.data.message == 'FlacToWav') {
+                resolve(event.data.wav);
+            }           
+        };
+        MusicWorker.postMessage({'message' : 'FlacToWav',  'flac': thedata.buffer}, [thedata.buffer]);       
+    });
+
+   let res = await myp;
+   return res;
 }
 
 /*end firefox flac decoding is bad*/
@@ -655,7 +637,10 @@ function TrackDownload(track, onDownloaded, seg) {
             track.numsegments = Number(req.getResponseHeader('X-MHFS-NUMSEGMENTS'));
             track.maxsegduration = Number(req.getResponseHeader('X-MHFS-MAXSEGDURATION'));         
               
-            var todec = Array.from(new Uint8Array(req.response)); // ArrayBuffers gets trashed for some stupid reason
+            //var todec = Array.from(new Uint8Array(req.response)); // ArrayBuffers gets trashed for some stupid reason
+            let todec = new Uint8Array(req.response.byteLength);
+            todec.set(new Uint8Array(req.response));
+
             async function webAudioDecode() {
                 let res;
                 try {
@@ -670,8 +655,9 @@ function TrackDownload(track, onDownloaded, seg) {
             async function OGfallbackDecode() {
                 let res;
                 try {
-                    let wav = await DecodeFlacAsync(Uint8Array.from(todec));
-                    res = MainAudioContext.decodeAudioData(wav);
+                    //let wav = await FlacToWav(Uint8Array.from(todec));
+                    let wav = await FlacToWav(todec);
+                    res = await MainAudioContext.decodeAudioData(wav);
                     console.log('OGfallbackDecode success');
                 }
                 catch(error) {
@@ -680,7 +666,8 @@ function TrackDownload(track, onDownloaded, seg) {
             }
 
             async function fallbackDecode() {
-                let fdecoded = await FLACToFloat32(Uint8Array.from(todec));
+                //let fdecoded = await FLACToFloat32(Uint8Array.from(todec));
+                let fdecoded = await FLACToFloat32(todec);
                 if(fdecoded) {
                     let metadata = fdecoded[0];
                     let chandata = fdecoded[1];
@@ -698,22 +685,7 @@ function TrackDownload(track, onDownloaded, seg) {
                     console.log('fallbackDecode success');
                     return buf;
                 }
-            }
-            
-            /*
-            MainAudioContext.decodeAudioData(req.response, onDecoded, function () {
-                // firefox fails to decode small flac segments so fallback to software               
-                console.log('DL ' + toDL + ' (part) decode failed. Attempting Software Decode');                
-                DecodeFlac(Uint8Array.from(todec), function(wav) {                
-                    MainAudioContext.decodeAudioData(wav, onDecoded, function () {
-                        console.log('DL ' + toDL + ' (part) decode failed (CRITICAL). Redownloading');
-                        redoDL();                
-                    });
-                });
-            });
-            return;
-            */
-            
+            }            
             
             (async function(){
                 
@@ -1283,6 +1255,34 @@ function BuildPTrack() {
     }
 }
 
+function loadScripts(scriptUrls, cb){
+	function loadNext(err){
+		if(err){
+			console.error('error ', err);
+			return cb(err);
+		}
+		scriptUrls.length? loadScripts(scriptUrls, cb) : cb(null);
+	}
+	var s = scriptUrls.shift();
+	addScript(s, loadNext);
+}
+
+function addScript(scriptUrl, cb) {
+
+	var head = document.getElementsByTagName('head')[0];
+	var script = document.createElement('script');
+	script.type = 'text/javascript';
+	script.src = scriptUrl;
+	script.onload = function() {
+		cb && cb.call(this, null);
+	};
+	script.onerror = function(e) {
+		var msg = 'Loading script failed for "' + scriptUrl + '" ';
+		cb? cb.call(this, msg + e) : console.error(msg, e);
+	};
+	head.appendChild(script);
+}
+
 // BEGIN UI handlers
 rptrackbtn.addEventListener('change', function(e) {         
    if(e.target.checked) {
@@ -1459,6 +1459,27 @@ dbarea.addEventListener('click', function (e) {
 
 // Initialize the rest of globals and launch
 {
+    //load libflac.js in-case we need the fallback
+    /*
+    loadScripts(['static/libflac.js/util/check-support.js'], function(){
+        var global = window;  
+        var wasmDisable = false;
+        var min = true;
+        var variant = min ? 'min/' : '';
+        global.FLAC_SCRIPT_LOCATION = 'static/libflac.js/dist/';
+        var lib;
+        if(!wasmDisable && isWebAssemblySupported()){
+        		lib = 'libflac.'+variant.replace('/', '.')+'wasm.js';
+        	} else {
+        		lib = 'libflac.'+variant.replace('/', '.')+'js';
+        }
+        var libFile = global.FLAC_SCRIPT_LOCATION.replace('//','/') + lib;
+        loadScripts([libFile, 'static/libflac.js/decode-func.js', 'static/libflac.js/util/data-util.js'], function(err){
+            console[err? 'error' : 'info'](err? 'encountered error '+err : 'scripts initialized successfully');
+        });
+    });
+    */
+
     let urlParams = new URLSearchParams(window.location.search);
     MAX_SAMPLE_RATE = urlParams.get('max_sample_rate') || 48000;
     BITDEPTH        = urlParams.get('bitdepth');
