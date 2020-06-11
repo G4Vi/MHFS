@@ -2654,14 +2654,16 @@ package MusicLibrary {
     
     sub LibraryHTML {
         my ($self) = @_;
-        my $buf = read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_top.html');
+        my $buf = '';
         foreach my $file (@{$self->{'library'}}) {
             $buf .= ToHTML($file);
             $buf .= '<br>';
         }
-        
-        $self->{'html'} = encode_utf8($buf .  read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_bottom.html'));         
-        $self->{'html_gapless'} = encode_utf8($buf . read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_bottom_gapless.html'));
+        my $top = read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_top.html');        
+        $self->{'html'} = encode_utf8($top . $buf .  read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_bottom.html'));
+
+        my $top_gapless = read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_top_gapless.html');         
+        $self->{'html_gapless'} = encode_utf8( $top_gapless . $buf . read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_bottom_gapless.html'));
     }
 
     sub SendLibrary {

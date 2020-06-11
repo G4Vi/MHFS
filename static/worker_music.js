@@ -1,5 +1,25 @@
+'use strict'
 self.FLAC_SCRIPT_LOCATION = 'libflac.js/dist/';
-importScripts('libflac.js/util/check-support.js');
+// importScripts('libflac.js/util/check-support.js');
+
+/**
+ * adapted (with minor changes) from:
+ * https://stackoverflow.com/a/47880734/4278324
+ *
+ * @return {boolean} TRUE if WebAssembly is supported & can be used
+ */
+var isWebAssemblySupported = function(){
+	try {
+		if (typeof WebAssembly === "object" && typeof WebAssembly.instantiate === "function") {
+			const module = new WebAssembly.Module(Uint8Array.of(0x0, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00));
+			if (module instanceof WebAssembly.Module){
+				return new WebAssembly.Instance(module) instanceof WebAssembly.Instance;
+			}
+		}
+	} catch (e) {}
+	return false;
+};
+
 var wasmDisable = false;
 var min = true;
 var variant = min ? 'min/' : '';

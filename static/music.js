@@ -527,7 +527,11 @@ function toWav(metadata, decData) {
     return dataView.buffer;
 }
 
-let MusicWorker = new Worker('static/worker_music.js');
+//let MusicWorker = new Worker('static/worker_music.js');
+if(!window.MusicWorker) {
+    console.log('creating MusicWorker');
+    window.MusicWorker = new Worker('static/worker_music.js');
+}
 async function FlacToWav(thedata) {
     /*
     while(typeof Flac === 'undefined') {
