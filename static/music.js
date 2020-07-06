@@ -740,6 +740,7 @@ function TrackDownload(track, onDownloaded, seg) {
 
                 //let decoded = (await webAudioDecode()) || (await fallbackDecode());
                 let decoded = (await webAudioDecode()) || (await OGfallbackDecode());
+                //let decoded = await fallbackDecode();
                 //let decoded = await OGfallbackDecode();
                 //let decoded = ogfallback;
                 //let decoded = fallback;
@@ -1119,7 +1120,10 @@ function loop() {
             else {
                 astart = RepeatAstart;
             }                       
-            var time = MainAudioContext.currentTime + astart;            
+            var time = MainAudioContext.currentTime + astart;
+            if(!astart || (time < 0)) {
+                time = 0;
+            }            
             SetCurtimeText(time);
             SetSeekbarValue(time);
         }       
