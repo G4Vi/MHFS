@@ -32,7 +32,7 @@ var SBAR_UPDATING = 0;
 var RepeatTrack = 0;
 var MainAudioContext;
 var NextBufferTime;
-var RepeatAstart;
+let Astart;
 var SaveNextBufferTime;
 
 
@@ -197,7 +197,7 @@ function IncrementalProcessTimers() {
         SetEndtimeText(IncrementalTimers[i].duration);
         seekbar.min = 0;
         seekbar.max = IncrementalTimers[i].duration;
-        RepeatAstart = IncrementalTimers[i].astart;
+        Astart = IncrementalTimers[i].astart;
         if(IncrementalTimers[i].duration == 0) {
             SetCurtimeText(0);
             SetPPText('IDLE');
@@ -229,12 +229,12 @@ function IncrementalGraphicsLoop() {
         else {
             IncrementalProcessTimers();
             if(Tracks[CurrentTrack]) {
-                if(RepeatAstart === null) {
-                    RepeatAstart = -MainAudioContext.currentTime;
+                if(Astart === null) {
+                    Astart = -MainAudioContext.currentTime;
                     console.log('astart not ready, forcing it.');                    
                 }
-                var time = MainAudioContext.currentTime + RepeatAstart;
-                //console.log('astart ' +  RepeatAstart, ' curtime ' + MainAudioContext.currentTime, ' time ' + time);  
+                var time = MainAudioContext.currentTime + Astart;
+                //console.log('astart ' +  Astart, ' curtime ' + MainAudioContext.currentTime, ' time ' + time);  
                 SetCurtimeText(time);
                 SetSeekbarValue(time);                
             }          
@@ -363,8 +363,6 @@ function IncrementalOnSeekChanged() {
     }
     
     if(!Tracks[CurrentTrack]) return;
-    //if(!Tracks[CurrentTrack].astart) return;
-    //if(RepeatTrack && !RepeatAstart) return;
     console.log(Tracks[CurrentTrack].trackname + ' (' + CurrentTrack + ') ' + ' seeking to ' + seekbar.value);  
     Tracks[CurrentTrack].queue(Number(seekbar.value), MainAudioContext.currentTime);               
     SetCurtimeText(Number(seekbar.value));
@@ -785,7 +783,6 @@ function Track(trackname) {
     this.queueRepeat = function () {        
         if(Tracks[CurrentTrack+1]) Tracks[CurrentTrack+1].clearSources();      // remove the next track from the web audio queue         
         STAHPNextDownload();                                                   // stop the possible next track download so it doesn't enter the web audio queue
-        RepeatAstart = Tracks[CurrentTrack].astart;                            // proper current time display            
         DLImmediately = false;                                                 // we should never queue from user when repeat track is turned on
         // queue the same track        
         if(this.isDownloaded) {
@@ -835,7 +832,10 @@ function Track(trackname) {
         }       
         
         // update how many sources belong to this playback
-        this.updateNumSources(); 
+        this.updateNumSources();
+        
+        // update the astart
+        Astart = Tracks[CurrentTrack].astart; 
        
         // if in Repeat mode queue it up again
         if(RepeatTrack) {                       
@@ -921,8 +921,7 @@ function Track(trackname) {
     }
 
     this.onEnd = function () {         
-        var astart = RepeatTrack ? RepeatAstart : this.astart; 
-        var time = MainAudioContext.currentTime + astart;               
+        var time = MainAudioContext.currentTime + Astart;               
         console.log('End - track time: ' + time + ' duration ' + this.duration);
         // sanity check
         if(time < this.duration) {
@@ -1054,6 +1053,7 @@ function Track(trackname) {
         this.isDownloaded = false;
         this.queuednext = false;
         skiptime = skiptime || 0;
+
         if(USEINCREMENTAL) {
             console.log('incremental queue');
             //IncrementalDownloadTrack(this.trackname, skiptime);
@@ -1108,20 +1108,13 @@ function Track(trackname) {
 
 
 function loop() {
-    if(Tracks[CurrentTrack]) {			
+    if(Tracks[CurrentTrack] && Astart) {			
         if (SBAR_UPDATING) {
             console.log('Not updating SBAR, SBAR_UPDATING');            
         }
-        else {
-            var astart;                       
-            if(!RepeatTrack || !Tracks[CurrentTrack].astart) {
-                astart = Tracks[CurrentTrack].astart;
-            }
-            else {
-                astart = RepeatAstart;
-            }                       
-            var time = MainAudioContext.currentTime + astart;
-            if(!astart || (time < 0)) {
+        else {                    
+            var time = MainAudioContext.currentTime + Astart;
+            if(!Astart || (time < 0)) {
                 time = 0;
             }            
             SetCurtimeText(time);
@@ -1170,10 +1163,10 @@ function playTrackNow(track) {
         BuildPTrack();
     }
     if(!USEINCREMENTAL) {
-        RepeatAstart = Number.NaN; // why
+        Astart = Number.NaN; // why
     }
     else {
-        RepeatAstart = 1;
+        Astart = 1;
     }
 }
 
@@ -1305,9 +1298,9 @@ rptrackbtn.addEventListener('change', function(e) {
    }
    else {
        console.log("rptrackbtn unchecked");
-       RepeatTrack = 0;
-       if(RepeatAstart) {
-           Tracks[CurrentTrack].astart = RepeatAstart;
+       let wasRepeat = RepeatTrack;
+       RepeatTrack = 0;       
+       if(wasRepeat && Astart) {
            // stop any sources other than what is currently playing
            Tracks[CurrentTrack].clearSecondSources();
            if(Tracks[CurrentTrack+1]) {                             
@@ -1370,15 +1363,20 @@ seekbar.addEventListener('change', function (e) {
     }
     SBAR_UPDATING = 0;
     if(!Tracks[CurrentTrack]) return;
-    if(!Tracks[CurrentTrack].astart) return;
-    if(RepeatTrack && !RepeatAstart) return;
+    if(!Astart) return;
     console.log(Tracks[CurrentTrack].trackname + ' (' + CurrentTrack + ') ' + ' seeking to ' + seekbar.value);
     
     Tracks[CurrentTrack].clearSources();
     if(Tracks[CurrentTrack+1]) {           
         Tracks[CurrentTrack+1].clearSources();
     }
-    STAHPPossibleDownloads();    
+    STAHPPossibleDownloads();
+    
+    // lie to not jostle the seekbar
+    let faketime = (-MainAudioContext.currentTime + Number(seekbar.value));
+    SetCurtimeText(faketime);
+    Astart = null;
+    
     Tracks[CurrentTrack].queue(Number(seekbar.value), MainAudioContext.currentTime);               
     SetCurtimeText(Number(seekbar.value));          
     console.log('END SBAR UPDATE');        
