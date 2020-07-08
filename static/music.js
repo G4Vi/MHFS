@@ -135,9 +135,93 @@ function queueTracks(tracks) {
 
 // Incremental loading support
 
-let FlacWorker = new Worker('static/flacworker.js');
+//let FlacWorker = new Worker('static/flacworker.js');
 
-function IncrementalSetup() {    
+function IncrementalSetup() {
+    
+    FlacWorker.addEventListener('message', function(e) {
+        if((IncCurJob !== null) && (e.data.jobid == IncCurJob)) {
+            console.log('job ' + IncCurJob + ' finished message: ' + e.data.message);
+            IncCurJob = null;        
+        }
+        else {
+            console.log('job ' + e.data.jobid  + ' not needed, message: ' + e.data.message);
+            return;        
+        }
+        
+        //console.log(e.data);
+        if(e.data.message == 'decodedone') {
+            if(MainAudioContext.sampleRate != e.data.samplerate) {
+                console.log('Switching MainAudioContext.sampleRate was: ' + MainAudioContext.sampleRate + ' to: ' + e.data.samplerate);
+                MainAudioContext = CreateAudioContext( {'sampleRate' : e.data.samplerate });
+                NextBufferTime = -1;
+            }            
+            let incomingdata = MainAudioContext.createBuffer(e.data.channels, e.data.samples, e.data.samplerate);
+            for( let i = 0; i < e.data.channels; i++) {
+                let buf = new Float32Array(e.data.outbuffer[i]);
+                incomingdata.getChannelData(i).set(buf);        
+            }
+            
+            let source = MainAudioContext.createBufferSource();
+            source.connect(MainAudioContext.destination);
+            source.buffer = incomingdata;
+            if(NextBufferTime < MainAudioContext.currentTime) {
+                console.log('IncrementalPumpAudio: TOO SLOW ' + NextBufferTime + ' ' + MainAudioContext.currentTime);
+                //NextBufferTime = Math.ceil(MainAudioContext.currentTime + BUFFER_S);
+                NextBufferTime = roundUp(MainAudioContext.currentTime + 0.250, 0.250);
+            }
+            source.start(NextBufferTime, 0);
+            
+            // update text
+            let oldPlaybackIndex = IncPlaybackIndex;
+            let startsample = 0;        
+            e.data.tickevents.forEach( function(tickevent) {
+                let uiupdate = { 'tick' : tickevent.tick};            
+                if(tickevent.inctrack > 0) {
+                    console.log('increasing playback index from ' + IncPlaybackIndex + ' to ' + (IncPlaybackIndex +tickevent.inctrack));
+                    IncPlaybackIndex += tickevent.inctrack;                
+                }
+                if(tickevent.trackname) {
+                    if(Tracks[CurrentTrack].trackname != tickevent.trackname) {
+                        console.log('CurrentTrack ' +  CurrentTrack + ' name ' + Tracks[CurrentTrack].trackname + ' diff from tick: ' + tickevent.trackname);                 
+                    }              
+                }
+                if(e.data.samplerate > 0) {            
+                    uiupdate.duration = tickevent.total_samples / e.data.samplerate;                
+                    uiupdate.astart   = -(NextBufferTime + (startsample / e.data.samplerate));
+                    if(tickevent.skipsamples !== null) {
+                        uiupdate.astart += (tickevent.skipsamples/e.data.samplerate);
+                        uiupdate.skipsamples = tickevent.skipsamples;
+                        uiupdate.sbar_update_done = 1;
+                        uiupdate.jobid = e.data.jobid;                    
+                    }                    
+                    uiupdate.time     = NextBufferTime + (startsample / e.data.samplerate);
+                }
+                else {
+                    uiupdate.duration = 0;
+                    uiupdate.astart   = null;
+                    uiupdate.time     = NextBufferTime;                                
+                }
+                uiupdate.inctrack = tickevent.inctrack;
+                IncrementalTimers.push(uiupdate);
+                startsample += tickevent.samples;            
+            });
+                
+            //if(oldPlaybackIndex != IncPlaybackIndex) { }
+            console.log('Next to playback should be ' + IncPlaybackIndex + ' ' + (Tracks[IncPlaybackIndex] ? Tracks[IncPlaybackIndex].trackname : ''));              
+            
+            NextBufferTime = NextBufferTime + source.buffer.duration;
+            console.log('IncrementalPumpAudio: queued NextBufferTime is now ' + NextBufferTime + ' duration ' + source.buffer.duration);        
+            
+        }
+        else if(e.data.message == 'decode_no_meta') {
+    
+        } 
+        else if(e.data.message == 'at_end_of_queue') {
+            DLImmediately = true;
+        }        
+    });
+    
     var url = '';
     if (MAX_SAMPLE_RATE) url += '&max_sample_rate=' + MAX_SAMPLE_RATE;
     if (BITDEPTH) url += '&bitdepth=' + BITDEPTH;
@@ -254,88 +338,7 @@ function roundUp(x, multiple) {
     }		
 }
 
-FlacWorker.addEventListener('message', function(e) {
-    if((IncCurJob !== null) && (e.data.jobid == IncCurJob)) {
-        console.log('job ' + IncCurJob + ' finished message: ' + e.data.message);
-        IncCurJob = null;        
-    }
-    else {
-        console.log('job ' + e.data.jobid  + ' not needed, message: ' + e.data.message);
-        return;        
-    }
-    
-    //console.log(e.data);
-    if(e.data.message == 'decodedone') {
-        if(MainAudioContext.sampleRate != e.data.samplerate) {
-            console.log('Switching MainAudioContext.sampleRate was: ' + MainAudioContext.sampleRate + ' to: ' + e.data.samplerate);
-            MainAudioContext = CreateAudioContext( {'sampleRate' : e.data.samplerate });
-            NextBufferTime = -1;
-        }            
-        let incomingdata = MainAudioContext.createBuffer(e.data.channels, e.data.samples, e.data.samplerate);
-        for( let i = 0; i < e.data.channels; i++) {
-            let buf = new Float32Array(e.data.outbuffer[i]);
-            incomingdata.getChannelData(i).set(buf);        
-        }
-        
-        let source = MainAudioContext.createBufferSource();
-        source.connect(MainAudioContext.destination);
-        source.buffer = incomingdata;
-        if(NextBufferTime < MainAudioContext.currentTime) {
-            console.log('IncrementalPumpAudio: TOO SLOW ' + NextBufferTime + ' ' + MainAudioContext.currentTime);
-            //NextBufferTime = Math.ceil(MainAudioContext.currentTime + BUFFER_S);
-            NextBufferTime = roundUp(MainAudioContext.currentTime + 0.250, 0.250);
-	    }
-        source.start(NextBufferTime, 0);
-        
-        // update text
-        let oldPlaybackIndex = IncPlaybackIndex;
-        let startsample = 0;        
-        e.data.tickevents.forEach( function(tickevent) {
-            let uiupdate = { 'tick' : tickevent.tick};            
-            if(tickevent.inctrack > 0) {
-                console.log('increasing playback index from ' + IncPlaybackIndex + ' to ' + (IncPlaybackIndex +tickevent.inctrack));
-                IncPlaybackIndex += tickevent.inctrack;                
-            }
-            if(tickevent.trackname) {
-                if(Tracks[CurrentTrack].trackname != tickevent.trackname) {
-                    console.log('CurrentTrack ' +  CurrentTrack + ' name ' + Tracks[CurrentTrack].trackname + ' diff from tick: ' + tickevent.trackname);                 
-                }              
-            }
-            if(e.data.samplerate > 0) {            
-                uiupdate.duration = tickevent.total_samples / e.data.samplerate;                
-                uiupdate.astart   = -(NextBufferTime + (startsample / e.data.samplerate));
-                if(tickevent.skipsamples !== null) {
-                    uiupdate.astart += (tickevent.skipsamples/e.data.samplerate);
-                    uiupdate.skipsamples = tickevent.skipsamples;
-                    uiupdate.sbar_update_done = 1;
-                    uiupdate.jobid = e.data.jobid;                    
-                }                    
-                uiupdate.time     = NextBufferTime + (startsample / e.data.samplerate);
-            }
-            else {
-                uiupdate.duration = 0;
-                uiupdate.astart   = null;
-                uiupdate.time     = NextBufferTime;                                
-            }
-            uiupdate.inctrack = tickevent.inctrack;
-            IncrementalTimers.push(uiupdate);
-            startsample += tickevent.samples;            
-        });
-            
-        //if(oldPlaybackIndex != IncPlaybackIndex) { }
-        console.log('Next to playback should be ' + IncPlaybackIndex + ' ' + (Tracks[IncPlaybackIndex] ? Tracks[IncPlaybackIndex].trackname : ''));              
-        
-        NextBufferTime = NextBufferTime + source.buffer.duration;
-        console.log('IncrementalPumpAudio: queued NextBufferTime is now ' + NextBufferTime + ' duration ' + source.buffer.duration);        
-        
-    }
-    else if(e.data.message == 'decode_no_meta') {
 
-    } 
-    else if(e.data.message == 'at_end_of_queue') {
-        DLImmediately = true;
-    }        
-});
 
 function IncrementalPumpAudio() {
     IncrementalProcessTimers();
@@ -409,168 +412,6 @@ function STAHPPossibleDownloads() {
     STAHPNextDownload();        
 };
 
-const sleep = m => new Promise(r => setTimeout(r, m));
-
-/* firefox flac decoding is bad, use our flac decoder sometimes */
-function toint16(byteA, byteB) {
-    var sign = byteB & (1 << 7);
-    var x = (((byteB & 0xFF) << 8) | (byteA & 0xFF));
-    if (sign) {
-       x = 0xFFFF0000 | x;  // fill in most significant bits with 1's
-    }
-    return x;
-}
-
-/*
-DataView.prototype.getInt24 = function(pos, littleEndian) {
-    this.getInt16(pos, val >> 8, littleEndian);
-    this.getInt8(pos+2, val & ~4294967040, littleEndian); // this "magic number" masks off the first 16 bits
-}*/
-
-function toint24(byteA, byteB, byteC) {
-    let sign = byteC & (1 << 7);
-    let x = ((byteC & 0xFF) << 16) | ((byteB & 0xFF) << 8) | (byteA & 0xFF);
-    if (sign) {
-       x = 0xFF000000 | x;  // fill in most significant bits with 1's
-       //throw('x is ' + x + ' byteA ' + byteA + ' byteB '+ byteB + ' byteC ' + byteC);
-    }
-    return x;
-}
-
-function waitForEvent(obj, event) {
-    return new Promise(function(resolve) {
-        obj.on(event, function() {
-            resolve();
-        });
-    });
-}
-
-async function FLACToFloat32(thedata) {
-    while(typeof Flac === 'undefined') {
-        console.log('FLACToFloat32, no Flac sleeping 5');
-        await sleep(5);
-    }
-    if(!Flac.isReady()) {
-        await waitForEvent(Flac, 'ready');
-    }
-    let decData = [];
-    let result = decodeFlac(thedata, decData, true);
-    //console.log('decoded data array: ', decData);
-    if(result.error){
-        console.log(result.error);
-        return;
-    }
-    let metaData = result.metaData;
-        if(metaData){
-                for(var n in metaData){
-                        console.log( n + ' ' +  metaData[n]);
-                }
-    }
-
-    let chanData = [];
-    let chanIndex = [];
-    for(let i = 0; i < metaData.channels; i++) {
-        chanData[i] = new Float32Array(metaData.total_samples);
-        chanIndex[i] = 0;
-    }
-
-    if(metaData.bitsPerSample == 16) {
-        for(let i = 0; i < decData.length; i++) {
-            for(let j = 0; j < metaData.channels; j++) {
-                for(let k = 0; k < decData[i][j].length; k+=2) {
-                    chanData[j][chanIndex[j]] = toint16(decData[i][j][k], decData[i][j][k+1]) / 0x7FFF;
-                    if((chanData[j][chanIndex[j]] > 1) || (chanData[j][chanIndex[j]] < -1)) {
-                        console.log('CLAMPING FLOAT');
-                        if(chanData[j][chanIndex[j]] > 1) chanData[j][chanIndex[j]] = 1;
-                        if(chanData[j][chanIndex[j]] < -1) chanData[j][chanIndex[j]] = -1;
-                    }
-                    chanIndex[j]++;
-                }
-            }
-        }
-    }
-    /*else if(metaData.bitsPerSample == 24) {
-        for(let i = 0; i < decData.length; i++) {
-            for(let j = 0; j < metaData.channels; j++) {
-                for(let k = 0; k < decData[i][j].length; k+=3) {
-                    chanData[j][chanIndex[j]] = toint24(decData[i][j][k], decData[i][j][k+1],decData[i][j][k+2]) / 0x7FFFFF;
-                    if((chanData[j][chanIndex[j]] > 1) || (chanData[j][chanIndex[j]] < -1)) {
-                        console.log('CLAMPING FLOAT');
-                        if(chanData[j][chanIndex[j]] > 1) chanData[j][chanIndex[j]] = 1;
-                        if(chanData[j][chanIndex[j]] < -1) chanData[j][chanIndex[j]] = -1;
-                    }
-                    //console.log(chanData[j][chanIndex[j]]);
-                    chanIndex[j]++;
-                }
-            }
-        }
-    }*/
-    else {
-        throw(metaData.bitsPerSample + " bps not handled");
-    }
-
-    //console.log(chanData);
-    //throw('done');
-    /*if(MainAudioContext.sampleRate != metaData.sampleRate) {
-        MainAudioContext = CreateAudioContext( {'sampleRate' : metaData.sampleRate });
-    }*/
-
-    return [metaData, chanData];
-}
-
-
-function toWav(metadata, decData) {
-    var samples = interleave(decData, metadata.channels, metadata.bitsPerSample);
-	var dataView = encodeWAV(samples, metadata.sampleRate, metadata.channels, metadata.bitsPerSample);
-    return dataView.buffer;
-}
-
-//let MusicWorker = new Worker('static/worker_music.js');
-if(!window.MusicWorker) {
-    console.log('creating MusicWorker');
-    window.MusicWorker = new Worker('static/worker_music.js');
-}
-async function FlacToWav(thedata) {
-    /*
-    while(typeof Flac === 'undefined') {
-        console.log('FlacToWav: no libflac.js sleeping 5');
-        await sleep(5);
-    }
-    if(!Flac.isReady()) {
-        await waitForEvent(Flac, 'ready');
-    }
-
-    var decData = [];
-    var result = decodeFlac(thedata, decData, false);
-    console.log('decoded data array: ', decData);
-
-    if(result.error){
-            console.log(result.error);
-    }
-
-    var metaData = result.metaData;
-    if(metaData){
-        for(var n in metaData){
-                console.log( n + ' ' +  metaData[n]);
-        }
-    }
-    return toWav(metaData, decData);
-    */
-    let myp = new Promise(function(resolve) {       
-        MusicWorker.onmessage = function(event) {
-            if(event.data.message == 'FlacToWav') {
-                resolve(event.data.wav);
-            }           
-        };
-        MusicWorker.postMessage({'message' : 'FlacToWav',  'flac': thedata.buffer}, [thedata.buffer]);       
-    });
-
-   let res = await myp;
-   return res;
-}
-
-/*end firefox flac decoding is bad*/
-
 function TrackDownload(track, onDownloaded, seg) {
     this.track = track;
     this.onDownloaded = onDownloaded;
@@ -639,7 +480,6 @@ function TrackDownload(track, onDownloaded, seg) {
             track.numsegments = Number(req.getResponseHeader('X-MHFS-NUMSEGMENTS'));
             track.maxsegduration = Number(req.getResponseHeader('X-MHFS-MAXSEGDURATION'));         
               
-            //var todec = Array.from(new Uint8Array(req.response)); // ArrayBuffers gets trashed for some stupid reason
             let todec = new Uint8Array(req.response.byteLength);
             todec.set(new Uint8Array(req.response));
 
@@ -657,7 +497,6 @@ function TrackDownload(track, onDownloaded, seg) {
             async function OGfallbackDecode() {
                 let res;
                 try {
-                    //let wav = await FlacToWav(Uint8Array.from(todec));
                     let wav = await FlacToWav(todec);
                     res = await MainAudioContext.decodeAudioData(wav);
                     console.log('OGfallbackDecode success');
@@ -668,7 +507,6 @@ function TrackDownload(track, onDownloaded, seg) {
             }
 
             async function fallbackDecode() {
-                //let fdecoded = await FLACToFloat32(Uint8Array.from(todec));
                 let fdecoded = await FLACToFloat32(todec);
                 if(fdecoded) {
                     let metadata = fdecoded[0];
@@ -1499,6 +1337,7 @@ dbarea.addEventListener('click', function (e) {
         USEINCREMENTAL = Number(USEINCREMENTAL);
         console.log('USEINCREMENTAL');
         USEWAV = 1;
+        window.FlacWorker = new Worker('static/flacworker.js');
         IncrementalSetup();
         setInterval(IncrementalPumpAudio, 20);
     }
