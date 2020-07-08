@@ -1,0 +1,41 @@
+<html>
+<head>
+<TMPL_IF NAME="INLINE">
+<script>
+    <TMPL_INCLUDE NAME="static/music_async.js">
+</script>
+<style type="text/css">
+    <TMPL_INCLUDE NAME="static/music.css">
+</style>
+<TMPL_ELSE>
+<script src="static/music_async.js" async></script>
+<link rel="stylesheet" href="static/music.css">
+</TMPL_IF>
+<title>Music</title>
+</head>
+<body>
+<div class="header row">
+    <h1>Music</h1>
+</div>
+<div class="body row scroll-y">
+    <div id="musicdb">
+        <TMPL_VAR NAME="musicdb">    
+    </div>
+</div>
+<div class="footer row" style="background-color:blue;">  
+    <table border="1" width="80%">
+    <tr><th>Previous</th><th>Now Playing</th><th>Next</th></tr>
+	<tr><td><div id="prev_text"></div></td><td><div id="play_text"></div></td><td><div id="next_text"></div></td></tr>  
+	</table> 
+    <input type="button" value="PREV" id="prevbtn"> <button id="ppbtn" type="button">IDLE</button> 
+    <input id="curtime" type="text" name="curseconds" value="0:00">
+    <input type="range" step="any" id="seekbar" value="0">
+    <input id="endtime" type="text" name="endseconds" value="0:00">
+    <input type="button" value="NEXT" id="nextbtn">
+	<label><input name="repeattrack" id="repeattrack" type="checkbox">Repeat Track</label>
+  <!-- <iframe src="static/250ms_silence.mp3" allow="autoplay" id="audio" style="display:none"></iframe> -->
+  <audio id="silence" src="static/250ms_silence.mp3"></audio>
+</div>
+<script src="static/music.js"></script>
+</body>
+</html>

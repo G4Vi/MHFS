@@ -2466,6 +2466,117 @@ package GDRIVE {
     1;
 }
 
+package MHFS::Webpage {
+    use strict; use warnings;
+    use feature 'say';
+    HTTP::BS::Server::Util->import();
+    
+    sub new {
+        my ($class, $droot) = @_;
+        my $self =  {'droot' => $droot, 'head' => [], 'body' => [], 'bodyend' => []};
+        bless $self, $class;
+        return $self;
+    }
+
+    sub addScript {
+        my ($self, $filename, $settings) = @_;
+        my $where = $settings->{'where'} // 'bodyend';
+        $settings->{'type'} = 'script';
+        $settings->{'filename'} = $filename;
+        
+        if( ! $settings->{'relpath'}) {
+            $settings->{'relpath'} = $filename;
+            my $droot = $self->{'droot'};
+            $settings->{'relpath'} =~ s/$droot//;
+        }
+        
+        push @{$self->{$where}}, $settings;
+    }
+
+    sub addStyle {
+        my ($self, $filename, $settings) = @_;
+        my $where = $settings->{'where'} // 'head';
+        $settings->{'type'} = 'style';
+        $settings->{'filename'} = $filename;
+
+        if( ! $settings->{'relpath'}) {
+            $settings->{'relpath'} = $filename;
+            my $droot = $self->{'droot'};
+            $settings->{'relpath'} =~ s/$droot//;
+        }
+
+        push @{$self->{$where}}, $settings;
+    }
+
+    sub addHTMLText {
+        my ($self, $text, $settings) = @_;
+        my $where = $settings->{'where'} // 'body';
+        $settings->{'type'} = 'html';
+        $settings->{'text'} = $text;
+        push @{$self->{$where}}, $settings;
+    }
+
+    sub _ext_only {
+        my ($file) = @_;
+        return substr($file, rindex($file, '.') + 1);
+    }
+
+    sub output_section {
+        my ($self, $appendto, $section, $inline) = @_;
+        foreach my $obj (@{$self->{$section}}) {
+            $obj->{'attributes'} //= [];
+            if($obj->{'filename'}) {
+                say 'inline: ' . $inline . ' filename ' . $obj->{'filename'};
+                if($inline) {                    
+                    $obj->{'text'} = read_file($obj->{'filename'});
+                }
+                else {
+                    $obj->{'text'} = '';
+                    push @{$obj->{'attributes'}}, 'src="' . $obj->{'relpath'} .'"';
+                }
+            }
+
+            if($obj->{'type'} eq 'script') {
+                push (@{$obj->{'attributes'}}, 'async') if($obj->{'async'} && ! $inline);                
+            }
+            elsif($obj->{'type'} eq 'style') {
+                push (@{$obj->{'attributes'}}, 'type="text/css"');
+            }
+            
+            if($obj->{'type'} eq 'html') {
+                $$appendto .= $obj->{'text'};                
+            }
+            elsif(($obj->{'type'} eq 'style') && !$obj->{'text'}) {
+                $$appendto .= '<link rel="stylesheet" href="' . $obj->{'relpath'} . '">';   
+            }
+            else {
+                my $type = $obj->{'type'};
+                $$appendto .= "<$type ";
+                foreach my $attr (@{$obj->{'attributes'}}) {
+                    $$appendto .= $attr;
+                }
+                $$appendto .= '>' . $obj->{'text'} . "</$type>";
+            }
+        }
+    }
+
+    sub output {
+        my ($self, $settings) = @_;
+        my $html = '<html>';
+        $html .= '<head>';
+        $self->output_section(\$html, 'head', $settings->{'inline'});
+        $html .= '</head>';
+        $html .= '<body>';
+        $self->output_section(\$html, 'body', $settings->{'inline'});
+        $self->output_section(\$html, 'bodyend', $settings->{'inline'});
+        $html .= '</body>';
+        $html .= '</html>';
+        return \$html;
+    }
+
+    1;
+}
+
 package MusicLibrary {
     use strict; use warnings;
     use feature 'say';
@@ -2652,6 +2763,8 @@ package MusicLibrary {
         return $buf;   
     }
     
+    use HTML::Template;
+
     sub LibraryHTML {
         my ($self) = @_;
         my $buf = '';
@@ -2662,8 +2775,28 @@ package MusicLibrary {
         my $top = read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_top.html');        
         $self->{'html'} = encode_utf8($top . $buf .  read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_bottom.html'));
 
-        my $top_gapless = read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_top_gapless.html');         
-        $self->{'html_gapless'} = encode_utf8( $top_gapless . $buf . read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_bottom_gapless.html'));
+        #my $top_gapless = read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_top_gapless.html');         
+        #$self->{'html_gapless'} = encode_utf8( $top_gapless . $buf . read_file($self->{'settings'}{'DOCUMENTROOT'} . '/static/music_bottom_gapless.html'));
+
+#        my $gpage = MHFS::Webpage->new($self->{'settings'}{'DOCUMENTROOT'});
+#        $gpage->addScript($self->{'settings'}{'DOCUMENTROOT'} . '/' . 'static/music_async.js', { 'where' => 'head', 'async' => 1});
+#        $gpage->addStyle($self->{'settings'}{'DOCUMENTROOT'} . '/' . 'static/music.css', { 'where' => 'head'});
+#        $gpage->addHTMLText('<title>Music</title>', { 'where' => 'head'});
+#        #$gpage->body->div({'class' => 'header row'})->h1('aaa');
+#        $gpage->addHTMLText(
+#'<div class="header row">
+#<h1>Music</h1>
+#</div>
+#<div class="body row scroll-y">
+#<div id="musicdb">',
+#        {'where' => 'body'});
+#        $gpage->addHTMLText($buf, {'where' => 'body'});
+#        $self->{'html_gapless'} = encode_utf8( ${$gpage->output({'inline' => 1})});
+
+        my $gapless_template = HTML::Template->new(filename => 'static/music_gapless.html', path => $self->{'settings'}{'DOCUMENTROOT'} );
+        $gapless_template->param(INLINE => 1);
+        $gapless_template->param(musicdb => $buf);
+        $self->{'html_gapless'} = encode_utf8($gapless_template->output);
     }
 
     sub SendLibrary {
