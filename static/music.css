@@ -42,3 +42,16 @@ audio {
 #seekbar {
     width: 60%; margin:20px;
 }
+
+.timedisplay {
+    width: 55px;
+}
+
+.controlbtns {
+    /*margin-right: 10px;
+    margin-left: 10px;*/
+    /*padding-right: 0px;    
+    padding-left: 0px;*/
+    padding: 0;
+    border-width: thick;
+}

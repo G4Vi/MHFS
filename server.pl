@@ -2667,12 +2667,19 @@ package MusicLibrary {
 
         my $gapless_template = HTML::Template->new(filename => 'static/music_gapless.html', path => $self->{'settings'}{'DOCUMENTROOT'} );
         $gapless_template->param(INLINE => 1);
-        $gapless_template->param(musicdb => $buf);
+        #$gapless_template->param(musicdb => $buf);
+        $gapless_template->param(musicdb => '');
         $self->{'html_gapless'} = encode_utf8($gapless_template->output);
+        $self->{'musicdbhtml'} = encode_utf8($buf);
     }
 
     sub SendLibrary {
         my ($self, $request) = @_;
+
+        if($request->{'qs'}{'fmt'} eq 'musicdbhtml') {
+            return $request->SendLocalBuf($self->{'musicdbhtml'}, "text/html; charset=utf-8");
+            return 1;            
+        }
 
         # maybe not allow everyone to do this, it blocks the main thread
         if($request->{'qs'}{'forcerefresh'}) {
@@ -2692,7 +2699,7 @@ package MusicLibrary {
         if($request->{'qs'}{'legacy'}) {
             say "MusicLibrary: legacy";
             return $request->SendLocalBuf($self->{'html'}, "text/html; charset=utf-8");
-        }
+        }        
         else {
             return $request->SendLocalBuf($self->{'html_gapless'}, "text/html; charset=utf-8");
         }

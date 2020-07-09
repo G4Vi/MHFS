@@ -107,7 +107,7 @@ DataView.prototype.getInt24 = function(pos, littleEndian) {
     this.getInt8(pos+2, val & ~4294967040, littleEndian); // this "magic number" masks off the first 16 bits
 }*/
 
-/*
+
 function toint24(byteA, byteB, byteC) {
     let sign = byteC & (1 << 7);
     let x = ((byteC & 0xFF) << 16) | ((byteB & 0xFF) << 8) | (byteA & 0xFF);
@@ -117,7 +117,11 @@ function toint24(byteA, byteB, byteC) {
     }
     return x;
 }
-*/
+
+function toint32(byteA, byteB, byteC, byteD) {
+    return ((byteD & 0xFF) << 24)  | ((byteC & 0xFF) << 16) | ((byteB & 0xFF) << 8) | (byteA & 0xFF);
+}
+
 const FLACToFloat32 = async (thedata) => {
     while(typeof Flac === 'undefined') {
         console.log('FLACToFloat32, no Flac sleeping 5');
@@ -128,6 +132,7 @@ const FLACToFloat32 = async (thedata) => {
     }
     let decData = [];
     let result = decodeFlac(thedata, decData, true);
+    // decData's arrays have little endian sample values
     //console.log('decoded data array: ', decData);
     if(result.error){
         console.log(result.error);
@@ -162,22 +167,24 @@ const FLACToFloat32 = async (thedata) => {
             }
         }
     }
-    /*else if(metaData.bitsPerSample == 24) {
+    else if(metaData.bitsPerSample == 24) {
         for(let i = 0; i < decData.length; i++) {
             for(let j = 0; j < metaData.channels; j++) {
-                for(let k = 0; k < decData[i][j].length; k+=3) {
-                    chanData[j][chanIndex[j]] = toint24(decData[i][j][k], decData[i][j][k+1],decData[i][j][k+2]) / 0x7FFFFF;
+                for(let k = 0; k < decData[i][j].length; k+=4) {
+                    //chanData[j][chanIndex[j]] = toint24(decData[i][j][k], decData[i][j][k+1],decData[i][j][k+2]) / 0x7FFFFF;
+                    // the above works, but libflac js outputs int32s, so this can be done ~ cheaper with no branching conversion
+                    chanData[j][chanIndex[j]] = toint32(decData[i][j][k], decData[i][j][k+1],decData[i][j][k+2], decData[i][j][k+3]) / 0x7FFFFF;
+                    //chanData[j][chanIndex[j]] *= 0.1; // volume by scaling float32
                     if((chanData[j][chanIndex[j]] > 1) || (chanData[j][chanIndex[j]] < -1)) {
                         console.log('CLAMPING FLOAT');
                         if(chanData[j][chanIndex[j]] > 1) chanData[j][chanIndex[j]] = 1;
                         if(chanData[j][chanIndex[j]] < -1) chanData[j][chanIndex[j]] = -1;
                     }
-                    //console.log(chanData[j][chanIndex[j]]);
                     chanIndex[j]++;
                 }
             }
         }
-    }*/
+    }
     else {
         throw(metaData.bitsPerSample + " bps not handled");
     }

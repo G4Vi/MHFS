@@ -34,7 +34,7 @@ var MainAudioContext;
 var NextBufferTime;
 let Astart;
 var SaveNextBufferTime;
-
+let GainNode;
 
 // END globals
 
@@ -512,9 +512,9 @@ function TrackDownload(track, onDownloaded, seg) {
                     let metadata = fdecoded[0];
                     let chandata = fdecoded[1];
                     
-                    if(MainAudioContext.sampleRate != metadata.sampleRate) {
+                    /*if(MainAudioContext.sampleRate != metadata.sampleRate) {
                         MainAudioContext = CreateAudioContext( {'sampleRate' : metadata.sampleRate });
-                    }
+                    }*/
                     
                     
                     let buf = MainAudioContext.createBuffer(metadata.channels, metadata.total_samples, metadata.sampleRate);
@@ -574,8 +574,8 @@ function TrackDownload(track, onDownloaded, seg) {
                 */
                 
 
-                //let decoded = (await webAudioDecode()) || (await fallbackDecode());
-                let decoded = (await webAudioDecode()) || (await OGfallbackDecode());
+                let decoded = (await webAudioDecode()) || (await fallbackDecode());
+                //let decoded = (await webAudioDecode()) || (await OGfallbackDecode());
                 //let decoded = await fallbackDecode();
                 //let decoded = await OGfallbackDecode();
                 //let decoded = ogfallback;
@@ -822,9 +822,17 @@ function Track(trackname) {
             //this.createStartTimer(BUFFER_MS);
              freshstart = 1;
         }
-        var source = MainAudioContext.createBufferSource();
-        source.connect(MainAudioContext.destination);
+        var source = MainAudioContext.createBufferSource();        
+        //source.connect(MainAudioContext.destination);
         source.buffer = buffer;
+        
+        // volume
+        if(!GainNode) {
+            GainNode = MainAudioContext.createGain();
+            GainNode.connect(MainAudioContext.destination);
+        }
+        source.connect(GainNode);
+        
         if (isFirstPart) {
             this.astart = skiptime - start;
         }
@@ -1269,6 +1277,10 @@ nextbtn.addEventListener('click', function (e) {
     }
 });
 
+document.getElementById("volslider").addEventListener('input', function(e) {
+    GainNode.gain.setValueAtTime(e.target.value, MainAudioContext.currentTime);
+});
+
 dbarea.addEventListener('click', function (e) {
     if (e.target !== e.currentTarget) {
         console.log(e.target + ' clicked with text ' + e.target.textContent);
@@ -1347,7 +1359,7 @@ dbarea.addEventListener('click', function (e) {
     }        
     MainAudioContext = CreateAudioContext();
     NextBufferTime = MainAudioContext.currentTime;
-    
+
     // update url bar with parameters
     _BuildPTrack();
     
