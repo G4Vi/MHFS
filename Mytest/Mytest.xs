@@ -372,6 +372,32 @@ void * _mytest_get_wav_seg(_mytest *mytest, uint64_t start, size_t count)
     return (void*)data;
 }
 
+void _mytest_on_meta(void* pUserData, drflac_metadata* pMetadata)
+{
+    pTHX = *(tTHX*)pUserData;
+    if(pMetadata->type == DRFLAC_METADATA_BLOCK_TYPE_VORBIS_COMMENT)
+    {
+        fprintf(stderr, "Found vorbiscomment\n");
+
+        AV *array = newAV();
+        drflac_vorbis_comment_iterator ci;
+        drflac_init_vorbis_comment_iterator(&ci, pMetadata->data.vorbis_comment.commentCount, pMetadata->data.vorbis_comment.pComments);
+        const char *res;
+        uint32_t commentlen;
+        while((res = drflac_next_vorbis_comment(&ci, &commentlen)) != NULL)
+        {
+            char buf[256];
+            uint32_t tocopy = (sizeof(buf) > commentlen) ? commentlen : sizeof(buf) - 1;
+            memcpy(buf, res, tocopy);
+            buf[tocopy] = '\0';
+            fprintf(stderr, "comment: %s\n", buf);
+            SV *theSV = newSVpv(buf, tocopy);
+            av_push(array, theSV);
+        }
+        *(AV**)pUserData = array;        
+    }
+}
+
 void _mytest_delete(_mytest *mytest)
 {
 	drflac_close(mytest->pFlac);
@@ -493,5 +519,20 @@ get_wav_seg(mytest, start, count)
             data = &PL_sv_undef;
         }
     RETVAL = data;
+    OUTPUT:
+        RETVAL
+
+AV *
+get_vorbis_comments(filename)
+        const char *filename
+	CODE:
+        void *thedata = aTHX;
+    	drflac *pFlac = drflac_open_file_with_metadata(filename, &_mytest_on_meta, &thedata, NULL);
+        drflac_close(pFlac);
+        if(thedata == aTHX) {
+            thedata = &PL_sv_undef;
+        }
+    RETVAL = thedata;
+    sv_2mortal((SV*)RETVAL);
     OUTPUT:
         RETVAL

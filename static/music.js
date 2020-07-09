@@ -594,8 +594,36 @@ function TrackDownload(track, onDownloaded, seg) {
             redoDL();            
         });
     }
-    
-    
+
+    // grab metadata
+    if(! track.metadata) {
+        let metaurl = 'music_resources?name=' + encodeURIComponent(track.trackname);
+        Download(metaurl, function(req) {
+            let decodedString = String.fromCharCode.apply(null, new Uint8Array(req.response));
+            track.metadata = JSON.parse(decodedString);
+            console.log('track metadata ' + track.metadata);
+
+            // Update the displayed metadata
+            function SetPlayTextTrack(thetrack, extratext) {
+                //SetPlayText(track.metadata.TITLE + ' - ' + track.metadata.ARTIST + extratext );
+            }
+
+            if(CurrentTrack > 0) {
+                if(Tracks[CurrentTrack-1] && (Tracks[CurrentTrack-1].trackname === track.trackname)) {
+                
+                }
+            }           
+
+            if(Tracks[CurrentTrack] && (Tracks[CurrentTrack].trackname === track.trackname)) {
+                SetPlayTextTrack(track, '');
+            }
+
+            if(Tracks[CurrentTrack+1] && (Tracks[CurrentTrack+1].trackname === track.trackname)) {
+
+            }            
+            
+        }, function(){}, function(){});
+    }    
 }
 
 function Track(trackname) {

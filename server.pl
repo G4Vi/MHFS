@@ -2472,11 +2472,18 @@ package MusicLibrary {
     use Cwd qw(abs_path getcwd);
     use File::Find;
     use Data::Dumper;
+    use Devel::Peek;
     use Fcntl ':mode';
     use File::stat;    
     use File::Basename;
     use Scalar::Util qw(looks_like_number);   
     HTTP::BS::Server::Util->import();
+    BEGIN {
+        if( ! (eval "use JSON; 1")) {
+            eval "use JSON::PP; 1" or die "No implementation of JSON available, see .doc/dependencies.txt";
+            warn "plugin(MusicLibrary): Using PurePerl version of JSON (JSON::PP), see .doc/dependencies.txt about installing faster version";
+        }
+    }
     use HTML::Entities;
     use Encode qw(decode encode);
     use Any::URI::Escape;
@@ -3114,6 +3121,26 @@ package MusicLibrary {
         $request->Send404;
     }
 
+    sub SendResources {        
+        my ($self, $request) = @_;
+        foreach my $source (@{$self->{'sources'}}) {
+            my $node = FindInLibrary($source->{'lib'}, $request->{'qs'}{'name'});
+            next if ! $node;
+            my $tfile = $source->{'folder'} . '/' . $request->{'qs'}{'name'};
+            my $comments = Mytest::get_vorbis_comments($tfile);
+            my $commenthash = {};
+            foreach my $comment (@{$comments}) {
+                my ($key, $value) = split('=', $comment);
+                $commenthash->{$key} = $value;
+            }
+            $request->SendLocalBuf(encode_utf8(encode_json($commenthash)), "text/json; charset=utf-8");
+            return 1;             
+        }
+        say "SendFromLibrary: did not find in library, 404ing";
+        say "name: " . $request->{'qs'}{'name'};
+        $request->Send404;
+    }
+
     sub UpdateLibrariesAsync {
         my ($self, $evp, $onUpdateEnd) = @_;
         HTTP::BS::Server::Process->new_output_child($evp, sub {
@@ -3177,6 +3204,10 @@ package MusicLibrary {
             [ '/music_dl', sub {
                 my ($request) = @_;
                 return $self->SendFromLibrary($request);
+            }],
+            [ '/music_resources', sub {
+                my ($request) = @_;
+                return $self->SendResources($request);
             }],                         
         ];
 
