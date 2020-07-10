@@ -1247,12 +1247,14 @@ seekbar.addEventListener('change', function (e) {
     STAHPPossibleDownloads();
     
     // lie to not jostle the seekbar
-    let faketime = (-MainAudioContext.currentTime + Number(seekbar.value));
-    SetCurtimeText(faketime);
     Astart = null;
+    SetCurtimeText(Number(seekbar.value));
     
+    if(Math.abs(Tracks[CurrentTrack].duration - Number(seekbar.value)) <= 0.0002) {    
+        seekbar.value = Tracks[CurrentTrack].duration - 0.001;
+    }
     Tracks[CurrentTrack].queue(Number(seekbar.value), MainAudioContext.currentTime);               
-    SetCurtimeText(Number(seekbar.value));          
+             
     console.log('END SBAR UPDATE');        
 });
 
