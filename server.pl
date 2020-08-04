@@ -2602,10 +2602,7 @@ package MusicLibrary {
         my $userhost = $source->{'userhost'};
         my $port = $source->{'port'};
         my $folder = $source->{'folder'};
-        
-        #system ('ssh', $userhost, '-p', $port, 'mkdir', '-p', 'MHFS');
-        #system ('rsync', '-az', '-e', "ssh -p $port", $bin, "$userhost:MHFS/" . basename($bin));
-        #system ('rsync', '-az', '-e', "ssh -p $port", $aslibrary, "$userhost:MHFS/" . basename($aslibrary));        
+          
         my $buf = shell_stdout('ssh', $userhost, '-p', $port, 'MHFS/.bin/aslibrary.pl', 'MHFS/server.pl', $folder);
         if(! $buf) {
             say "failed to read";
@@ -3037,7 +3034,7 @@ package MusicLibrary {
                 $source->{'type'} = 'ssh';
                 $lib = $self->BuildRemoteLibrary($source);
                 if(!$source->{'httphost'}) {
-                    $source->{'httphost'} =  ssh_stdout($source, 'curl', 'ipinfo.io/ip');
+                    $source->{'httphost'} =  ssh_stdout($source, 'dig', '@resolver1.opendns.com', 'ANY', 'myip.opendns.com', '+short');
                     if(!  $source->{'httphost'}) {
                         $lib = undef;
                     }
@@ -3764,7 +3761,7 @@ sub get_video {
         }
         $video{'out_base'} = $video{'src_file'}{'name'};
         if($video{'out_fmt'} eq 'm3u8') {
-            my $m3u8 = video_get_m3u8(\%video, 'http://' . $SETTINGS->{'DOMAIN'} . ':8000' . $request->{'path'}{'unescapepath'} . '?name=');
+            my $m3u8 = video_get_m3u8(\%video, 'http://' . $SETTINGS->{'DOMAIN'} . ':' . $SETTINGS->{'PORT'} . $request->{'path'}{'unescapepath'} . '?name=');
             #$request->{'outheaders'}{'Icy-Name'} = $video{'fullname'};
             $video{'src_file'}{'ext'} = $video{'src_file'}{'ext'} ? '.'. $video{'src_file'}{'ext'} : '';
             $request->SendLocalBuf($$m3u8, 'application/x-mpegURL', {'filename' => $video{'src_file'}{'name'} . $video{'src_file'}{'ext'} . '.m3u8'});
@@ -4071,7 +4068,7 @@ sub ptp_request {
 sub rtxmlrpc {
     my ($evp, $params, $cb, $stdin) = @_;
     my $process;
-    my @cmd = ('rtxmlrpc', @$params, '--config-dir', '~/MHFS/.conf/.pyroscope/');
+    my @cmd = ('rtxmlrpc', @$params, '--config-dir', $SETTINGS->{'CFGDIR'} . '/.pyroscope/');
     $process    = output_process($evp, \@cmd, sub {
         my ($output, $error) = @_;
         chomp $output;
