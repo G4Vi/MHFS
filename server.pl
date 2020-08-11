@@ -2671,10 +2671,10 @@ package MusicLibrary {
 
         my $gapless_template = HTML::Template->new(filename => 'static/music_gapless.html', path => $self->{'settings'}{'DOCUMENTROOT'} );
         $gapless_template->param(INLINE => 1);
-        #$gapless_template->param(musicdb => $buf);
-        $gapless_template->param(musicdb => '');
+        $gapless_template->param(musicdb => $buf);
+        #$gapless_template->param(musicdb => '');       
         $self->{'html_gapless'} = encode_utf8($gapless_template->output);
-        $self->{'musicdbhtml'} = encode_utf8($buf);
+        #$self->{'musicdbhtml'} = encode_utf8($buf);
     }
 
     sub SendLibrary {

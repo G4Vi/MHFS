@@ -20,7 +20,7 @@
 </div>
 <div class="body row scroll-y">
     <div id="musicdb">
-        <TMPL_VAR NAME="musicdb">
+        
     </div>
 </div>
 <div class="footer row" style="background-color:blue;">  
@@ -40,9 +40,12 @@
   <audio id="silence" src="static/250ms_silence.mp3"></audio>
 </div>
 <script src="static/music.js"></script>
+<div id="actualmusicdb" style="display:none">
+    <TMPL_VAR NAME="musicdb">
+</div>
 <script>
     // load the DB
-    let urlParams = new URLSearchParams(window.location.search);
+    /*let urlParams = new URLSearchParams(window.location.search);
     urlParams.append('fmt', 'musicdbhtml');
     let myRequest = new Request('music?'+urlParams.toString());
     fetch(myRequest).then(function(response) {
@@ -52,7 +55,11 @@
         return response.text();        
     }).then((html) => {
         document.getElementById("musicdb").innerHTML = html;
-    });    
+    });
+    */
+    //document.getElementById("tempmusicdb").replaceWith(document.getElementById("musicdb"));
+    //document.getElementById("musicdb").style.display = null; 
+    document.getElementById("musicdb").innerHTML = document.getElementById("actualmusicdb").innerHTML;       
 </script>
 </body>
 </html>
