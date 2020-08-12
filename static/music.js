@@ -471,8 +471,10 @@ function TrackDownload(track, onDownloaded, seg) {
             return;
         }
 
-        toDL += '&part=' + seg;      
-       
+        // if doing a decode download ...
+
+        // serverside segmenting mhfs download
+        toDL += '&part=' + seg;       
         this.download = Download(toDL, function (req) {
             track.backofftime = 1000;            
             console.log('DL ' + toDL + ' (part) success, beginning decode');

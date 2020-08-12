@@ -44,8 +44,7 @@ if(!theParams.get('noworker')) {
     
        let res = await myp;
        return res;
-    };
-    
+    };    
     Object.defineProperty(window, 'FlacToWav', {
         value: _FlacToWav,
         configurable: false,
@@ -68,13 +67,37 @@ if(!theParams.get('noworker')) {
     
        let res = await myp;
        return res;
-    };
-    
+    };    
     Object.defineProperty(window, 'FLACToFloat32', {
         value: _FLACToFloat32,
         configurable: false,
         writable: false
     });
+
+    const _FLACURLToFloat32 = async(thedata) => {
+        let myp = new Promise(function(resolve) {       
+            MusicWorker.onmessage = function(event) {
+                if(event.data.message == 'FLACURLToFloat32') {
+                    let res = [];
+                    res[0] = event.data.metadata;
+                    res[1] = [];
+                    event.data.chandata.forEach( elm => res[1].push(new Float32Array(elm)));                     
+                    resolve(res);
+                }           
+            };
+            MusicWorker.postMessage({'message' : 'FLACURLToFloat32',  'url': thedata});       
+        });
+    
+       let res = await myp;
+       return res;
+    };    
+    Object.defineProperty(window, 'FLACURLToFloat32', {
+        value: _FLACURLToFloat32,
+        configurable: false,
+        writable: false
+    });
+
+
 }
 else {
     loadScripts(['static/music_libflac.js'], function(){});

@@ -191,3 +191,202 @@ const FLACToFloat32 = async (thedata) => {
 
     return [metaData, chanData];
 };
+
+
+
+const decodeFlacURL = function(theURL, decData, isVerify, isOgg){
+
+	var flac_decoder,
+		VERIFY = true,
+		flac_ok = 1,
+		meta_data;
+
+    var currentDataOffset = 0;
+    
+    var size;
+    {
+        var xhr = new XMLHttpRequest();
+        xhr.open("GET", theURL, false);  // synchronous request
+        xhr.send(null);
+        size = xhr.getResponseHeader("Content-Length");
+    }
+   
+
+	VERIFY = isVerify || false;
+
+	/** @memberOf decode */
+	function read_callback_fn(bufferSize){
+
+		console.log('  decode read callback, buffer bytes max=', bufferSize);
+
+		var end = currentDataOffset === size? -1 : Math.min(currentDataOffset + bufferSize, size);
+
+		var _buffer;
+		var numberOfReadBytes;
+		if(end !== -1){
+            var xhr = new XMLHttpRequest();
+            
+            xhr.open("GET", theURL, false);  // synchronous request
+            xhr.responseType = 'arraybuffer';
+            xhr.setRequestHeader('Range', 'bytes=' + currentDataOffset + '-' + (end-1));
+            xhr.send(null);
+            let todec = new Uint8Array(xhr.response.byteLength);
+            todec.set(new Uint8Array(xhr.response));
+            _buffer = todec;            
+            //_buffer = binData.subarray(currentDataOffset, end);
+			numberOfReadBytes = end - currentDataOffset;
+
+			currentDataOffset = end;
+		} else {
+			numberOfReadBytes = 0;
+		}
+
+		return {buffer: _buffer, readDataLength: numberOfReadBytes, error: false};
+	}
+
+	/** @memberOf decode */
+	function write_callback_fn(buffer){
+		// buffer is the decoded audio data, Uint8Array
+//	    console.log('decode write callback', buffer);
+		decData.push(buffer);
+	}
+
+	/** @memberOf decode */
+	function metadata_callback_fn(data){
+		console.info('meta data: ', data);
+		meta_data = data;
+	}
+
+	/** @memberOf decode */
+	function error_callback_fn(err, errMsg){
+		console.log('decode error callback', err, errMsg);
+	}
+
+	// check: is file a compatible flac-file?
+	/*if (flac_file_processing_check_flac_format(binData, isOgg) == false){
+		var container = isOgg? 'OGG/' : '';
+		return {error: 'Wrong '+container+'FLAC file format', status: 1};
+	}*/
+
+	// init decoder
+	flac_decoder = Flac.create_libflac_decoder(VERIFY);
+
+	if (flac_decoder != 0){
+		var init_status = Flac.init_decoder_stream(flac_decoder, read_callback_fn, write_callback_fn, error_callback_fn, metadata_callback_fn, isOgg);
+		flac_ok &= init_status == 0;
+		console.log("flac init     : " + flac_ok);//DEBUG
+	} else {
+		var msg = 'Error initializing the decoder.';
+		console.error(msg);
+		return {error: msg, status: 1};
+	}
+
+	// decode flac data
+
+	var isDecodePartial = true;
+	var flac_return = 1;
+	if(!isDecodePartial){
+		//variant 1: decode stream at once / completely
+
+		flac_return &= Flac.FLAC__stream_decoder_process_until_end_of_stream(flac_decoder);
+		if (flac_return != true){
+			console.error('encountered error during decoding data');
+		}
+
+	} else {
+		//variant 2: decode data chunks
+
+		//request to decode data chunks until end-of-stream is reached:
+		var state = 0;
+		while(state <= 3 && flac_return != false){
+
+			flac_return &= Flac.FLAC__stream_decoder_process_single(flac_decoder);
+			//need to check decoder state: state == 4: end of stream ( > 4: error)
+			state = Flac.FLAC__stream_decoder_get_state(flac_decoder);
+		}
+
+		flac_ok &= flac_return != false
+	}
+
+	// finish Decoding
+	flac_ok &= Flac.FLAC__stream_decoder_finish(flac_decoder);
+	if(flac_ok != 1){
+		//TODO get/return description for state
+		flac_ok = Flac.FLAC__stream_decoder_get_state(flac_decoder);
+	}
+
+	Flac.FLAC__stream_decoder_delete(flac_decoder);
+
+	return {metaData: meta_data, status: flac_ok};
+}
+
+
+const FLACURLToFloat32 = async (theURL) => {
+    while(typeof Flac === 'undefined') {
+        console.log('FLACToFloat32, no Flac sleeping 5');
+        await sleep(5);
+    }
+    if(!Flac.isReady()) {
+        await waitForEvent(Flac, 'ready');
+    }
+    let decData = [];
+    let result = decodeFlacURL(theURL, decData, true);
+    // decData's arrays have little endian sample values
+    //console.log('decoded data array: ', decData);
+    if(result.error){
+        console.log(result.error);
+        return;
+    }
+    let metaData = result.metaData;
+        if(metaData){
+                for(var n in metaData){
+                        console.log( n + ' ' +  metaData[n]);
+                }
+    }
+
+    let chanData = [];
+    let chanIndex = [];
+    for(let i = 0; i < metaData.channels; i++) {
+        chanData[i] = new Float32Array(metaData.total_samples);
+        chanIndex[i] = 0;
+    }
+
+    if(metaData.bitsPerSample == 16) {
+        for(let i = 0; i < decData.length; i++) {
+            for(let j = 0; j < metaData.channels; j++) {
+                for(let k = 0; k < decData[i][j].length; k+=2) {
+                    chanData[j][chanIndex[j]] = toint16(decData[i][j][k], decData[i][j][k+1]) / 0x7FFF;
+                    if((chanData[j][chanIndex[j]] > 1) || (chanData[j][chanIndex[j]] < -1)) {
+                        console.log('CLAMPING FLOAT');
+                        if(chanData[j][chanIndex[j]] > 1) chanData[j][chanIndex[j]] = 1;
+                        if(chanData[j][chanIndex[j]] < -1) chanData[j][chanIndex[j]] = -1;
+                    }
+                    chanIndex[j]++;
+                }
+            }
+        }
+    }
+    else if(metaData.bitsPerSample == 24) {
+        for(let i = 0; i < decData.length; i++) {
+            for(let j = 0; j < metaData.channels; j++) {
+                for(let k = 0; k < decData[i][j].length; k+=4) {
+                    //chanData[j][chanIndex[j]] = toint24(decData[i][j][k], decData[i][j][k+1],decData[i][j][k+2]) / 0x7FFFFF;
+                    // the above works, but libflac js outputs int32s, so this can be done ~ cheaper with no branching conversion
+                    chanData[j][chanIndex[j]] = toint32(decData[i][j][k], decData[i][j][k+1],decData[i][j][k+2], decData[i][j][k+3]) / 0x7FFFFF;
+                    //chanData[j][chanIndex[j]] *= 0.1; // volume by scaling float32
+                    if((chanData[j][chanIndex[j]] > 1) || (chanData[j][chanIndex[j]] < -1)) {
+                        console.log('CLAMPING FLOAT');
+                        if(chanData[j][chanIndex[j]] > 1) chanData[j][chanIndex[j]] = 1;
+                        if(chanData[j][chanIndex[j]] < -1) chanData[j][chanIndex[j]] = -1;
+                    }
+                    chanIndex[j]++;
+                }
+            }
+        }
+    }
+    else {
+        throw(metaData.bitsPerSample + " bps not handled");
+    }
+
+    return [metaData, chanData];
+};
