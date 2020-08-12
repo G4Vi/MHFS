@@ -10,8 +10,8 @@
 <TMPL_ELSE>
 <script src="static/music_async.js" async></script>
 <link rel="stylesheet" href="static/music.css">
-</TMPL_IF>
 <link rel="preload" href="static/music.js" as="script">
+</TMPL_IF>
 <title>Music</title>
 </head>
 <body>
@@ -23,7 +23,7 @@
         
     </div>
 </div>
-<div class="footer row" style="background-color:blue;">  
+<div class="footer row">  
     <table border="1" width="80%">
     <tr><th>Previous</th><th>Now Playing</th><th>Next</th></tr>
 	<tr><td><div id="prev_text"></div></td><td><div id="play_text"></div></td><td><div id="next_text"></div></td></tr>  
@@ -39,7 +39,13 @@
   <!-- <iframe src="static/250ms_silence.mp3" allow="autoplay" id="audio" style="display:none"></iframe> -->
   <audio id="silence" src="static/250ms_silence.mp3"></audio>
 </div>
-<script src="static/music.js"></script>
+<TMPL_IF NAME="INLINE">
+    <script>
+    <TMPL_INCLUDE NAME="static/music.js">
+    </script>
+<TMPL_ELSE>
+    <script src="static/music.js" async></script>
+</TMPL_IF>
 <div id="actualmusicdb" style="display:none">
     <TMPL_VAR NAME="musicdb">
 </div>
