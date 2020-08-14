@@ -20,6 +20,7 @@ var BITDEPTH;
 var USESEGMENTS;
 var USEINCREMENTAL;
 var USEWAV;
+var USEDECDL;
 var PTrackUrlParams;
 const BUFFER_MS = 300;
 const BUFFER_S = (BUFFER_MS / 1000);
@@ -472,6 +473,37 @@ function TrackDownload(track, onDownloaded, seg) {
         }
 
         // if doing a decode download ...
+        if(USEDECDL) {
+            track.maxsegduration = 5;
+            let startTime = track.maxsegduration * (seg-1);
+            (async function(){
+                if(!track.nwdrflac) {
+                    track.nwdrflac = await NetworkDrFlac_open(toDL);
+                    if(!track.nwdrflac) {
+                        console.error('failed to NetworkDrFlac_open');
+                        return;
+                    }
+                    track.duration = track.nwdrflac.totalPCMFrameCount / track.nwdrflac.sampleRate;
+                    track.numsegments = Math.round(track.duration/track.maxsegduration);
+                }
+
+                let startFrame = startTime * track.nwdrflac.sampleRate;
+                let count = track.maxsegduration * track.nwdrflac.sampleRate;
+                let fdecoded = await NetworkDrFlac_read_pcm_frames_s16_to_wav(track.nwdrflac, startFrame, count);
+                if(! fdecoded){
+                    console.error('failed to NetworkDrFlac_read_pcm_frames_s16_to_wav');
+                    return;
+                }
+                let decoded = await MainAudioContext.decodeAudioData(fdecoded);
+                if(! fdecoded){
+                    console.error('failed to MainAudioContext.decodeAudioData');
+                    return;
+                }
+                onDecoded(decoded);
+
+            })();
+            return;
+        }
 
         // serverside segmenting mhfs download
         toDL += '&part=' + seg;       
@@ -1373,6 +1405,7 @@ dbarea.addEventListener('click', function (e) {
     BITDEPTH        = urlParams.get('bitdepth');
     USESEGMENTS     = urlParams.get('segments');
     USEINCREMENTAL  = urlParams.get("inc");
+    USEDECDL        = urlParams.get("decdl");
     if((USESEGMENTS === null) && (USEINCREMENTAL === null)) {
         USESEGMENTS = 1;
         console.log('default USESEGMENTS');
@@ -1388,7 +1421,12 @@ dbarea.addEventListener('click', function (e) {
     else {
         console.log('USESEGMENTS');
         USESEGMENTS = Number(USESEGMENTS);
-    }        
+    } 
+    
+    if(USEDECDL == null){
+        //USEDECDL = 1;
+    }
+
     MainAudioContext = CreateAudioContext();
     NextBufferTime = MainAudioContext.currentTime;
 

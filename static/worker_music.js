@@ -1,5 +1,5 @@
 'use strict'
-importScripts('music_libflac.js');
+importScripts('music_libflac.js', 'music_drflac.js');
 
 async function convertToWav(e) {
     let ftwdata = await FlacToWav(new Uint8Array(e.data.flac));
@@ -19,7 +19,7 @@ async function convertToFloat32(e) {
 }
 
 async function convertURLToFloat32(e) {
-    let ftwdata = await FLACURLToFloat32('../'+e.data.url);
+    let ftwdata = await FLACURLToFloat32('../'+e.data.url, e.data.starttime, e.data.duration);
     let bufas = [];
     ftwdata[1].forEach(elm => bufas.push(elm.buffer));
     let result = { 'message' : 'FLACURLToFloat32', 'metadata' : ftwdata[0], 'chandata' : bufas};    

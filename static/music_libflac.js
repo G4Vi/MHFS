@@ -42,19 +42,32 @@ if(!wasmDisable && isWebAssemblySupported()){
 	lib = 'libflac.'+variant.replace('/', '.')+'js';
 }
 var libFile = global.FLAC_SCRIPT_LOCATION.replace('//','/') + lib;
-//importScripts(libFile, 'libflac.js/decode-func.js', 'libflac.js/util/data-util.js');
 
 loadScripts([libFile, startPath+'libflac.js/decode-func.js', startPath+'libflac.js/util/data-util.js'], function(){});
 
-const sleep = m => new Promise(r => setTimeout(r, m));
-
-const waitForEvent = (obj, event) => {
-return new Promise(function(resolve) {
-    obj.on(event, function() {
-        resolve();
+function DeclareGlobalFunc(name, value) {
+    Object.defineProperty(global, name, {
+        value: value,
+        configurable: false,
+        writable: false
     });
-});
 };
+
+if(typeof sleep === 'undefined') {
+    const sleep = m => new Promise(r => setTimeout(r, m));
+    DeclareGlobalFunc('sleep', sleep);
+}
+
+if(typeof waitForEvent  === 'undefined') {
+    const waitForEvent = (obj, event) => {
+        return new Promise(function(resolve) {
+            obj.on(event, function() {
+                resolve();
+            });
+        });
+    };
+    DeclareGlobalFunc('waitForEvent', waitForEvent);
+}
 
 const toWav =  (metadata, decData) => {
     let samples = interleave(decData, metadata.channels, metadata.bitsPerSample);
@@ -321,6 +334,7 @@ const decodeFlacURL = function(theURL, decData, isVerify, isOgg){
 }
 
 
+/*
 const FLACURLToFloat32 = async (theURL) => {
     while(typeof Flac === 'undefined') {
         console.log('FLACToFloat32, no Flac sleeping 5');
@@ -390,3 +404,5 @@ const FLACURLToFloat32 = async (theURL) => {
 
     return [metaData, chanData];
 };
+*/
+

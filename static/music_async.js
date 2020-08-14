@@ -74,7 +74,7 @@ if(!theParams.get('noworker')) {
         writable: false
     });
 
-    const _FLACURLToFloat32 = async(thedata) => {
+    const _FLACURLToFloat32 = async(theurl, startime, duration) => {
         let myp = new Promise(function(resolve) {       
             MusicWorker.onmessage = function(event) {
                 if(event.data.message == 'FLACURLToFloat32') {
@@ -85,7 +85,7 @@ if(!theParams.get('noworker')) {
                     resolve(res);
                 }           
             };
-            MusicWorker.postMessage({'message' : 'FLACURLToFloat32',  'url': thedata});       
+            MusicWorker.postMessage({'message' : 'FLACURLToFloat32',  'url': theurl, 'starttime':starttime, 'duration':duration});       
         });
     
        let res = await myp;
@@ -96,10 +96,9 @@ if(!theParams.get('noworker')) {
         configurable: false,
         writable: false
     });
-
-
 }
 else {
     loadScripts(['static/music_libflac.js'], function(){});
+    loadScripts(['static/music_drflac.js'], function(){});
 }
 
