@@ -474,7 +474,7 @@ function TrackDownload(track, onDownloaded, seg) {
 
         // if doing a decode download ...
         if(USEDECDL) {
-            track.maxsegduration = 5;
+            track.maxsegduration = 1;
             let startTime = track.maxsegduration * (seg-1);
             (async function(){
                 if(!track.nwdrflac) {
@@ -484,7 +484,7 @@ function TrackDownload(track, onDownloaded, seg) {
                         return;
                     }
                     track.duration = track.nwdrflac.totalPCMFrameCount / track.nwdrflac.sampleRate;
-                    track.numsegments = Math.round(track.duration/track.maxsegduration);
+                    track.numsegments = Math.ceil(track.duration/track.maxsegduration);
                 }
 
                 let startFrame = startTime * track.nwdrflac.sampleRate;
