@@ -28,6 +28,7 @@ function addScript(scriptUrl, cb) {
 
 
 let theParams = new URLSearchParams(window.location.search);
+let NOWORKER;
 //let NOWORKER = 1;
 if(!theParams.get('noworker') && !NOWORKER) {
     window.MusicWorker = new Worker('static/worker_music.js');
