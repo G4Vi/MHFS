@@ -476,8 +476,9 @@ function TrackDownload(track, onDownloaded, seg) {
         if(USEDECDL) {
             track.maxsegduration = 1;
             let startTime = track.maxsegduration * (seg-1);
-            (async function(){
-                if(!track.nwdrflac) {
+            let currentDownload = this;           
+            let ndrpromise = async function() {
+                if(!track.nwdrflac) {                  
                     track.nwdrflac = await NetworkDrFlac_open(toDL);
                     if(!track.nwdrflac) {
                         console.error('failed to NetworkDrFlac_open');
@@ -486,22 +487,32 @@ function TrackDownload(track, onDownloaded, seg) {
                     track.duration = track.nwdrflac.totalPCMFrameCount / track.nwdrflac.sampleRate;
                     track.numsegments = Math.ceil(track.duration/track.maxsegduration);
                 }
-
+    
                 let startFrame = startTime * track.nwdrflac.sampleRate;
                 let count = track.maxsegduration * track.nwdrflac.sampleRate;
-                let fdecoded = await NetworkDrFlac_read_pcm_frames_s16_to_wav(track.nwdrflac, startFrame, count);
+                let fdecoded = await NetworkDrFlac_read_pcm_frames_to_wav(track.nwdrflac, startFrame, count);
                 if(! fdecoded){
-                    console.error('failed to NetworkDrFlac_read_pcm_frames_s16_to_wav');
+                    console.error('failed to NetworkDrFlac_read_pcm_frames_to_wav');
                     return;
                 }
                 let decoded = await MainAudioContext.decodeAudioData(fdecoded);
-                if(! fdecoded){
+                if(! decoded){
                     console.error('failed to MainAudioContext.decodeAudioData');
                     return;
                 }
-                onDecoded(decoded);
-
+                return decoded;                
+            }();
+            currentDownload.download = new NetworkDrFlac_Download();
+            (async function(){                               
+                let ndrres = await ndrpromise;
+                if(!ndrres || currentDownload.download.isinvalid) {
+                    // should we ever redo?
+                }
+                else {
+                    onDecoded(ndrres);
+                }        
             })();
+            
             return;
         }
 

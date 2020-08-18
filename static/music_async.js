@@ -28,8 +28,8 @@ function addScript(scriptUrl, cb) {
 
 
 let theParams = new URLSearchParams(window.location.search);
-
-if(!theParams.get('noworker')) {
+//let NOWORKER = 1;
+if(!theParams.get('noworker') && !NOWORKER) {
     window.MusicWorker = new Worker('static/worker_music.js');
 
     const _FlacToWav = async(thedata) => {

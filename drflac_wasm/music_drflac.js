@@ -60,6 +60,14 @@ function DeclareGlobalFunc(name, value) {
     });
 };
 
+function DeclareGlobal(name, value) {
+    Object.defineProperty(global, name, {
+        value: value,
+        //configurable: false,
+        writable: true
+    });
+};
+
 loadScripts([startPath+'drflac.js'], function(){
     /*
     const get_audio = Module.cwrap('get_audio', "number", ["string", "number", "number"], {async : true});
@@ -94,6 +102,7 @@ loadScripts([startPath+'drflac.js'], function(){
     DeclareGlobalFunc('network_drflac_close', network_drflac_close);
 
     Module.onRuntimeInitialized = function() {
+        console.log('NetworkDrFlac is ready!');
         global.DrFlac.ready = true;
         if(global.DrFlac.on_ready) {
             global.DrFlac.on_ready();
@@ -120,21 +129,40 @@ if(typeof waitForEvent  === 'undefined') {
 
 
 
-const NetworkDrFlac_load = async function() {
+const NetworkDrFlac_load = function() {
+    console.log('NetworkDrFlac_load begin');
     while(typeof DrFlac === 'undefined') {
         console.log('music_drflac, no drflac sleeping 5ms');
-        await sleep(5);
+        return sleep(5);
     }
     if(!DrFlac.ready) {
         console.log('music_drflac, waiting for drflac to be ready');
-        await waitForEvent(DrFlac, 'ready');
+        return waitForEvent(DrFlac, 'ready');
     }
+    console.log('NetworkDrFlac_load end');
+    return;
 };
 
-const NetworkDrFlac_open = async(theURL) => {
+const NetworkDrFlacAsyncCall = async function (toRun) {
+    while(global.NetworkDrFlac_Promise) {
+        await global.NetworkDrFlac_Promise;       
+    }
+    console.log('NetworkDrFlac launching promise');
+    global.NetworkDrFlac_Promise = toRun();
+    let retVal = await global.NetworkDrFlac_Promise;
+    global.NetworkDrFlac_Promise = null;
+    return retVal;    
+};
+
+const NetworkDrFlac_open = async(theURL) => {    
     await NetworkDrFlac_load();
     let nwdrflac = {};
-    nwdrflac.ptr = await network_drflac_open(theURL);
+    console.log('NetworkDrFlac loaded');
+    
+    nwdrflac.ptr = await NetworkDrFlacAsyncCall(function() {
+        return network_drflac_open(theURL);
+    });   
+    
     nwdrflac.totalPCMFrameCount = network_drflac_totalPCMFrameCount(nwdrflac.ptr);
     nwdrflac.sampleRate = network_drflac_sampleRate(nwdrflac.ptr);
     nwdrflac.bitsPerSample = network_drflac_bitsPerSample(nwdrflac.ptr);
@@ -146,10 +174,20 @@ const NetworkDrFlac_close = function(ndrflac) {
     network_drflac_close(ndrflac);
 };
 
-const NetworkDrFlac_read_pcm_frames_s16_to_wav = async(ndrflac, start, count) => {
-    let destdata = Module._malloc(44+ (count*2*ndrflac.channels));
-    let actualsize = await network_drflac_read_pcm_frames_s16_to_wav(ndrflac.ptr, start, count, destdata); 
-    let todec
+const NetworkDrFlac_read_pcm_frames_to_wav = async(ndrflac, start, count) => {
+    if(ndrflac.bitsPerSample != 16)
+    {
+        console.error('bps not 16');
+        return;
+    }
+    let pcm_frame_size = (ndrflac.bitsPerSample == 16) ? 2*ndrflac.channels : 4*ndrflac.channels;
+    let destdata = Module._malloc(44+ (count*pcm_frame_size));    
+    //let actualsize = await network_drflac_read_pcm_frames_s16_to_wav(ndrflac.ptr, start, count, destdata); 
+    
+    let actualsize = await NetworkDrFlacAsyncCall(function() {
+        return network_drflac_read_pcm_frames_s16_to_wav(ndrflac.ptr, start, count, destdata);
+    }); 
+
     if(actualsize > 0) {
         let wavData = new Uint8Array(Module.HEAPU8.buffer, destdata, actualsize);
         let todec = new Uint8Array(actualsize);
@@ -158,7 +196,18 @@ const NetworkDrFlac_read_pcm_frames_s16_to_wav = async(ndrflac, start, count) =>
         return todec.buffer;
     }
     Module._free(destdata);   
-}; 
+};
+
+const NetworkDrFlac_Download = function(thePromise) {    
+    // todo actually stop downloading? can we?
+    this.stop = function() {
+        this.isinvalid = true;              
+    };
+
+    this.abort = function() {
+        this.isinvalid = true;
+    };
+};
 
 
 

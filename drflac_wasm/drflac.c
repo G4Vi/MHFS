@@ -1,6 +1,8 @@
+#include <stdio.h>
 #define DR_FLAC_BUFFER_SIZE 262144
 #define DR_FLAC_IMPLEMENTATION
 #include "dr_flac.h"
+
 typedef float float32_t;
 typedef struct {
     char *url;
@@ -10,7 +12,35 @@ typedef struct {
 } NetworkDrFlac;
 
 #include <emscripten.h>
+
 EM_JS(unsigned, do_fetch, (const char *url, unsigned start, unsigned end, void *bufferOut, uint32_t *filesize), {  
+ function abortableFetch(request, opts) {
+    const controller = new AbortController();
+    const signal = controller.signal;
+
+  return {
+    abort: () => controller.abort(),
+    ready: fetch(request, { ...opts, signal })
+  };
+ }
+var global;
+ if (typeof WorkerGlobalScope !== 'undefined' && self instanceof WorkerGlobalScope) {
+
+    global = self;
+ }
+ else
+ {
+    global = window;
+ }
+
+ function DeclareGlobal(name, value) {
+    Object.defineProperty(global, name, {
+        value: value,
+        configurable: false,
+        writable: true
+    });
+};
+  
   let jsurl = UTF8ToString(url);
   return Asyncify.handleAsync(async () => {
     out("waiting for a fetch");
@@ -18,7 +48,10 @@ EM_JS(unsigned, do_fetch, (const char *url, unsigned start, unsigned end, void *
             method :  'GET',
             headers : { 'Range': 'bytes='+start+'-'+end}      
         });
-    const response = await fetch(request);
+    //const response = await fetch(request);
+
+    DeclareGlobal('NetworkDrFlacFetch', abortableFetch(request));
+    const response = await global.NetworkDrFlacFetch.ready;
     out("got the fetch response");
 
     // store the file size
@@ -35,6 +68,19 @@ EM_JS(unsigned, do_fetch, (const char *url, unsigned start, unsigned end, void *
     dataHeap.set(new Uint8Array(thedata));
     return dataHeap.byteLength;
   });
+});
+
+EM_JS(void, stop_fetch, (void), {
+    var global;
+ if (typeof WorkerGlobalScope !== 'undefined' && self instanceof WorkerGlobalScope) {
+
+    global = self;
+ }
+ else
+ {
+    global = window;
+ }
+ global.NetworkDrFlacFetch.abort();
 });
 
 static size_t on_read_network(void* pUserData, void* bufferOut, size_t bytesToRead)
@@ -71,11 +117,16 @@ static drflac_bool32 on_seek_network(void* pUserData, int offset, drflac_seek_or
     {
         ndrflac->fileoffset = offset;
     }
-    return DRFLAC_FALSE;
+    if((ndrflac->filesize != 0) &&  (ndrflac->fileoffset >= ndrflac->filesize))
+    {
+        return DRFLAC_FALSE;
+    }
+    return DRFLAC_TRUE;
 }
 
 void* network_drflac_open(const char *url)
 {
+    printf("network_drflac: allocating\n");
     NetworkDrFlac *ndrflac = malloc(sizeof(ndrflac));
     unsigned urlbuflen = strlen(url)+1;
     ndrflac->url = malloc(urlbuflen);
