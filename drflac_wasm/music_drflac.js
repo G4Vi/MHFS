@@ -101,6 +101,9 @@ loadScripts([startPath+'drflac.js'], function(){
     const network_drflac_close = Module.cwrap('network_drflac_close', null, ["number"]);
     DeclareGlobalFunc('network_drflac_close', network_drflac_close);
 
+    const network_drflac_abort_current = Module.cwrap('network_drflac_abort_current');
+    DeclareGlobalFunc('network_drflac_abort_current', network_drflac_abort_current);
+
     Module.onRuntimeInitialized = function() {
         console.log('NetworkDrFlac is ready!');
         global.DrFlac.ready = true;
@@ -201,11 +204,13 @@ const NetworkDrFlac_read_pcm_frames_to_wav = async(ndrflac, start, count) => {
 const NetworkDrFlac_Download = function(thePromise) {    
     // todo actually stop downloading? can we?
     this.stop = function() {
-        this.isinvalid = true;              
+        this.isinvalid = true;
+        network_drflac_abort_current();              
     };
 
     this.abort = function() {
         this.isinvalid = true;
+        network_drflac_abort_current();
     };
 };
 
