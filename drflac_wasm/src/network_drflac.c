@@ -1,7 +1,10 @@
 #include <stdio.h>
 #define DR_FLAC_BUFFER_SIZE 262144
+#define DR_FLAC_NO_STDIO
+#define DR_FLAC_NO_OGG
 #define DR_FLAC_IMPLEMENTATION
 #include "dr_flac.h"
+#include <stdbool.h>
 
 typedef float float32_t;
 typedef struct {
@@ -9,89 +12,100 @@ typedef struct {
     unsigned fileoffset;
     drflac *pFlac;
     unsigned filesize;
+    uint8_t startData[1024];
+    bool startOk;
 } NetworkDrFlac;
 
 #include <emscripten.h>
-#include <stdbool.h>
+
 static bool NetworkDrFlac_Cancelled = false;
 
 EM_JS(unsigned, do_fetch, (const char *url, unsigned start, unsigned end, void *bufferOut, uint32_t *filesize), {  
- function abortableFetch(request, opts) {
-    const controller = new AbortController();
-    const signal = controller.signal;
+    
+    function abortableFetch(request) {
+       const controller = new AbortController();
+       const signal = controller.signal;    
+     return {
+       abort: () => controller.abort(),
+       ready: fetch(request, {signal })
+     };
+    }
+    
+    var global;
+    if (typeof WorkerGlobalScope !== 'undefined' && self instanceof WorkerGlobalScope) {
+       global = self;
+    }
+    else
+    {
+       global = window;
+    }
+    
 
-  return {
-    abort: () => controller.abort(),
-    ready: fetch(request, { ...opts, signal })
-  };
- }
-var global;
- if (typeof WorkerGlobalScope !== 'undefined' && self instanceof WorkerGlobalScope) {
-
-    global = self;
- }
- else
- {
-    global = window;
- }
-
- function DeclareGlobal(name, value) {
-    Object.defineProperty(global, name, {
-        value: value,
-        configurable: false,
-        writable: true
-    });
-};
-  
-  let jsurl = UTF8ToString(url);
-
-  return Asyncify.handleAsync(async () => {
-    let request = new Request(jsurl, {
+    function DeclareGlobal(name, value) {
+       Object.defineProperty(global, name, {
+           value: value,
+           configurable: false,
+           writable: true
+       });
+    };
+    
+    let jsurl = UTF8ToString(url);
+    
+    return Asyncify.handleAsync(async () => {
+        
+        let request = new Request(jsurl, {
             method :  'GET',
             headers : { 'Range': 'bytes='+start+'-'+end}      
         });
-
-    try {
-        DeclareGlobal('NetworkDrFlacFetch', abortableFetch(request));
-        out('network_drflac: awaiting fetch: ' + jsurl);
-        const response = await global.NetworkDrFlacFetch.ready;
-        out('network_drflac: awaited fetch ' + jsurl);
-        if(!response || !response.headers) {
-            out("network_drflac: no response for fetch " + jsurl);
+        
+        
+        try {
+            DeclareGlobal('NetworkDrFlacFetch', abortableFetch(request));
+            out('network_drflac: awaiting fetch: ' + jsurl);
+            const response = await global.NetworkDrFlacFetch.ready;
+            out('network_drflac: awaited fetch ' + jsurl);
+            if(!response || !response.headers) {
+                out("network_drflac: no response for fetch " + jsurl);
+                global.NetworkDrFlacFetch = null;
+                return 0;
+            }
+        
+            // store the file size
+            let contentrange = response.headers.get('Content-Range');
+            let re = new RegExp('/([0-9]+)');
+            let res = re.exec(contentrange);
+            if(!res)
+            {
+                out("network_drflac: no Content-Range" + jsurl);
+                global.NetworkDrFlacFetch = null;
+                return 0;
+            }          
+            let size = Number(res[1]);
+            let intSec = new Uint32Array(Module.HEAPU8.buffer, filesize, 1);
+            intSec[0] = size;
+        
+            // store the data
+            const thedata = await response.arrayBuffer();
+            let dataHeap = new Uint8Array(Module.HEAPU8.buffer, bufferOut, thedata.byteLength);
+            dataHeap.set(new Uint8Array(thedata));
+    
+            // return the number of bytes downloaded
+            global.NetworkDrFlacFetch = null;
+            return dataHeap.byteLength;
+        } catch(error) {
+            console.error(error + ' with ' + jsurl);
             global.NetworkDrFlacFetch = null;
             return 0;
         }
-    
-        // store the file size
-        let contentrange = response.headers.get('Content-Range');
-        let re = new RegExp('/([0-9]+)');
-        let res = re.exec(contentrange);
-        if(!res)
-        {
-            out("network_drflac: no Content-Range" + jsurl);
-            global.NetworkDrFlacFetch = null;
-            return 0;
-        }          
-        let size = Number(res[1]);
-        let intSec = new Uint32Array(Module.HEAPU8.buffer, filesize, 1);
-        intSec[0] = size;
-    
-        // store the data
-        const thedata = await response.arrayBuffer();
-        let dataHeap = new Uint8Array(Module.HEAPU8.buffer, bufferOut, thedata.byteLength);
-        dataHeap.set(new Uint8Array(thedata));
-
-        // return the number of bytes downloaded
-        global.NetworkDrFlacFetch = null;
-        return dataHeap.byteLength;
-    } catch(error) {
-        console.error(error + ' with ' + jsurl);
-        global.NetworkDrFlacFetch = null;
-        return 0;
-    }
-    });
-  
+        
+    });  
 });
+
+/*
+EM_JS(unsigned, do_fetch, (const char *url, unsigned start, unsigned end, void *bufferOut, uint32_t *filesize), {  
+    return do_fetch_js(url, start, end, bufferOut, filesize);
+});
+*/
 
 static size_t on_read_network(void* pUserData, void* bufferOut, size_t bytesToRead)
 {
@@ -106,7 +120,18 @@ static size_t on_read_network(void* pUserData, void* bufferOut, size_t bytesToRe
         if(endoffset >= nwdrflac->filesize) endoffset = nwdrflac->filesize - 1;     
     }
 
-    size_t bytesread = do_fetch(nwdrflac->url, nwdrflac->fileoffset, endoffset, bufferOut, &nwdrflac->filesize);
+    size_t bytesread;
+    if((endoffset > 1023) || !nwdrflac->startOk)
+    {
+        bytesread = do_fetch(nwdrflac->url, nwdrflac->fileoffset, endoffset, bufferOut, &nwdrflac->filesize);
+    }
+    else
+    {
+        bytesread = endoffset-nwdrflac->fileoffset+1;
+        memcpy(bufferOut, &nwdrflac->startData[nwdrflac->fileoffset], bytesread);
+    }
+
+     
     
     if(NetworkDrFlac_Cancelled)
     {
@@ -164,27 +189,39 @@ void network_drflac_abort_current(void)
     });
 }
 
+
+
 void* network_drflac_open(const char *url)
 {
-    printf("network_drflac: allocating\n");
-    NetworkDrFlac *ndrflac = malloc(sizeof(ndrflac));
+    printf("network_drflac: allocating %lu\n", sizeof(NetworkDrFlac));
+    NetworkDrFlac *ndrflac = malloc(sizeof(NetworkDrFlac));
     unsigned urlbuflen = strlen(url)+1;
     ndrflac->url = malloc(urlbuflen);
     memcpy(ndrflac->url, url, urlbuflen);
     ndrflac->fileoffset = 0;
     ndrflac->filesize = 0;
-    drflac *pFlac = drflac_open(&on_read_network, &on_seek_network, ndrflac, NULL);
-    if((pFlac == NULL) || NetworkDrFlac_Cancelled)
-    {
-        NetworkDrFlac_Cancelled = false;
-        printf("network_drflac: failed to open drflac or canceled for %s\n", ndrflac->url);
-        free(ndrflac->url);
-        free(ndrflac);
-        return NULL;
-    }   
-    ndrflac->pFlac = pFlac;
-    printf("network_drflac: opened successfully: %s\n", ndrflac->url);
-    return ndrflac;
+    drflac *pFlac = NULL;
+    do {
+        // optimization, cache the first 1024 bytes        
+        printf("network_drflac: loading cache of : %s\n", ndrflac->url);
+        size_t bytesread = do_fetch(ndrflac->url, 0, 1023, &ndrflac->startData, &ndrflac->filesize);
+        ndrflac->startOk = (bytesread <= ndrflac->filesize) && (bytesread == 1024);
+        if(NetworkDrFlac_Cancelled) break;
+
+        // finally open the file
+        pFlac = drflac_open(&on_read_network, &on_seek_network, ndrflac, NULL);
+        if((pFlac == NULL) || NetworkDrFlac_Cancelled) break;          
+        
+        ndrflac->pFlac = pFlac;
+        printf("network_drflac: opened successfully: %s\n", ndrflac->url);
+        return ndrflac;
+    } while(0);
+
+    NetworkDrFlac_Cancelled = false;
+    printf("network_drflac: failed to open drflac or canceled for %s\n", ndrflac->url);
+    free(ndrflac->url);
+    free(ndrflac);
+    return NULL;
 }
 
 uint64_t network_drflac_totalPCMFrameCount(const NetworkDrFlac *ndrflac)
