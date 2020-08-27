@@ -131,7 +131,7 @@ if(typeof waitForEvent  === 'undefined') {
 
 
 
-
+/*
 const NetworkDrFlac_load = function() {
     console.log('NetworkDrFlac_load begin');
     while(typeof DrFlac === 'undefined') {
@@ -156,16 +156,34 @@ const NetworkDrFlacAsyncCall = async function (toRun) {
     global.NetworkDrFlac_Promise = null;
     return retVal;    
 };
+*/
 
-const NetworkDrFlac_open = async(theURL) => {    
-    await NetworkDrFlac_load();
+const NetworkDrFlac_open = async(theURL) => { 
+    // make sure drflac is ready. Inlined to avoid await when it's ready
+    while(typeof DrFlac === 'undefined') {
+        console.log('music_drflac, no drflac sleeping 5ms');
+        await sleep(5);
+    }
+    if(!DrFlac.ready) {
+        console.log('music_drflac, waiting for drflac to be ready');
+        await waitForEvent(DrFlac, 'ready');
+    }
+    
+    // acquire the network drflac lock, set it to the operation and await it
+    // Awful method of locking, fix this
+    while(global.NetworkDrFlac_Promise) {
+        await global.NetworkDrFlac_Promise;       
+    }
+    global.NetworkDrFlac_Promise = network_drflac_open(theURL);
+    let ndrptr = await global.NetworkDrFlac_Promise;
+    global.NetworkDrFlac_Promise = null;
+
+    // breakout if a download was cancelled
+    if(!ndrptr) return;
+
+    // does this need to be locked? how is open cancelled? All of this code should be executing with valid data as global.NetworkDrFlac_Promise can only be set to null here
     let nwdrflac = {};
-    console.log('NetworkDrFlac loaded');
-    
-    nwdrflac.ptr = await NetworkDrFlacAsyncCall(function() {
-        return network_drflac_open(theURL);
-    });   
-    
+    nwdrflac.ptr = ndrptr;
     nwdrflac.totalPCMFrameCount = network_drflac_totalPCMFrameCount(nwdrflac.ptr);
     nwdrflac.sampleRate = network_drflac_sampleRate(nwdrflac.ptr);
     nwdrflac.bitsPerSample = network_drflac_bitsPerSample(nwdrflac.ptr);
@@ -174,6 +192,7 @@ const NetworkDrFlac_open = async(theURL) => {
 };
 
 const NetworkDrFlac_close = function(ndrflac) {
+    //acquire lock?
     network_drflac_close(ndrflac);
 };
 
@@ -185,12 +204,16 @@ const NetworkDrFlac_read_pcm_frames_to_wav = async(ndrflac, start, count) => {
     }
     let pcm_frame_size = (ndrflac.bitsPerSample == 16) ? 2*ndrflac.channels : 4*ndrflac.channels;
     let destdata = Module._malloc(44+ (count*pcm_frame_size));    
-    //let actualsize = await network_drflac_read_pcm_frames_s16_to_wav(ndrflac.ptr, start, count, destdata); 
     
-    let actualsize = await NetworkDrFlacAsyncCall(function() {
-        return network_drflac_read_pcm_frames_s16_to_wav(ndrflac.ptr, start, count, destdata);
-    }); 
-
+    // acquire the network drflac lock, set it to the operation and await it
+    while(global.NetworkDrFlac_Promise) {
+        await global.NetworkDrFlac_Promise;       
+    }
+    global.NetworkDrFlac_Promise = network_drflac_read_pcm_frames_s16_to_wav(ndrflac.ptr, start, count, destdata);
+    let actualsize  = await global.NetworkDrFlac_Promise;
+    global.NetworkDrFlac_Promise = null;
+    
+    // copy the data somewhere accessible by DecodeAudioData
     if(actualsize > 0) {
         let wavData = new Uint8Array(Module.HEAPU8.buffer, destdata, actualsize);
         let todec = new Uint8Array(actualsize);
@@ -217,7 +240,6 @@ const NetworkDrFlac_Download = function(thePromise) {
 
 
 const FLACURLToFloat32 = async (theURL, starttime, maxduration) => {
-    await NetworkDrFlac_load();
 
     let result = await get_audio(theURL, starttime, maxduration);
     if(result != 0)
