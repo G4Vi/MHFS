@@ -6,13 +6,16 @@
 #include "dr_flac.h"
 #include <stdbool.h>
 
+#define NETWORK_DR_FLAC_START_CACHE 1024
+//#define NETWORK_DR_FLAC_START_CACHE (262144*2)
+
 typedef float float32_t;
 typedef struct {
     char *url;
     unsigned fileoffset;
     drflac *pFlac;
     unsigned filesize;
-    uint8_t startData[1024];
+    uint8_t startData[NETWORK_DR_FLAC_START_CACHE];
     bool startOk;
 } NetworkDrFlac;
 
@@ -121,7 +124,7 @@ static size_t on_read_network(void* pUserData, void* bufferOut, size_t bytesToRe
     }
 
     size_t bytesread;
-    if((endoffset > 1023) || !nwdrflac->startOk)
+    if((endoffset > (NETWORK_DR_FLAC_START_CACHE-1)) || !nwdrflac->startOk)
     {
         bytesread = do_fetch(nwdrflac->url, nwdrflac->fileoffset, endoffset, bufferOut, &nwdrflac->filesize);
     }
@@ -202,10 +205,10 @@ void* network_drflac_open(const char *url)
     ndrflac->filesize = 0;
     drflac *pFlac = NULL;
     do {
-        // optimization, cache the first 1024 bytes        
+        // optimization, cache the first NETWORK_DR_FLAC_START_CACHE bytes        
         printf("network_drflac: loading cache of : %s\n", ndrflac->url);
-        size_t bytesread = do_fetch(ndrflac->url, 0, 1023, &ndrflac->startData, &ndrflac->filesize);
-        ndrflac->startOk = (bytesread <= ndrflac->filesize) && (bytesread == 1024);
+        size_t bytesread = do_fetch(ndrflac->url, 0, (NETWORK_DR_FLAC_START_CACHE-1), &ndrflac->startData, &ndrflac->filesize);
+        ndrflac->startOk = (bytesread <= ndrflac->filesize) && (bytesread == NETWORK_DR_FLAC_START_CACHE);
         if(NetworkDrFlac_Cancelled) break;
 
         // finally open the file

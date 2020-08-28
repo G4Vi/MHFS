@@ -892,19 +892,11 @@ function Track(trackname) {
         if (start <= MainAudioContext.currentTime) {           
             start = MainAudioContext.currentTime + BUFFER_S;
             this.astart =  skiptime - start;
-            //this.createStartTimer(BUFFER_MS);
-             freshstart = 1;
+            freshstart = 1;
         }
         var source = MainAudioContext.createBufferSource();        
-        //source.connect(MainAudioContext.destination);
         source.buffer = buffer;
-        
-        // volume
-        if(!GainNode) {
-            GainNode = MainAudioContext.createGain();
-            GainNode.connect(MainAudioContext.destination);
-        }
-        source.connect(GainNode);
+        source.connect(GainNode); // route through volume
         
         if (isFirstPart) {
             this.astart = skiptime - start;
@@ -1353,7 +1345,7 @@ nextbtn.addEventListener('click', function (e) {
 });
 
 document.getElementById("volslider").addEventListener('input', function(e) {
-    GainNode.gain.setValueAtTime(e.target.value, MainAudioContext.currentTime);
+    GainNode.gain.setValueAtTime(e.target.value, MainAudioContext.currentTime); 
 });
 
 dbarea.addEventListener('click', function (e) {
@@ -1438,8 +1430,12 @@ dbarea.addEventListener('click', function (e) {
         //USEDECDL = 1;
     }
 
-    MainAudioContext = CreateAudioContext();
+    MainAudioContext = CreateAudioContext({'sampleRate' : 44100 });
     NextBufferTime = MainAudioContext.currentTime;
+
+    //volume
+    GainNode = MainAudioContext.createGain();
+    GainNode.connect(MainAudioContext.destination);
 
     // update url bar with parameters
     _BuildPTrack();

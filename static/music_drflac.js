@@ -170,6 +170,7 @@ const NetworkDrFlac_open = async(theURL) => {
     }
     
     // acquire the network drflac lock, set it to the operation and await it
+    // Awful method of locking, fix this
     while(global.NetworkDrFlac_Promise) {
         await global.NetworkDrFlac_Promise;       
     }
