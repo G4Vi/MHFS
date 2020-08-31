@@ -2674,7 +2674,7 @@ package MusicLibrary {
         $gapless_template->param(musicdb => $buf);
         #$gapless_template->param(musicdb => '');       
         $self->{'html_gapless'} = encode_utf8($gapless_template->output);
-        #$self->{'musicdbhtml'} = encode_utf8($buf);
+        $self->{'musicdbhtml'} = encode_utf8($buf);
     }
 
     sub SendLibrary {
@@ -3708,16 +3708,21 @@ my @routes = (
         my $droot = $SETTINGS->{'DOCUMENTROOT'};
         my $requestfile = $request->{'path'}{'requestfile'};       
         if(( ! defined $requestfile) ||
-           ($requestfile !~ /^$droot/) ||
-           (! -f $requestfile)){
+           ($requestfile !~ /^$droot/)){
             $request->Send404;            
         }
         elsif($requestfile =~ $SETTINGS->{'DROOT_IGNORE'}) {
             say $requestfile . ' is forbidden';
             $request->Send404;
+        }          
+        elsif (-f $requestfile) {
+            $request->SendFile($requestfile);
+        }
+        elsif (-d $requestfile && -f $requestfile.'/index.html') {
+            $request->SendFile($requestfile.'/index.html');
         }
         else {
-            $request->SendFile($requestfile);
+            $request->Send404;
         }       
     }
 );
