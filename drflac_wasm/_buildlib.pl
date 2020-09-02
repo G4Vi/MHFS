@@ -12,3 +12,4 @@ qq$EXPORTED_FUNCTIONS=["_network_drflac_open", "_network_drflac_close", "_networ
 
 
 system('cp', 'out/drflac.js', 'out/drflac.wasm', 'music_drflac.js', 'music_drflac.html', '../static/') == 0 or die("failed to copy to static");
+system('cp', 'out/drflac.js', 'out/drflac.wasm', 'music_drflac.js', 'music_drflac.html', '../static/music_inc') == 0 or die("failed to copy to static");

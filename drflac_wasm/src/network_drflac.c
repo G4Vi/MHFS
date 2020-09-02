@@ -189,6 +189,7 @@ void network_drflac_abort_current(void)
            global = window;
         }
         global.NetworkDrFlacFetch.abort();
+        global.NetworkDrFlacFetch = null;
     });
 }
 

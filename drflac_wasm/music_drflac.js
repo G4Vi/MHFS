@@ -3,7 +3,7 @@ var global;
 if (typeof WorkerGlobalScope !== 'undefined' && self instanceof WorkerGlobalScope) {
     console.log('music_drflac.js: I am in a web worker');
     global = self;
-    global.startPath = '';
+    global._NetworkDrFlac_startPath  = '';
     global.loadScripts = function(first, cb) {
         importScripts(...first);
         cb.call(this, null);
@@ -11,8 +11,7 @@ if (typeof WorkerGlobalScope !== 'undefined' && self instanceof WorkerGlobalScop
 } else {
     console.log('music_drflac.js: I am NOT in a web worker');
     global = window;
-    global.startPath = 'static/';
-    //global.startPath = '';
+    global._NetworkDrFlac_startPath = 'static/';
     global.loadScripts = function (scriptUrls, cb){
         function loadNext(err){
             if(err){
@@ -41,6 +40,7 @@ if (typeof WorkerGlobalScope !== 'undefined' && self instanceof WorkerGlobalScop
         head.appendChild(script);
     }     
 }
+if(global.NetworkDrFlac_startPath === undefined) global.NetworkDrFlac_startPath = global._NetworkDrFlac_startPath;
 
 global.DrFlac = { 
     'drflac' : true,
@@ -68,17 +68,7 @@ function DeclareGlobal(name, value) {
     });
 };
 
-loadScripts([startPath+'drflac.js'], function(){
-    /*
-    const get_audio = Module.cwrap('get_audio', "number", ["string", "number", "number"], {async : true});
-    Object.defineProperty(global, 'get_audio', {
-        value: get_audio,
-        configurable: false,
-        writable: false
-    });
-    */
-
-    
+loadScripts([NetworkDrFlac_startPath+'drflac.js'], function(){
 
     const network_drflac_open = Module.cwrap('network_drflac_open', "number", ["string"], {async : true});
     DeclareGlobalFunc('network_drflac_open', network_drflac_open);
@@ -130,36 +120,31 @@ if(typeof waitForEvent  === 'undefined') {
 }
 
 
+class Mutex {
+    constructor() {
+      this._locking = Promise.resolve();
+      this._locked = false;
+    }
+  
+    isLocked() {
+      return this._locked;
+    }
+  
+    lock() {
+      this._locked = true;
+      let unlockNext;
+      let willLock = new Promise(resolve => unlockNext = resolve);
+      willLock.then(() => this._locked = false);
+      let willUnlock = this._locking.then(() => unlockNext);
+      this._locking = this._locking.then(() => willLock);
+      return willUnlock;
+    }
+  }
 
-/*
-const NetworkDrFlac_load = function() {
-    console.log('NetworkDrFlac_load begin');
-    while(typeof DrFlac === 'undefined') {
-        console.log('music_drflac, no drflac sleeping 5ms');
-        return sleep(5);
-    }
-    if(!DrFlac.ready) {
-        console.log('music_drflac, waiting for drflac to be ready');
-        return waitForEvent(DrFlac, 'ready');
-    }
-    console.log('NetworkDrFlac_load end');
-    return;
-};
-
-const NetworkDrFlacAsyncCall = async function (toRun) {
-    while(global.NetworkDrFlac_Promise) {
-        await global.NetworkDrFlac_Promise;       
-    }
-    console.log('NetworkDrFlac launching promise');
-    global.NetworkDrFlac_Promise = toRun();
-    let retVal = await global.NetworkDrFlac_Promise;
-    global.NetworkDrFlac_Promise = null;
-    return retVal;    
-};
-*/
+const NetworkDrFlacMutex = new Mutex();
 
 const NetworkDrFlac_open = async(theURL) => { 
-    // make sure drflac is ready. Inlined to avoid await when it's ready
+    // make sure drflac is ready. Inlined to avoid await when it's already ready
     while(typeof DrFlac === 'undefined') {
         console.log('music_drflac, no drflac sleeping 5ms');
         await sleep(5);
@@ -169,31 +154,27 @@ const NetworkDrFlac_open = async(theURL) => {
         await waitForEvent(DrFlac, 'ready');
     }
     
-    // acquire the network drflac lock, set it to the operation and await it
-    // Awful method of locking, fix this
-    while(global.NetworkDrFlac_Promise) {
-        await global.NetworkDrFlac_Promise;       
-    }
-    global.NetworkDrFlac_Promise = network_drflac_open(theURL);
-    let ndrptr = await global.NetworkDrFlac_Promise;
-    global.NetworkDrFlac_Promise = null;
+    let unlock = await NetworkDrFlacMutex.lock();    
+    let ndrptr = await network_drflac_open(theURL);
+    let result;
+    if(ndrptr) {
+        let nwdrflac = {};
+        nwdrflac.ptr = ndrptr;
+        nwdrflac.totalPCMFrameCount = network_drflac_totalPCMFrameCount(nwdrflac.ptr);
+        nwdrflac.sampleRate = network_drflac_sampleRate(nwdrflac.ptr);
+        nwdrflac.bitsPerSample = network_drflac_bitsPerSample(nwdrflac.ptr);
+        nwdrflac.channels = network_drflac_channels(nwdrflac.ptr);
+        result = nwdrflac;
+    }    
+    unlock();
 
-    // breakout if a download was cancelled
-    if(!ndrptr) return;
-
-    // does this need to be locked? how is open cancelled? All of this code should be executing with valid data as global.NetworkDrFlac_Promise can only be set to null here
-    let nwdrflac = {};
-    nwdrflac.ptr = ndrptr;
-    nwdrflac.totalPCMFrameCount = network_drflac_totalPCMFrameCount(nwdrflac.ptr);
-    nwdrflac.sampleRate = network_drflac_sampleRate(nwdrflac.ptr);
-    nwdrflac.bitsPerSample = network_drflac_bitsPerSample(nwdrflac.ptr);
-    nwdrflac.channels = network_drflac_channels(nwdrflac.ptr);
-    return nwdrflac;
+    return result; 
 };
 
-const NetworkDrFlac_close = function(ndrflac) {
-    //acquire lock?
-    network_drflac_close(ndrflac);
+const NetworkDrFlac_close = async function(ndrflac) {
+    let unlock = await NetworkDrFlacMutex.lock();
+    network_drflac_close(ndrflac.ptr);
+    unlock();
 };
 
 const NetworkDrFlac_read_pcm_frames_to_wav = async(ndrflac, start, count) => {
@@ -205,13 +186,9 @@ const NetworkDrFlac_read_pcm_frames_to_wav = async(ndrflac, start, count) => {
     let pcm_frame_size = (ndrflac.bitsPerSample == 16) ? 2*ndrflac.channels : 4*ndrflac.channels;
     let destdata = Module._malloc(44+ (count*pcm_frame_size));    
     
-    // acquire the network drflac lock, set it to the operation and await it
-    while(global.NetworkDrFlac_Promise) {
-        await global.NetworkDrFlac_Promise;       
-    }
-    global.NetworkDrFlac_Promise = network_drflac_read_pcm_frames_s16_to_wav(ndrflac.ptr, start, count, destdata);
-    let actualsize  = await global.NetworkDrFlac_Promise;
-    global.NetworkDrFlac_Promise = null;
+    let unlock = await NetworkDrFlacMutex.lock();
+    let actualsize  = await network_drflac_read_pcm_frames_s16_to_wav(ndrflac.ptr, start, count, destdata);
+    unlock();
     
     // copy the data somewhere accessible by DecodeAudioData
     if(actualsize > 0) {
