@@ -1,3 +1,5 @@
+import {default as NetworkDrFlac, NetworkDrFlac_create, NetworkDrFlac_open, NetworkDrFlac_read_pcm_frames_to_wav} from './music_drflac_module.js'
+
 let MainAudioContext;
 let GainNode;
 let NextBufferTime;
@@ -5,6 +7,14 @@ let PlaybackInfo;
 let GraphicsTimers = [];
 let AudioQueue = [];
 let Tracks = [];
+
+function DeclareGlobalFunc(name, value) {
+    Object.defineProperty(window, name, {
+        value: value,
+        configurable: false,
+        writable: false
+    });
+};
 
 function CreateAudioContext(options) {
     let mycontext = (window.hasWebKit) ? new webkitAudioContext(options) : (typeof AudioContext != "undefined") ? new AudioContext(options) : null;
@@ -79,19 +89,6 @@ function GraphicsLoop() {
     window.requestAnimationFrame(GraphicsLoop);
 }
 
-async function Track(name) {
-    let nwdrflac = await NetworkDrFlac_open(name);
-    if(!nwdrflac) {
-        console.error('failed to NetworkDrFlac_open');
-        return;
-    }
-    return {
-        'nwdrflac' : nwdrflac,
-        'duration' : nwdrflac.totalPCMFrameCount / nwdrflac.sampleRate,
-        'decoded'  : 0
-    };
-}
-
 MainAudioContext = CreateAudioContext({'sampleRate' : 44100 });
 NextBufferTime = MainAudioContext.currentTime;
 setInterval(function() {
@@ -122,15 +119,17 @@ if(typeof sleep === 'undefined') {
     DeclareGlobalFunc('sleep', sleep);
 }
 
-
-function FAQ_TRACK(){}
-
 async function fillAudioQueue() {
     for(let i = 0; i < Tracks.length; i++) {
         let track = Tracks[i];
         if(!track.queued) {
             if(!track.nwdrflac) {
-                let nwdrflac = await NetworkDrFlac_open(track.trackname);
+                let ptr = NetworkDrFlac_create(track.trackname);
+                if(!ptr) {
+                    console.error('failed to NetworkDrFlac_create');
+                    return;
+                }
+                let nwdrflac = await NetworkDrFlac_open(ptr);
                 if(!nwdrflac) {
                     console.error('failed to NetworkDrFlac_open');
                     return;
@@ -181,7 +180,9 @@ async function fillAudioQueue() {
 }
 
 QueueTrack('../../music_dl?name=Chuck%20Person%20-%20Chuck%20Person%27s%20Eccojams%20Vol%201%20(2016%20WEB)%20%5BFLAC%5D%2FA5.flac&max_sample_rate=48000&gapless=1&gdriveforce=1');
-fillAudioQueue();
+//fillAudioQueue();
+setTimeout(fillAudioQueue, 5000);
+
 
 
 

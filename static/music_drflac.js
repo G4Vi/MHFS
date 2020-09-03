@@ -91,7 +91,7 @@ loadScripts([NetworkDrFlac_startPath+'drflac.js'], function(){
     const network_drflac_close = Module.cwrap('network_drflac_close', null, ["number"]);
     DeclareGlobalFunc('network_drflac_close', network_drflac_close);
 
-    const network_drflac_abort_current = Module.cwrap('network_drflac_abort_current');
+    const network_drflac_abort_current = Module.cwrap('network_drflac_abort_current', null, ["number"]);
     DeclareGlobalFunc('network_drflac_abort_current', network_drflac_abort_current);
 
     Module.onRuntimeInitialized = function() {
@@ -154,8 +154,7 @@ const NetworkDrFlac_open = async(theURL) => {
         await waitForEvent(DrFlac, 'ready');
     }
     
-    let unlock = await NetworkDrFlacMutex.lock();
-    let two = await NetworkDrFlacMutex.lock();     
+    let unlock = await NetworkDrFlacMutex.lock();    
     let ndrptr = await network_drflac_open(theURL);
     let result;
     if(ndrptr) {
@@ -202,70 +201,19 @@ const NetworkDrFlac_read_pcm_frames_to_wav = async(ndrflac, start, count) => {
     Module._free(destdata);   
 };
 
-const NetworkDrFlac_Download = function(thePromise) {    
-    // todo actually stop downloading? can we?
+const NetworkDrFlac_Download = function(ndrflac) {    
     this.stop = function() {
         this.isinvalid = true;
-        network_drflac_abort_current();              
+        if(! ndrflac.ptr) return;
+        network_drflac_abort_current(ndrflac.ptr);              
     };
 
     this.abort = function() {
         this.isinvalid = true;
-        network_drflac_abort_current();
+        if(! ndrflac.ptr) return;
+        network_drflac_abort_current(ndrflac.ptr);
     };
 };
 
 
 
-const FLACURLToFloat32 = async (theURL, starttime, maxduration) => {
-
-    let result = await get_audio(theURL, starttime, maxduration);
-    if(result != 0)
-    {       
-  
-
-        /*
-        // audio data
-        let chans = [];
-        for(let i = 0; i < metaData.channels; i++) {
-            chans[i] = new Float32Array(Module.HEAPU8.buffer, result+32+(4*metaData.framesDecoded*i), metaData.framesDecoded);
-        }       
-        
-        // leaks mem
-        return [metaData, chans];
-        */
-
-      
-        
-        let wavData = new Uint8Array(Module.HEAPU8.buffer, result+32, (metaData.framesDecoded*4)+44);
-        let todec = new Uint8Array(wavData.byteLength);
-        todec.set(new Uint8Array(wavData));
-        Module._free(metaData.ptr);        
-        return [metaData, todec.buffer];
-    }
-
-
-};
-
-
-/*
-
-      // header
-        let metaData = {};
-        metaData.ptr = result;     
-        let uint64s = new BigUint64Array(Module.HEAPU8.buffer, result, 2);
-        metaData.framesDecoded = Number(uint64s[0]);
-        metaData.totalFrames   = Number(uint64s[1]);
-        let uint32s = new Uint32Array(Module.HEAPU8.buffer, result+16, 1);
-        metaData.sampleRate =  uint32s[0];
-        let uint8s  = new Uint8Array(Module.HEAPU8.buffer, result+20, 2);
-        metaData.bps = uint8s[0];
-        metaData.channels = uint8s[1];
-        console.log('framesDecoded ' + metaData.framesDecoded);
-        console.log('totalFrames ' + metaData.totalFrames);
-        console.log('sampleRate ' + metaData.sampleRate);
-        console.log('bits per sample ' + metaData.bps);
-        console.log('num channels ' + metaData.channels);
-
-
-        */

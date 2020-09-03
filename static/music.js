@@ -476,7 +476,7 @@ function TrackDownload(track, onDownloaded, seg) {
         if(USEDECDL) {
             track.maxsegduration = 1;
             let startTime = track.maxsegduration * (seg-1);
-            let currentDownload = this;           
+            let currentDownload = this;               
             let ndrpromise = async function() {
                 if(!track.nwdrflac) {                  
                     track.nwdrflac = await NetworkDrFlac_open(toDL);
@@ -502,7 +502,7 @@ function TrackDownload(track, onDownloaded, seg) {
                 }
                 return decoded;                
             }();
-            currentDownload.download = new NetworkDrFlac_Download();
+            currentDownload.download = new NetworkDrFlac_Download(track.nwdrflac);
             (async function(){                               
                 let ndrres = await ndrpromise;
                 if(!ndrres || currentDownload.download.isinvalid) {

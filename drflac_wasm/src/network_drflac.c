@@ -17,11 +17,10 @@ typedef struct {
     unsigned filesize;
     uint8_t startData[NETWORK_DR_FLAC_START_CACHE];
     bool startOk;
+    bool cancelled;
 } NetworkDrFlac;
 
 #include <emscripten.h>
-
-static bool NetworkDrFlac_Cancelled = false;
 
 EM_JS(unsigned, do_fetch, (const char *url, unsigned start, unsigned end, void *bufferOut, uint32_t *filesize), {  
     
@@ -132,11 +131,9 @@ static size_t on_read_network(void* pUserData, void* bufferOut, size_t bytesToRe
     {
         bytesread = endoffset-nwdrflac->fileoffset+1;
         memcpy(bufferOut, &nwdrflac->startData[nwdrflac->fileoffset], bytesread);
-    }
-
-     
+    }     
     
-    if(NetworkDrFlac_Cancelled)
+    if(nwdrflac->cancelled)
     {
         printf("network_drflac: cancelled on_read_network\n");           
         return 0;
@@ -168,7 +165,7 @@ static drflac_bool32 on_seek_network(void* pUserData, int offset, drflac_seek_or
     return DRFLAC_TRUE;
 }
 
-void network_drflac_abort_current(void)
+void network_drflac_abort_current(NetworkDrFlac *ndrflac)
 {
     int fetchexists = EM_ASM_INT({
         return global.NetworkDrFlacFetch ? 1 : 0;
@@ -178,7 +175,7 @@ void network_drflac_abort_current(void)
         return;
     }
     printf("network_drflac: cancelling\n");
-    NetworkDrFlac_Cancelled = true;
+    ndrflac->cancelled = true;
     EM_ASM({
         var global;
         if (typeof WorkerGlobalScope !== 'undefined' && self instanceof WorkerGlobalScope) {
@@ -194,9 +191,8 @@ void network_drflac_abort_current(void)
 }
 
 
-
-void* network_drflac_open(const char *url)
-{
+void *network_drflac_open(const char *url)
+{   
     printf("network_drflac: allocating %lu\n", sizeof(NetworkDrFlac));
     NetworkDrFlac *ndrflac = malloc(sizeof(NetworkDrFlac));
     unsigned urlbuflen = strlen(url)+1;
@@ -204,25 +200,27 @@ void* network_drflac_open(const char *url)
     memcpy(ndrflac->url, url, urlbuflen);
     ndrflac->fileoffset = 0;
     ndrflac->filesize = 0;
-    drflac *pFlac = NULL;
+    ndrflac->cancelled = false;
+    ndrflac->startOk = false;
+    ndrflac->pFlac = NULL;
+
     do {
         // optimization, cache the first NETWORK_DR_FLAC_START_CACHE bytes        
         printf("network_drflac: loading cache of : %s\n", ndrflac->url);
         size_t bytesread = do_fetch(ndrflac->url, 0, (NETWORK_DR_FLAC_START_CACHE-1), &ndrflac->startData, &ndrflac->filesize);
         ndrflac->startOk = (bytesread <= ndrflac->filesize) && (bytesread == NETWORK_DR_FLAC_START_CACHE);
-        if(NetworkDrFlac_Cancelled) break;
+        if(ndrflac->cancelled) break;
 
         // finally open the file
-        pFlac = drflac_open(&on_read_network, &on_seek_network, ndrflac, NULL);
-        if((pFlac == NULL) || NetworkDrFlac_Cancelled) break;          
+        drflac *pFlac = drflac_open(&on_read_network, &on_seek_network, ndrflac, NULL);
+        if((pFlac == NULL) || ndrflac->cancelled) break;          
         
         ndrflac->pFlac = pFlac;
         printf("network_drflac: opened successfully: %s\n", ndrflac->url);
         return ndrflac;
     } while(0);
 
-    NetworkDrFlac_Cancelled = false;
-    printf("network_drflac: failed to open drflac or canceled for %s\n", ndrflac->url);
+    printf("network_drflac: failed to open drflac or cancelled for %s\n", ndrflac->url);
     free(ndrflac->url);
     free(ndrflac);
     return NULL;
@@ -249,7 +247,7 @@ uint8_t network_drflac_channels(const NetworkDrFlac *ndrflac)
 }
 
 /* returns of the number of bytes of the wav file */
-uint64_t network_drflac_read_pcm_frames_s16_to_wav(const NetworkDrFlac *ndrflac, uint32_t start_pcm_frame, uint32_t desired_pcm_frames, uint8_t *outWav)
+uint64_t network_drflac_read_pcm_frames_s16_to_wav(NetworkDrFlac *ndrflac, uint32_t start_pcm_frame, uint32_t desired_pcm_frames, uint8_t *outWav)
 {
     drflac *pFlac = ndrflac->pFlac;
     const uint32_t currentPCMFrame32 = pFlac->currentPCMFrame;
@@ -271,10 +269,10 @@ uint64_t network_drflac_read_pcm_frames_s16_to_wav(const NetworkDrFlac *ndrflac,
     uint8_t *data = malloc(framesize*desired_pcm_frames);
     const uint32_t frames_decoded = drflac_read_pcm_frames_s16(pFlac, desired_pcm_frames, (int16_t*)(data));
     printf("network_drflac: %s expected %u decoded %u\n", ndrflac->url, desired_pcm_frames, frames_decoded);
-    if(NetworkDrFlac_Cancelled)
+    if(ndrflac->cancelled)
     {
         printf("network_drflac: cancelled read_pcm_frames\n");
-        NetworkDrFlac_Cancelled = false;
+        ndrflac->cancelled = false;
         free(data);
         return 0;
     }
@@ -307,7 +305,6 @@ uint64_t network_drflac_read_pcm_frames_s16_to_wav(const NetworkDrFlac *ndrflac,
     return 44+audio_data_size;
 }
 
-/* not safe, what about fetch? */
 void network_drflac_close(NetworkDrFlac *ndrflac)
 {
     drflac_close(ndrflac->pFlac);
