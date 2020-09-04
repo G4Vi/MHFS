@@ -476,10 +476,30 @@ function TrackDownload(track, onDownloaded, seg) {
         if(USEDECDL) {
             track.maxsegduration = 1;
             let startTime = track.maxsegduration * (seg-1);
-            let currentDownload = this;               
+            let currentDownload = this;
+            if(!track.abortcontroller) {
+                console.log('reinitializing abort controller');
+                track.abortcontroller = new AbortController();
+            }
+            currentDownload.stop = function() {
+                currentDownload.isinvalid = true;
+                track.abortcontroller.abort();
+                currentDownload.onDownloaded = function() {            
+                    return false;
+                };
+                console.log('DECDL ' + currentDownload.track.trackname + ' seg ' + currentDownload.seg + ' aborted');
+                track.abortcontroller = null;
+                // slow HACK, but the abort controller needs to be reinitialized
+                //NetworkDrFlac_close(track.nwdrflac);
+                //track.nwdrflac = null;       
+            };
+            
             let ndrpromise = async function() {
-                if(!track.nwdrflac) {                  
-                    track.nwdrflac = await NetworkDrFlac_open(toDL);
+                if(!track.nwdrflac) {                                      
+                    //track.nwdrflac = await NetworkDrFlac_open(toDL, track.abortcontroller.signal);
+                    track.nwdrflac = await NetworkDrFlac_open(toDL, function() {
+                        return track.abortcontroller.signal;
+                    });
                     if(!track.nwdrflac) {
                         console.error('failed to NetworkDrFlac_open');
                         return;
@@ -502,10 +522,10 @@ function TrackDownload(track, onDownloaded, seg) {
                 }
                 return decoded;                
             }();
-            currentDownload.download = new NetworkDrFlac_Download(track.nwdrflac);
+            
             (async function(){                               
                 let ndrres = await ndrpromise;
-                if(!ndrres || currentDownload.download.isinvalid) {
+                if(!ndrres || currentDownload.isinvalid) {
                     // should we ever redo?
                 }
                 else {
@@ -889,7 +909,12 @@ function Track(trackname) {
         //console.log('start ' +start +  'NextBufferTime ' + NextBufferTime + ' currentTime ' + MainAudioContext.currentTime);
         start = start || NextBufferTime;
         var freshstart = 0;
-        if (start <= MainAudioContext.currentTime) {           
+        if (start <= MainAudioContext.currentTime) {
+            if(!skiptime && !isFirstPart) {
+                console.log('queueBuffer: fell behind');
+                // we fell behind, set skiptime to the amount of time played
+                skiptime = start+Astart;
+            }           
             start = MainAudioContext.currentTime + BUFFER_S;
             this.astart =  skiptime - start;
             freshstart = 1;
@@ -1012,6 +1037,9 @@ function Track(trackname) {
     this.clearCache = function() {
         this.buf = null;
         this.bufs = [];
+        NetworkDrFlac_close(this.nwdrflac);
+        this.nwdrflac = null;   
+        this.abortcontroller = null;     
     };
 }
 
@@ -1022,6 +1050,9 @@ function loop() {
     if(Tracks[CurrentTrack] && Astart) {			
         if (SBAR_UPDATING) {
             console.log('Not updating SBAR, SBAR_UPDATING');            
+        }
+        else if(NextBufferTime < MainAudioContext.currentTime) {
+            console.log('Fell behind, not updating');  
         }
         else {                    
             var time = MainAudioContext.currentTime + Astart;

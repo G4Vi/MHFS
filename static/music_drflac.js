@@ -70,7 +70,7 @@ function DeclareGlobal(name, value) {
 
 loadScripts([NetworkDrFlac_startPath+'drflac.js'], function(){
 
-    const network_drflac_open = Module.cwrap('network_drflac_open', "number", ["string"], {async : true});
+    const network_drflac_open = Module.cwrap('network_drflac_open', "number", ["string", "number"], {async : true});
     DeclareGlobalFunc('network_drflac_open', network_drflac_open);
 
     const network_drflac_totalPCMFrameCount = Module.cwrap('network_drflac_totalPCMFrameCount', "number", ["number"]);
@@ -90,9 +90,6 @@ loadScripts([NetworkDrFlac_startPath+'drflac.js'], function(){
 
     const network_drflac_close = Module.cwrap('network_drflac_close', null, ["number"]);
     DeclareGlobalFunc('network_drflac_close', network_drflac_close);
-
-    const network_drflac_abort_current = Module.cwrap('network_drflac_abort_current', null, ["number"]);
-    DeclareGlobalFunc('network_drflac_abort_current', network_drflac_abort_current);
 
     Module.onRuntimeInitialized = function() {
         console.log('NetworkDrFlac is ready!');
@@ -143,7 +140,7 @@ class Mutex {
 
 const NetworkDrFlacMutex = new Mutex();
 
-const NetworkDrFlac_open = async(theURL) => { 
+const NetworkDrFlac_open = async(theURL, signalfunc) => { 
     // make sure drflac is ready. Inlined to avoid await when it's already ready
     while(typeof DrFlac === 'undefined') {
         console.log('music_drflac, no drflac sleeping 5ms');
@@ -154,8 +151,9 @@ const NetworkDrFlac_open = async(theURL) => {
         await waitForEvent(DrFlac, 'ready');
     }
     
-    let unlock = await NetworkDrFlacMutex.lock();    
-    let ndrptr = await network_drflac_open(theURL);
+    let unlock = await NetworkDrFlacMutex.lock();
+    let sigid = Module.InsertJSObject(signalfunc);    
+    let ndrptr = await network_drflac_open(theURL, sigid);
     let result;
     if(ndrptr) {
         let nwdrflac = {};
@@ -164,6 +162,7 @@ const NetworkDrFlac_open = async(theURL) => {
         nwdrflac.sampleRate = network_drflac_sampleRate(nwdrflac.ptr);
         nwdrflac.bitsPerSample = network_drflac_bitsPerSample(nwdrflac.ptr);
         nwdrflac.channels = network_drflac_channels(nwdrflac.ptr);
+        nwdrflac.sigid = sigid;
         result = nwdrflac;
     }    
     unlock();
@@ -172,8 +171,10 @@ const NetworkDrFlac_open = async(theURL) => {
 };
 
 const NetworkDrFlac_close = async function(ndrflac) {
+    if(!ndrflac) return;
     let unlock = await NetworkDrFlacMutex.lock();
     network_drflac_close(ndrflac.ptr);
+    Module.RemoveJSObject(ndrflac.sigid);
     unlock();
 };
 
@@ -201,19 +202,7 @@ const NetworkDrFlac_read_pcm_frames_to_wav = async(ndrflac, start, count) => {
     Module._free(destdata);   
 };
 
-const NetworkDrFlac_Download = function(ndrflac) {    
-    this.stop = function() {
-        this.isinvalid = true;
-        if(! ndrflac.ptr) return;
-        network_drflac_abort_current(ndrflac.ptr);              
-    };
 
-    this.abort = function() {
-        this.isinvalid = true;
-        if(! ndrflac.ptr) return;
-        network_drflac_abort_current(ndrflac.ptr);
-    };
-};
 
 
 
