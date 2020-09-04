@@ -1,4 +1,4 @@
-import {default as NetworkDrFlac, NetworkDrFlac_create, NetworkDrFlac_open, NetworkDrFlac_read_pcm_frames_to_wav} from './music_drflac_module.js'
+import {default as NetworkDrFlac, NetworkDrFlac_open, NetworkDrFlac_read_pcm_frames_to_wav} from './music_drflac_module.js'
 
 let MainAudioContext;
 let GainNode;
@@ -124,12 +124,7 @@ async function fillAudioQueue() {
         let track = Tracks[i];
         if(!track.queued) {
             if(!track.nwdrflac) {
-                let ptr = NetworkDrFlac_create(track.trackname);
-                if(!ptr) {
-                    console.error('failed to NetworkDrFlac_create');
-                    return;
-                }
-                let nwdrflac = await NetworkDrFlac_open(ptr);
+                let nwdrflac = await NetworkDrFlac_open(track.trackname);
                 if(!nwdrflac) {
                     console.error('failed to NetworkDrFlac_open');
                     return;

@@ -44,11 +44,7 @@ class Mutex {
 const NetworkDrFlacMutex = new Mutex();
 
 // old api
-const NetworkDrFlac_create = function(theURL) {
-    return DrFlac.network_drflac_create(theURL);
-};
-
-const NetworkDrFlac_open = async function(ndrflac) {
+const NetworkDrFlac_open = async function(url) {
     // make sure drflac is ready. Inlined to avoid await when it's already ready
     while(typeof DrFlac === 'undefined') {
         console.log('music_drflac, no drflac sleeping 5ms');
@@ -60,7 +56,7 @@ const NetworkDrFlac_open = async function(ndrflac) {
     }
     
     let unlock = await NetworkDrFlacMutex.lock();    
-    let ndrptr = await DrFlac.network_drflac_open(ndrflac);
+    let ndrptr = await DrFlac.network_drflac_open(url);
     let result;
     if(ndrptr) {
         let nwdrflac = {};
@@ -105,7 +101,7 @@ const NetworkDrFlac_read_pcm_frames_to_wav = async(ndrflac, start, count) => {
     DrFlac.Module._free(destdata);   
 };
 
-export {NetworkDrFlac_open, NetworkDrFlac_create, NetworkDrFlac_read_pcm_frames_to_wav, NetworkDrFlac_close};
+export {NetworkDrFlac_open, NetworkDrFlac_read_pcm_frames_to_wav, NetworkDrFlac_close};
 
 
 // new api
@@ -127,11 +123,7 @@ const NetworkDrFlac = function(url) {
                 await waitForEvent(DrFlac, 'ready');
             }
 
-            this.ptr = DrFlac.network_drflac_create(url);
-            if(!ptr) {
-                throw("network_drflac_create failed");
-            }
-            
+           
             let unlock = await this.mutex.lock();    
             let ndrptr = await DrFlac.network_drflac_open(theURL);
             let result;
@@ -153,10 +145,8 @@ export default NetworkDrFlac;
 
 Module().then(function(DrFlacMod){
     DrFlac.Module = DrFlacMod;
-
-    DrFlac.network_drflac_create = DrFlacMod.cwrap('network_drflac_create', "number", ["string"]);
-
-    DrFlac.network_drflac_open = DrFlacMod.cwrap('network_drflac_open', "number", ["number"], {async : true});
+    
+    DrFlac.network_drflac_open = DrFlacMod.cwrap('network_drflac_open', "number", ["string"], {async : true});
 
     DrFlac.network_drflac_totalPCMFrameCount = DrFlacMod.cwrap('network_drflac_totalPCMFrameCount', "number", ["number"]);
 
