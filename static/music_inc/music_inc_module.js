@@ -1,4 +1,4 @@
-import {default as NetworkDrFlac, NetworkDrFlac_open, NetworkDrFlac_read_pcm_frames_to_wav} from './music_drflac_module.js'
+import {default as NetworkDrFlac} from './music_drflac_module.js'
 
 let MainAudioContext;
 let GainNode;
@@ -25,15 +25,7 @@ function CreateAudioContext(options) {
 
 function MainAudioLoop() {
 
-    // clean up the AQ
-    let toDelete = 0;
-    for(let i = 0; i < AudioQueue.length; i++) {
-        if(! AudioQueue[i].endTime) break;
-        if(AudioQueue[i].endTime < MainAudioContext.currentTime) {
-            toDelete++;
-        }
-    }
-    if(toDelete) AudioQueue.splice(0, toDelete);
+    AQ_clean();
     if(AudioQueue.length === 0) return 0;
     
     // advanced past already scheduled audio
@@ -54,6 +46,7 @@ function MainAudioLoop() {
         source.buffer = toQueue.buffer;
         source.connect(GainNode);    
         source.start(NextBufferTime, 0);
+        toQueue.source = source;
 
         toQueue.startTime = NextBufferTime;
         toQueue.endTime = toQueue.startTime + source.buffer.duration;
@@ -75,7 +68,8 @@ function GraphicsLoop() {
     GraphicsTimers.splice(0, removetimers);
     let curTime = 0;
     if(PlaybackInfo) {
-        curTime = MainAudioContext.currentTime-PlaybackInfo.starttime;
+        let aclocktime = (NextBufferTime > MainAudioContext.currentTime) ? MainAudioContext.currentTime : NextBufferTime;
+        curTime = aclocktime-PlaybackInfo.starttime;
         if(curTime > PlaybackInfo.duration) {
             SetEndtimeText(0);
             curTime = 0;
@@ -97,7 +91,21 @@ setInterval(function() {
 window.requestAnimationFrame(GraphicsLoop);
 
 function QueueTrack(trackname) {
-    Tracks[Tracks.length] = {'trackname' : trackname, 'decoded' : 0};
+    Tracks[Tracks.length] = {'trackname' : trackname};
+}
+
+
+// remove references to 
+function AQ_clean() {
+    // clean up the AQ
+    let toDelete = 0;
+    for(let i = 0; i < AudioQueue.length; i++) {
+        if(! AudioQueue[i].endTime) break;
+        if(AudioQueue[i].endTime <= MainAudioContext.currentTime) {
+            toDelete++;
+        }
+    }
+    if(toDelete) AudioQueue.splice(0, toDelete);
 }
 
 function AQ_unqueuedTime() { 
@@ -110,8 +118,32 @@ function AQ_unqueuedTime() {
     return unqueuedtime;
 }
 
-function FAQ() {
+// returns the currently or about to be playing AQID
+function AQ_ID() {
+    AQ_clean();     
+    for(let i = 0; i < AudioQueue.length; i++) {        
+        return AudioQueue[i].aqid;                    
+    }
+    return -1;
+}
 
+
+function AQ_stopAudioWithoutID(aqid) {
+    if(!AudioQueue.length) return;
+    let dCount = 0;
+    for(let i = AudioQueue.length-1; i >= 0; i--) {
+        if(AudioQueue[i].aqid === aqid) {
+            break;
+        }
+        dCount++;
+        if(AudioQueue[i].source) {
+            AudioQueue[i].source.disconnect();
+            AudioQueue[i].source.stop();
+        }
+    }
+    if(dCount) {
+        AudioQueue.splice(AudioQueue.length - dCount, dCount);
+    }
 }
 
 if(typeof sleep === 'undefined') {
@@ -119,67 +151,168 @@ if(typeof sleep === 'undefined') {
     DeclareGlobalFunc('sleep', sleep);
 }
 
+let QueueIndex = 0;
+let AQID = 0;
+let FAQ_STATE = "FAQ_IDLE";
+// FAQ_IDLE
+// FAQ_OPEN
+// FAQ_READ
+// FAQ_WAIT
+
+async function FAQOPEN() {
+    let track = Tracks[QueueIndex];
+    let failedcount = 0;
+    while(1) {
+    
+        let mysignal = FAQ_ABORTCONTROLLER.signal;
+        try {            
+            let nwdrflac = await NetworkDrFlac(track.trackname, function() {
+                return mysignal;
+            });
+            if(mysignal.aborted) {
+                console.log('FAQOPEN aborted success');
+                nwdrflac.close();
+                return;
+            }
+            track.nwdrflac = nwdrflac;
+            track.duration =  nwdrflac.totalPCMFrameCount / nwdrflac.sampleRate;
+            FAQ_STATE = "FAQ_READ";
+            break;            
+        }
+        catch (error) {
+            console.error(error);
+            if(mysignal.aborted) {
+                console.log('FAQOPEN aborted catch');
+                return;            
+            }
+            failedcount++;
+            if(failedcount == 2) {
+                FAQ_STATE = "FAQ_NEXT";
+                break;
+            }
+        }
+    
+    }
+    FAQLOOP();
+}
+
+function FAQLOOP()
+{
+    while(1)
+    {        
+        if(FAQ_STATE === "FAQ_IDLE") {
+            if(!Tracks[QueueIndex]) return;
+            if(!Tracks[QueueIndex].nwdrflac) {
+                FAQ_STATE = "FAQ_OPEN";
+                FAQOPEN();
+                return;                
+            }
+            else {
+                FAQ_STATE = "FAQ_READ";
+            }            
+        }
+        else if(FAQ_STATE === "FAQ_NEXT") {
+            QueueIndex++;
+            FAQ_STATE = "FAQ_IDLE";
+        }
+        else if(FAQ_STATE === "FAQ_READ") {
+
+        }
+        else {
+            return;
+        }
+
+
+
+        for(; QueueIndex < Tracks.length; QueueIndex++) {
+            let track = Tracks[QueueIndex];
+        }
+    }    
+}
+
+
+
 async function fillAudioQueue() {
-    for(let i = 0; i < Tracks.length; i++) {
-        let track = Tracks[i];
-        if(!track.queued) {
-            if(!track.nwdrflac) {
-                let nwdrflac = await NetworkDrFlac_open(track.trackname);
-                if(!nwdrflac) {
-                    console.error('failed to NetworkDrFlac_open');
-                    return;
-                }
+TRACKLOOP:for(; QueueIndex < Tracks.length; QueueIndex++) {
+        let track = Tracks[QueueIndex];
+        
+        if(!track.abortcontroller) {
+            console.log('initializing abort controller');
+            track.abortcontroller = new AbortController();
+        }
+        let failedtimes = 0;
+        while(!track.nwdrflac) {                
+            try {
+                let nwdrflac = await NetworkDrFlac(track.trackname, function() {
+                    return track.abortcontroller.signal;
+                });               
                 track.nwdrflac = nwdrflac;
                 track.duration =  nwdrflac.totalPCMFrameCount / nwdrflac.sampleRate;
             }
-            while(track.decoded < track.duration) {
-                // if plenty of audio is queued. Don't download
-                while(AQ_unqueuedTime() >= 10) {
-                    await sleep(25);                    
+            catch(error) {
+                console.error(error);
+                failedtimes++;
+                if(failedtimes == 2) {
+                    console.log('Encountered error twice, advancing to next track');                    
+                    continue TRACKLOOP;
                 }
+            }
+        }
+        let dectime = 0;
+        while(dectime < track.duration) {
+            // if plenty of audio is queued. Don't download
+            while(AQ_unqueuedTime() >= 10) {
+                await sleep(25);                    
+            }
 
-                let todec = Math.min(0.100, track.duration - track.decoded);        
-                let wav = await NetworkDrFlac_read_pcm_frames_to_wav(track.nwdrflac, track.decoded * track.nwdrflac.sampleRate, todec * track.nwdrflac.sampleRate);
-                if(!wav) {
-                    console.error('bad wav');
-                    return;
+            let todec = Math.min(0.100, track.duration - dectime);
+            let failedcount = 0;
+            let buffer;
+            while(1) {
+                try {
+                    let wav = await track.nwdrflac.read_pcm_frames_to_wav(dectime * track.nwdrflac.sampleRate, todec * track.nwdrflac.sampleRate);
+                    buffer = await MainAudioContext.decodeAudioData(wav);
+                    break;
                 }
-                let buffer = await MainAudioContext.decodeAudioData(wav);
-                if(!buffer) {
-                    console.error('bad wav decode');
-                    return;
-                }
-             
-                // Add to the audio queue
-                let aqItem = { 'buffer' : buffer, 'duration' : todec};
-                // At start of track update the GUI
-                if(track.decoded === 0) {
-                    aqItem.func = function(startTime) {
-                        GraphicsTimers.push({'time': startTime, 'func': function(data){
-                            PlaybackInfo = {
-                                'starttime' : startTime,
-                                'duration' : track.duration
-                            };                   
-                            seekbar.min = 0;
-                            seekbar.max = track.duration;
-                            SetEndtimeText(track.duration);
-                        }});
+                catch(error) {
+                    console.error(error);
+                    failedcount++;
+                    if(failedcount == 2) {
+                        console.log('Encountered error twice, advancing to next track');                        
+                        continue TRACKLOOP;
                     }
                 }
-                AudioQueue.push(aqItem);        
-                track.decoded += todec;
             }
-            track.queued = true;
+         
+            // Add to the audio queue
+            let aqItem = { 'buffer' : buffer, 'duration' : todec, 'aqid' : AQID};
+            // At start of track update the GUI
+            if(dectime === 0) {
+                aqItem.func = function(startTime) {
+                    GraphicsTimers.push({'time': startTime, 'func': function(data){
+                        PlaybackInfo = {
+                            'starttime' : startTime,
+                            'duration' : track.duration
+                        };                   
+                        seekbar.min = 0;
+                        seekbar.max = track.duration;
+                        SetEndtimeText(track.duration);
+                    }});
+                }
+            }
+            AudioQueue.push(aqItem);        
+            dectime += todec;
         }
+        AQID++;
+        if(document.getElementById("repeattrack").checked) {           
+            QueueIndex--;
+        }           
+        
     }
 }
 
 QueueTrack('../../music_dl?name=Chuck%20Person%20-%20Chuck%20Person%27s%20Eccojams%20Vol%201%20(2016%20WEB)%20%5BFLAC%5D%2FA5.flac&max_sample_rate=48000&gapless=1&gdriveforce=1');
-//fillAudioQueue();
-setTimeout(fillAudioQueue, 5000);
-
-
-
+fillAudioQueue();
 
 // BEGIN UI handlers
 var prevbtn    = document.getElementById("prevbtn");
@@ -193,8 +326,14 @@ var nexttxt    = document.getElementById('next_text');
 var prevtxt    = document.getElementById('prev_text');
 var playtxt    = document.getElementById('play_text');
 var dbarea     = document.getElementById('musicdb');
-rptrackbtn.addEventListener('change', function(e) {         
-   
+rptrackbtn.addEventListener('change', function(e) {
+    let aqid = AQ_ID();
+    if(aqid === -1) return;   // nothing is playing repeattrack should do nothing
+    if(aqid === AQID) return; // current playing is still being queued do nothing 
+    console.log('rptrack abort');
+    AQ_stopAudioWithoutID(sqid);
+    // stop and restart FAQ
+
  });
  
  ppbtn.addEventListener('click', function (e) {

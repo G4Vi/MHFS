@@ -7,10 +7,10 @@ system('mkdir', '-p', 'modout') == 0 or die("failed to make mod out dir");
 
 #'--extern-pre-js', 'src/network_drflac.pre.js', 
 system('emcc', '-O3',
-'--pre-js', 'mod_src/jspass.js', #'-s', qq$EXPORTED_RUNTIME_METHODS=["SetGDATA", "GetGDATA"]$,
+'--pre-js', 'src/jspass.js',
 'src/network_drflac.c', '-o', 'modout/drflac.js', '-s', 'ASYNCIFY', '-s', 'ASYNCIFY_IMPORTS=["do_fetch"]', '-s',
-qq$EXPORTED_FUNCTIONS=["_network_drflac_open", "_network_drflac_close", "_network_drflac_totalPCMFrameCount", "_network_drflac_sampleRate", "_network_drflac_bitsPerSample", "_network_drflac_channels", "_network_drflac_read_pcm_frames_s16_to_wav", "_network_drflac_abort_current"]$,
-'-s', qq$EXPORTED_RUNTIME_METHODS=["cwrap"]$, 
+qq$EXPORTED_FUNCTIONS=["_network_drflac_open", "_network_drflac_close", "_network_drflac_totalPCMFrameCount", "_network_drflac_sampleRate", "_network_drflac_bitsPerSample", "_network_drflac_channels", "_network_drflac_read_pcm_frames_s16_to_wav", "_network_drflac_set_cancel"]$,
+'-s', qq$EXPORTED_RUNTIME_METHODS=["cwrap", "ccall"]$, 
 #'-s', 'ASSERTIONS=1',
 #'-s', 'ERROR_ON_UNDEFINED_SYMBOLS=0',
 '-s', 'EXPORT_ES6=1',
