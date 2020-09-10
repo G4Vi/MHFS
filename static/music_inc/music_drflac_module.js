@@ -41,6 +41,7 @@ class Mutex {
     }
   }
 
+let GlobalNetworkDrFlacMutex = new Mutex();
 const NetworkDrFlac = async function(theURL, sigfunc) {    
     // make sure drflac is ready. Inlined to avoid await when it's already ready
     while(typeof DrFlac === 'undefined') {
@@ -53,8 +54,12 @@ const NetworkDrFlac = async function(theURL, sigfunc) {
     }
     
     let that = {};
-    that.sigid = DrFlac.Module.InsertJSObject(sigfunc);        
+    that.sigid = DrFlac.Module.InsertJSObject(sigfunc);
+    //that.mutex = new Mutex();
+    that.mutex = GlobalNetworkDrFlacMutex;
+    let unlock = await that.mutex.lock();        
     that.ptr = await DrFlac.network_drflac_open(theURL, that.sigid);
+    unlock();
     if(!that.ptr) {
         throw("Failed network_drflac_open");
     }
@@ -62,11 +67,11 @@ const NetworkDrFlac = async function(theURL, sigfunc) {
     that.sampleRate = DrFlac.network_drflac_sampleRate(that.ptr);
     that.bitsPerSample = DrFlac.network_drflac_bitsPerSample(that.ptr);
     that.channels = DrFlac.network_drflac_channels(that.ptr);
-    that.mutex = new Mutex();
+   
 
     that.close = async function() {
         let unlock = await that.mutex.lock();
-        network_drflac_close(that.ptr);
+        DrFlac.network_drflac_close(that.ptr);
         DrFlac.Module.RemoveJSObject(that.sigid);
         unlock();
     };

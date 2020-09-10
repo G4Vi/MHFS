@@ -152,7 +152,8 @@ const NetworkDrFlac_open = async(theURL, signalfunc) => {
     }
     
     let unlock = await NetworkDrFlacMutex.lock();
-    let sigid = Module.InsertJSObject(signalfunc);    
+    let sigid = Module.InsertJSObject(signalfunc); 
+    console.log('calling network_drflac_open');   
     let ndrptr = await network_drflac_open(theURL, sigid);
     let result;
     if(ndrptr) {
