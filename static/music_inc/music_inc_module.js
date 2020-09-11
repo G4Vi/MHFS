@@ -10,6 +10,7 @@ let Tracks_TAIL;
 let Tracks_QueueCurrent;
 let FACAbortController = new AbortController();
 let SBAR_UPDATING = 0;
+let NWDRFLAC;
 
 function DeclareGlobalFunc(name, value) {
     Object.defineProperty(window, name, {
@@ -31,22 +32,15 @@ function MainAudioLoop() {
     AQ_clean();
     if(AudioQueue.length === 0) return 0;
     
-    // advanced past already scheduled audio
+    // advanced past already scheduled audio. bufferTime is the last endTime
+    let bufferTime;
     let acindex = 0;
     for(; acindex < AudioQueue.length; acindex++) {
         if(!AudioQueue[acindex].startTime) break;
+        bufferTime = AudioQueue[acindex].endTime;
     }
 
-    // adjust clock
-    let bufferTime;
-    for(let i = 0; i < AudioQueue.length; i++) {
-        if(AudioQueue[i].endTime) {
-            bufferTime = AudioQueue[i].endTime;
-        }
-        else {
-            break;
-        }
-    }
+    // adjust / assign bufferTime if needed
     let timeadjusted = false;
     if(!bufferTime || (bufferTime < MainAudioContext.currentTime)) {
         bufferTime =  MainAudioContext.currentTime+0.100;
@@ -54,8 +48,8 @@ function MainAudioLoop() {
         timeadjusted = true;
     }
     
-    // don't queue if we have plenty buffered
-    let lookaheadtime = MainAudioContext.currentTime + 0.199;
+    // queue up to 200 ms ahead
+    let lookaheadtime = MainAudioContext.currentTime + 0.200;
     while(bufferTime < lookaheadtime) {
         // everything is scheduled break out
         if(acindex === AudioQueue.length) return;  
@@ -65,6 +59,7 @@ function MainAudioLoop() {
         source.buffer = toQueue.buffer;
         source.connect(GainNode);    
         source.start(bufferTime, 0);
+        InitPPText();
         toQueue.source = source;
 
         toQueue.startTime = bufferTime;
@@ -110,25 +105,6 @@ function GraphicsLoop() {
     window.requestAnimationFrame(GraphicsLoop);
 }
 
-MainAudioContext = CreateAudioContext({'sampleRate' : 44100 });
-{
-let pp = document.getElementById("ppbtn");
-if(MainAudioContext.state === "suspended") {
-    pp.textContent = "PLAY";
-}
-else {
-    pp.textContent = "PAUSE";
-}
-}
-
-
-
-setInterval(function() {
-    MainAudioLoop();
-}, 25);
-window.requestAnimationFrame(GraphicsLoop);
-
-
 function geturl(trackname) {
     let url = '../../music_dl?name=' + encodeURIComponent(trackname);
     url  += '&max_sample_rate=48000';
@@ -139,30 +115,44 @@ function geturl(trackname) {
     return url;
 }
 
-function QueueTrack(trackname, after) {
+function QueueTrack(trackname, after, before) {
     let track = {'trackname' : trackname, 'url' : geturl(trackname)};
     
     if(!after) {
         after = Tracks_TAIL;        
     }
+    if(!before && (after !== Tracks_TAIL)) {
+        before = after.next;        
+    }
     
     if(after) {
-        let prev = after;
         after.next = track;
         track.prev = after;
         if(after === Tracks_TAIL) {
             Tracks_TAIL = track;
         }
-    }
-    else {
-        Tracks_TAIL = track;        
-        Tracks_HEAD = track;        
+    }    
+    if(before) {
+        before.prev = track;
+        track.next = before;
+        if(before === Tracks_HEAD) {
+            Tracks_HEAD = track;       
+        }        
     }
     
+    // we have no link list without a head and a tail
+    if(!Tracks_HEAD || !Tracks_TAIL) {
+       Tracks_TAIL = track;        
+       Tracks_HEAD = track;        
+    }
+    
+    // if nothing is being queued, start the queue
     if(!Tracks_QueueCurrent) {
         Tracks_QueueCurrent = track;
         fillAudioQueue();
     }
+    
+    // Update text
     if(AQ_ID() !== -1) {
         if(AudioQueue[0].track.prev === track) {
             SetPrevText(track.trackname);
@@ -190,6 +180,11 @@ function PlayTrack(trackname) {
         queuePos = Tracks_QueueCurrent;
     }
     // otherwise queue at tail
+    
+    let queueAfter;
+    if(queuePos) {
+        queueAfter = queuePos.next;        
+    }
 
     AQ_stopAudioWithoutID(-1);
     GraphicsTimers = [];
@@ -197,26 +192,26 @@ function PlayTrack(trackname) {
     FACAbortController = new AbortController();
 
     Tracks_QueueCurrent = null;
-    return QueueTrack(trackname, queuePos);   
+    return QueueTrack(trackname, queuePos, queueAfter);   
 }
 
 function QueueTracks(tracks, after) {
     tracks.forEach(function(elm) {
-        after = QueueTrack(elm);
+        after = QueueTrack(elm, after);
     });
+    return after;
 }
 
 function PlayTracks(tracks) {
     let trackname = tracks.shift();
     if(!trackname) return;
     let after = PlayTrack(trackname);
+    if(!tracks.length) return;  
     QueueTracks(tracks, after);
 }
 
-
-// remove references to 
+// remove played items from the audio queue
 function AQ_clean() {
-    // clean up the AQ
     let toDelete = 0;
     for(let i = 0; i < AudioQueue.length; i++) {
         if(! AudioQueue[i].endTime) break;
@@ -246,15 +241,6 @@ function AQ_ID() {
     return -1;
 }
 
-function AQ_IsPlaying() {
-    let aqid = AQ_ID();
-    if(aqid === -1) return false;
-    if(!AudioQueue[0].startTime) return false;
-    if(MainAudioContext.currentTime >= AudioQueue[0].startTime) return true;
-    return false;
-}
-
-
 function AQ_stopAudioWithoutID(aqid) {
     if(!AudioQueue.length) return;
     let dCount = 0;
@@ -278,94 +264,10 @@ if(typeof sleep === 'undefined') {
     DeclareGlobalFunc('sleep', sleep);
 }
 
-
-
-/*
-let FAQ_STATE = "FAQ_IDLE";
-// FAQ_IDLE
-// FAQ_OPEN
-// FAQ_READ
-// FAQ_WAIT
-
-async function FAQOPEN() {
-    let track = Tracks[QueueIndex];
-    let failedcount = 0;
-    while(1) {
-    
-        let mysignal = FAQ_ABORTCONTROLLER.signal;
-        try {            
-            let nwdrflac = await NetworkDrFlac(track.trackname, function() {
-                return mysignal;
-            });
-            if(mysignal.aborted) {
-                console.log('FAQOPEN aborted success');
-                nwdrflac.close();
-                return;
-            }
-            track.nwdrflac = nwdrflac;
-            track.duration =  nwdrflac.totalPCMFrameCount / nwdrflac.sampleRate;
-            FAQ_STATE = "FAQ_START_READ";
-            break;            
-        }
-        catch (error) {
-            console.error(error);
-            if(mysignal.aborted) {
-                console.log('FAQOPEN aborted catch');
-                return;            
-            }
-            failedcount++;
-            if(failedcount == 2) {
-                FAQ_STATE = "FAQ_NEXT";
-                break;
-            }
-        }
-    
-    }
-    FAQLOOP();
-}
-
-function FAQLOOP()
-{
-    while(1)
-    {        
-        if(FAQ_STATE === "FAQ_IDLE") {
-            if(!Tracks[QueueIndex]) return;
-            if(!Tracks[QueueIndex].nwdrflac) {
-                FAQ_STATE = "FAQ_OPEN";
-                FAQOPEN();
-                return;                
-            }
-            else {
-                FAQ_STATE = "FAQ_START_READ";
-            }            
-        }
-        else if(FAQ_STATE === "FAQ_NEXT") {
-            QueueIndex++;
-            FAQ_STATE = "FAQ_IDLE";
-        }
-        else if(FAQ_STATE === "FAQ_START_READ") {
-
-        }
-        else if(FAQ_STATE === "FAQ_WAIT") {
-
-            return;
-        }
-        else {
-            return;
-        }
-
-
-
-        for(; QueueIndex < Tracks.length; QueueIndex++) {
-            let track = Tracks[QueueIndex];
-        }
-    }    
-}
-*/
-
 async function fillAudioQueue(time) {
     let initializing = 1;
 TRACKLOOP:while(1) {
+        // advance the track
         AQID++;
         if(!initializing) {
             if(!document.getElementById("repeattrack").checked) {
@@ -376,13 +278,17 @@ TRACKLOOP:while(1) {
         let track = Tracks_QueueCurrent;
         if(! track) return;
         
-        // cleanup other nwdrflacs
-        let mysig = FACAbortController.signal;  
-        let prev;
-        while(prev = track.prev) {
-            if(!prev.nwdrflac) break;
-            await prev.nwdrflac.close()
-            prev.nwdrflac = null;
+        // cleanup nwdrflac
+        let mysig = FACAbortController.signal;
+        if(NWDRFLAC) {
+            if(!track.nwdrflac || (NWDRFLAC !== track.nwdrflac)) {
+                track.nwdrflac = null;
+                await NWDRFLAC.close();
+                NWDRFLAC = null;                
+            }
+        }
+        else if(track.nwdrflac) {
+            track.nwdrflac = null;            
         }
         if(mysig.aborted) {
             console.log('abort after cleanup');
@@ -399,7 +305,8 @@ TRACKLOOP:while(1) {
                     console.log('open aborted success');
                     nwdrflac.close();
                     return;
-                }                
+                }
+                NWDRFLAC = nwdrflac;                 
                 track.nwdrflac = nwdrflac;
                 track.duration =  nwdrflac.totalPCMFrameCount / nwdrflac.sampleRate;
             }
@@ -452,8 +359,9 @@ TRACKLOOP:while(1) {
                         console.log('aborted decodeaudiodata success');                   
                         return;
                     }
-                    if(buffer.duration !== (todec / track.nwdrflac.sampleRate)) {
-                        console.log('HARAM');
+                    if(buffer.duration !== (todec / track.nwdrflac.sampleRate)) {                       
+                        buffer = null;
+                        throw('network error? buffer wrong length');
                     }                        
                 }
                 catch(error) {
@@ -521,8 +429,6 @@ var nexttxt    = document.getElementById('next_text');
 var prevtxt    = document.getElementById('prev_text');
 var playtxt    = document.getElementById('play_text');
 var dbarea     = document.getElementById('musicdb');
-QueueTrack("Chuck Person - Chuck Person's Eccojams Vol 1 (2016 WEB) [FLAC]/A1.flac");
-
 
 // BEGIN UI handlers
 
@@ -553,7 +459,7 @@ rptrackbtn.addEventListener('change', function(e) {
          MainAudioContext.suspend();           
          ppbtn.textContent = 'PLAY';                        
      }
-     else if ((ppbtn.textContent == 'PLAY') || (ppbtn.textContent == 'IDLE')) {
+     else if ((ppbtn.textContent == 'PLAY')) {
          MainAudioContext.resume();
          ppbtn.textContent = 'PAUSE';
      }
@@ -761,3 +667,23 @@ function SetSeekbarValue(seconds) {
 function SetPPText(text) {
     ppbtn.textContent = text;    
 }
+
+
+function InitPPText() {
+    if(MainAudioContext.state === "suspended") {
+        ppbtn.textContent = "PLAY";
+    }
+    else {
+        ppbtn.textContent = "PAUSE";
+    }        
+}
+
+
+// Main
+MainAudioContext = CreateAudioContext({'sampleRate' : 44100 });
+
+setInterval(function() {
+    MainAudioLoop();
+}, 25);
+window.requestAnimationFrame(GraphicsLoop);
+//QueueTrack("Chuck Person - Chuck Person's Eccojams Vol 1 (2016 WEB) [FLAC]/A1.flac");

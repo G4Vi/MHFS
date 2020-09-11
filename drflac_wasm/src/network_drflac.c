@@ -171,6 +171,7 @@ static size_t on_read_network(void* pUserData, void* bufferOut, size_t bytesToRe
     if((endoffset > (NETWORK_DR_FLAC_START_CACHE-1)) || !nwdrflac->startOk)
     {
         bytesread = do_fetch(nwdrflac->url, nwdrflac->fileoffset, endoffset, bufferOut, &nwdrflac->filesize, nwdrflac->signal_id);
+        // check for failed ?
     }
     else
     {

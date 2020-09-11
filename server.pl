@@ -3719,7 +3719,12 @@ my @routes = (
             $request->SendFile($requestfile);
         }
         elsif (-d $requestfile && -f $requestfile.'/index.html') {
-            $request->SendFile($requestfile.'/index.html');
+            if((substr $request->{'path'}{'unescapepath'}, -1) eq '/') {
+                $request->SendFile($requestfile.'/index.html');
+            }
+            else {
+                $request->Send301($request->{'path'}{'unescapepath'}.'/');
+            }            
         }
         else {
             $request->Send404;
