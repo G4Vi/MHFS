@@ -1037,8 +1037,10 @@ function Track(trackname) {
     this.clearCache = function() {
         this.buf = null;
         this.bufs = [];
-        NetworkDrFlac_close(this.nwdrflac);
-        this.nwdrflac = null;   
+        if(USEDECDL) {
+            NetworkDrFlac_close(this.nwdrflac);        
+            this.nwdrflac = null;
+        }   
         this.abortcontroller = null;     
     };
 }
