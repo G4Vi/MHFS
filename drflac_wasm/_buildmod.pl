@@ -3,18 +3,32 @@ use strict;
 use warnings;
 use feature 'say';
 
-system('mkdir', '-p', 'modout') == 0 or die("failed to make mod out dir");
+my $debug = 0;
+#my $debug = 1;
 
-#'--extern-pre-js', 'src/network_drflac.pre.js', 
-system('emcc', '-O3',
-'--pre-js', 'src/jspass.js',
-'src/network_drflac.c', '-o', 'modout/drflac.js', '-s', 'ASYNCIFY', '-s', 'ASYNCIFY_IMPORTS=["do_fetch"]', '-s',
+my $outdir;
+my @cmd = ('emcc');
+if($debug) {
+    push @cmd, ("-O0", "-g4", '--source-map-base', './'); #'--source-map-base', 'https://computoid.com/stream/static/music_inc/'); # for chrome
+    #push @cmd, ('-s', 'SAFE_HEAP=1');
+    $outdir = 'mod_dbg';
+}
+else {
+    push @cmd, ('-O3');
+    $outdir = 'mod_rel';
+}
+system('mkdir', '-p', $outdir) == 0 or die("failed to create $outdir");
+
+push @cmd, ('--pre-js', 'src/jspass.js',
+'src/network_drflac.c', '-o', "$outdir/drflac.js", '-s', 'ASYNCIFY', '-s', 'ASYNCIFY_IMPORTS=["do_fetch"]', '-s',
 qq$EXPORTED_FUNCTIONS=["_network_drflac_open", "_network_drflac_close", "_network_drflac_totalPCMFrameCount", "_network_drflac_sampleRate", "_network_drflac_bitsPerSample", "_network_drflac_channels", "_network_drflac_read_pcm_frames_s16_to_wav", "_network_drflac_set_cancel"]$,
 '-s', qq$EXPORTED_RUNTIME_METHODS=["cwrap", "ccall"]$, 
-#'-s', 'ASSERTIONS=1',
-#'-s', 'ERROR_ON_UNDEFINED_SYMBOLS=0',
 '-s', 'EXPORT_ES6=1',
-'-s', 'MODULARIZE=1',
-) == 0 or die("failed to build");
+'-s', 'MODULARIZE=1');
 
-system('cp', 'modout/drflac.js', 'modout/drflac.wasm', '../static/music_inc') == 0 or die("failed to copy to static");
+system(@cmd) == 0 or die("failed to build");
+
+system('rsync', '-a', $outdir.'/', '../static/music_inc')== 0 or die("failed to copy to music_inc");
+if($debug) {
+    system('rsync', '-a', 'src', '../static/music_inc/') == 0 or die("failed to copy src to music_inc");
+}

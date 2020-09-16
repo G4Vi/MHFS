@@ -48,8 +48,8 @@ function MainAudioLoop() {
         timeadjusted = true;
     }
     
-    // queue up to 200 ms ahead
-    let lookaheadtime = MainAudioContext.currentTime + 0.200;
+    // queue up to 5 secs ahead
+    let lookaheadtime = MainAudioContext.currentTime + 5;
     while(bufferTime < lookaheadtime) {
         // everything is scheduled break out
         if(acindex === AudioQueue.length) return;  
