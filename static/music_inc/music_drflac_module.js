@@ -42,7 +42,7 @@ class Mutex {
   }
 
 let GlobalNetworkDrFlacMutex = new Mutex();
-const NetworkDrFlac = async function(theURL, sigfunc) {    
+const NetworkDrFlac = async function(theURL, mysignal) {    
     // make sure drflac is ready. Inlined to avoid await when it's already ready
     while(typeof DrFlac === 'undefined') {
         console.log('music_drflac, no drflac sleeping 5ms');
@@ -53,13 +53,16 @@ const NetworkDrFlac = async function(theURL, sigfunc) {
         await waitForEvent(DrFlac, 'ready');
     }
     
-    let that = {};
-    that.sigid = DrFlac.Module.InsertJSObject(sigfunc);
+    let sigid = DrFlac.Module.InsertJSObject(mysignal);    
+    let that = {};    
     //that.mutex = new Mutex();
     that.mutex = GlobalNetworkDrFlacMutex;
+    
     let unlock = await that.mutex.lock();        
-    that.ptr = await DrFlac.network_drflac_open(theURL, that.sigid);
+    that.ptr = await DrFlac.network_drflac_open(theURL, sigid);
     unlock();
+    
+    DrFlac.Module.RemoveJSObject(sigid);
     if(!that.ptr) {
         throw("Failed network_drflac_open");
     }
@@ -71,23 +74,24 @@ const NetworkDrFlac = async function(theURL, sigfunc) {
 
     that.close = async function() {
         let unlock = await that.mutex.lock();
-        DrFlac.network_drflac_close(that.ptr);
-        DrFlac.Module.RemoveJSObject(that.sigid);
+        DrFlac.network_drflac_close(that.ptr);       
         unlock();
     };
 
-    that.read_pcm_frames_to_wav = async function(start, count) {
+    that.read_pcm_frames_to_wav = async function(start, count, mysignal) {
         if(that.bitsPerSample != 16)
         {
             throw('bps not 16');        
         }
         let pcm_frame_size = (that.bitsPerSample == 16) ? 2*that.channels : 4*that.channels;
         let destdata = DrFlac.Module._malloc(44+ (count*pcm_frame_size)); 
+        let sigid = DrFlac.Module.InsertJSObject(mysignal);        
 
         let unlock = await that.mutex.lock();
-        let actualsize  = await DrFlac.network_drflac_read_pcm_frames_s16_to_wav(that.ptr, start, count, destdata);
+        let actualsize  = await DrFlac.network_drflac_read_pcm_frames_s16_to_wav(that.ptr, start, count, destdata, sigid);
         unlock();
 
+        DrFlac.Module.RemoveJSObject(sigid);
         if(actualsize <= 0) {
             DrFlac.Module._free(destdata);   
             throw("network_drflac_read_pcm_frames_s16_to_wav returned 0 or less");
@@ -117,7 +121,7 @@ Module().then(function(DrFlacMod){
 
     DrFlac.network_drflac_channels = DrFlacMod.cwrap('network_drflac_channels', "number", ["number"]);
 
-    DrFlac.network_drflac_read_pcm_frames_s16_to_wav = DrFlacMod.cwrap('network_drflac_read_pcm_frames_s16_to_wav', "number", ["number", "number", "number", "number"], {async : true});
+    DrFlac.network_drflac_read_pcm_frames_s16_to_wav = DrFlacMod.cwrap('network_drflac_read_pcm_frames_s16_to_wav', "number", ["number", "number", "number", "number", "number"], {async : true});
 
     DrFlac.network_drflac_close = DrFlacMod.cwrap('network_drflac_close', null, ["number"]);    
     

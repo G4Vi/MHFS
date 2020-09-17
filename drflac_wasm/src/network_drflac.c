@@ -99,7 +99,7 @@ EM_JS(unsigned, do_fetch, (const char *url, unsigned start, unsigned end, void *
         
         
         try {
-            let signal = Module.GetJSObject(sigid)();
+            let signal = Module.GetJSObject(sigid);
             const thedata = await makeRequest('GET', jsurl, signal);
             console.log('got thedata');
             /*
@@ -240,13 +240,13 @@ void *network_drflac_open(const char *url, const unsigned sigid)
     ndrflac->signal_id = sigid;
 
    
-
-    EM_ASM({
-        Module.GetJSObject($0)().addEventListener('abort', function(){
+    // remove this garbage
+    /*EM_ASM({
+        Module.GetJSObject($0).addEventListener('abort', function(){
             console.log('network_drflac: setting cancel');
             Module.ccall('network_drflac_set_cancel', null, ["number"], [$1]);
         });        
-    }, sigid, ndrflac);
+    }, sigid, ndrflac);*/
 
     do {
         ndrflac->isrunning = true;
@@ -295,8 +295,9 @@ uint8_t network_drflac_channels(const NetworkDrFlac *ndrflac)
 }
 
 /* returns of the number of bytes of the wav file */
-uint64_t network_drflac_read_pcm_frames_s16_to_wav(NetworkDrFlac *ndrflac, uint32_t start_pcm_frame, uint32_t desired_pcm_frames, uint8_t *outWav)
-{    
+uint64_t network_drflac_read_pcm_frames_s16_to_wav(NetworkDrFlac *ndrflac, uint32_t start_pcm_frame, uint32_t desired_pcm_frames, uint8_t *outWav, const unsigned sigid)
+{   
+    ndrflac->signal_id = sigid; 
     drflac *pFlac = ndrflac->pFlac;
     const uint32_t currentPCMFrame32 = pFlac->currentPCMFrame;
     printf("network_drflac:  seeking to %u, currentframe %u\n", start_pcm_frame, currentPCMFrame32);    

@@ -20,6 +20,27 @@ function DeclareGlobalFunc(name, value) {
     });
 };
 
+class Mutex {
+    constructor() {
+      this._locking = Promise.resolve();
+      this._locked = false;
+    }
+  
+    isLocked() {
+      return this._locked;
+    }
+  
+    lock() {
+      this._locked = true;
+      let unlockNext;
+      let willLock = new Promise(resolve => unlockNext = resolve);
+      willLock.then(() => this._locked = false);
+      let willUnlock = this._locking.then(() => unlockNext);
+      this._locking = this._locking.then(() => willLock);
+      return willUnlock;
+    }
+}
+
 function CreateAudioContext(options) {
     let mycontext = (window.hasWebKit) ? new webkitAudioContext(options) : (typeof AudioContext != "undefined") ? new AudioContext(options) : null;
     GainNode = mycontext.createGain();
@@ -265,7 +286,11 @@ if(typeof sleep === 'undefined') {
 }
 
 async function fillAudioQueue(time) {
+    let mutex = new Mutex();
+    let unlock = await mutex.lock();    
+    
     let initializing = 1;
+    let mysignal = FACAbortController.signal;
 TRACKLOOP:while(1) {
         // advance the track
         AQID++;
@@ -276,10 +301,12 @@ TRACKLOOP:while(1) {
         }
         initializing = 0;        
         let track = Tracks_QueueCurrent;
-        if(! track) return;
+        if(! track) {
+            unlock();
+            return;
+        }
         
         // cleanup nwdrflac
-        let mysig = FACAbortController.signal;
         if(NWDRFLAC) {
             if(!track.nwdrflac || (NWDRFLAC !== track.nwdrflac)) {
                 track.nwdrflac = null;
@@ -290,20 +317,18 @@ TRACKLOOP:while(1) {
         else if(track.nwdrflac) {
             track.nwdrflac = null;            
         }
-        if(mysig.aborted) {
+        if(mysignal.aborted) {
             console.log('abort after cleanup');
         }
         
         // open the track
-        for(let failedtimes = 0; !track.nwdrflac; ) {
-            let mysignal = FACAbortController.signal;                
+        for(let failedtimes = 0; !track.nwdrflac; ) {             
             try {                
-                let nwdrflac = await NetworkDrFlac(track.url, function() {
-                    return mysignal;
-                });
+                let nwdrflac = await NetworkDrFlac(track.url, mysignal);
                 if(mysignal.aborted) {
                     console.log('open aborted success');
                     nwdrflac.close();
+                    unlock();
                     return;
                 }
                 NWDRFLAC = nwdrflac;                 
@@ -313,7 +338,8 @@ TRACKLOOP:while(1) {
             catch(error) {
                 console.error(error);
                 if(mysignal.aborted) {
-                    console.log('open aborted catch');                   
+                    console.log('open aborted catch');
+                    unlock();                    
                     return;
                 }
                 failedtimes++;
@@ -336,10 +362,10 @@ TRACKLOOP:while(1) {
         while(dectime < track.nwdrflac.totalPCMFrameCount) {
             // if plenty of audio is queued. Don't download            
             while(AQ_unqueuedTime() >= 10) {
-                let mysignal = FACAbortController.signal;
                 await sleep(25);
                 if(mysignal.aborted) {
-                    console.log('aborted sleep');                   
+                    console.log('aborted sleep');
+                    unlock();                     
                     return;
                 }                    
             }
@@ -347,16 +373,17 @@ TRACKLOOP:while(1) {
             let todec = Math.min(track.nwdrflac.sampleRate, track.nwdrflac.totalPCMFrameCount - dectime);            
             let buffer;
             for(let failedcount = 0;!buffer;) {
-                let mysignal = FACAbortController.signal;
                 try {
-                    let wav = await track.nwdrflac.read_pcm_frames_to_wav(dectime, todec);
+                    let wav = await track.nwdrflac.read_pcm_frames_to_wav(dectime, todec, mysignal);
                     if(mysignal.aborted) {
-                        console.log('aborted read_pcm_frames success');                   
+                        console.log('aborted read_pcm_frames success');
+                        unlock();                        
                         return;
                     }
                     buffer = await MainAudioContext.decodeAudioData(wav);
                     if(mysignal.aborted) {
-                        console.log('aborted decodeaudiodata success');                   
+                        console.log('aborted decodeaudiodata success');
+                        unlock();                        
                         return;
                     }
                     if(buffer.duration !== (todec / track.nwdrflac.sampleRate)) {                       
@@ -367,7 +394,8 @@ TRACKLOOP:while(1) {
                 catch(error) {
                     console.error(error);
                     if(mysignal.aborted) {
-                        console.log('aborted read_pcm_frames decodeaudiodata catch');                   
+                        console.log('aborted read_pcm_frames decodeaudiodata catch');
+                        unlock();                        
                         return;
                     }
                     failedcount++;
@@ -416,6 +444,7 @@ TRACKLOOP:while(1) {
             dectime += todec;
         }        
     }
+    unlock();
 }
 
 var prevbtn    = document.getElementById("prevbtn");
