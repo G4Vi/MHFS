@@ -21,7 +21,7 @@ system('mkdir', '-p', $outdir) == 0 or die("failed to create $outdir");
 
 push @cmd, ('--pre-js', 'src/jspass.js',
 'src/network_drflac.c', '-o', "$outdir/drflac.js", '-s', 'ASYNCIFY', '-s', 'ASYNCIFY_IMPORTS=["do_fetch"]', '-s',
-qq$EXPORTED_FUNCTIONS=["_network_drflac_open", "_network_drflac_close", "_network_drflac_totalPCMFrameCount", "_network_drflac_sampleRate", "_network_drflac_bitsPerSample", "_network_drflac_channels", "_network_drflac_read_pcm_frames_s16_to_wav", "_network_drflac_set_cancel"]$,
+qq$EXPORTED_FUNCTIONS=["_network_drflac_open", "_network_drflac_close", "_network_drflac_totalPCMFrameCount", "_network_drflac_sampleRate", "_network_drflac_bitsPerSample", "_network_drflac_channels", "_network_drflac_read_pcm_frames_s16_to_wav"]$,
 '-s', qq$EXPORTED_RUNTIME_METHODS=["cwrap", "ccall"]$, 
 '-s', 'EXPORT_ES6=1',
 '-s', 'MODULARIZE=1');

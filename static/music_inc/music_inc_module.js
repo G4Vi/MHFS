@@ -2,7 +2,6 @@ import {default as NetworkDrFlac} from './music_drflac_module.js'
 
 let MainAudioContext;
 let GainNode;
-let GraphicsTimers = [];
 let AQID = -1;
 let AudioQueue = [];
 let Tracks_HEAD;
@@ -99,15 +98,6 @@ function MainAudioLoop() {
 }
 
 function GraphicsLoop() {
-    let removetimers = 0;
-    for(let i = 0; i < GraphicsTimers.length; i++) {
-        if(GraphicsTimers[i].time <= MainAudioContext.currentTime) {
-            console.log('jraphics at current time ' + MainAudioContext.currentTime);
-            GraphicsTimers[i].func(GraphicsTimers[i]);
-            removetimers++;
-        }
-    }
-    GraphicsTimers.splice(0, removetimers);
     AQ_clean();
     if(SBAR_UPDATING) {
         
@@ -200,17 +190,15 @@ function PlayTrack(trackname) {
     else if(Tracks_QueueCurrent) {
         queuePos = Tracks_QueueCurrent;
     }
-    // otherwise queue at tail
     
-    let queueAfter;
+    let queueAfter; //falsey is tail
     if(queuePos) {
         queueAfter = queuePos.next;        
     }
 
     AQ_stopAudioWithoutID(-1);
-    GraphicsTimers = [];
-    FACAbortController.abort();  // stop the decode queue of next tracks(s)
-    FACAbortController = new AbortController();
+    //FACAbortController.abort();  // stop the decode queue of next tracks(s)
+    //FACAbortController = new AbortController();
 
     Tracks_QueueCurrent = null;
     return QueueTrack(trackname, queuePos, queueAfter);   
@@ -235,8 +223,22 @@ function PlayTracks(tracks) {
 function AQ_clean() {
     let toDelete = 0;
     for(let i = 0; i < AudioQueue.length; i++) {
-        if(! AudioQueue[i].endTime) break;
+        if(! AudioQueue[i].endTime) break;        
+
+        // run and remove associated graphics timers
+        let timerdel = 0;
+        for(let j = 0; j < AudioQueue[i].timers.length; j++) {
+            if(AudioQueue[i].timers[j].time <= MainAudioContext.currentTime) {
+                console.log('aqid: ' + AudioQueue[i].aqid + ' running timer at ' + MainAudioContext.currentTime);
+                AudioQueue[i].timers[j].func(AudioQueue[i].timers[j]);
+                timerdel++;
+            }
+        }
+        if(timerdel)AudioQueue[i].timers.splice(0, timerdel);
+        
+        // remove if it has passed
         if(AudioQueue[i].endTime <= MainAudioContext.currentTime) {
+            console.log('aqid: ' + AudioQueue[i].aqid + ' elapsed, removing');
             toDelete++;
         }
     }
@@ -274,23 +276,49 @@ function AQ_stopAudioWithoutID(aqid) {
             AudioQueue[i].source.disconnect();
             AudioQueue[i].source.stop();
         }
+        console.log('aqid: ' + AudioQueue[i].aqid + ' AQ_stopAudioWithoutID delete, curr: ' + aqid);
     }
     if(dCount) {
         AudioQueue.splice(AudioQueue.length - dCount, dCount);
     }    
 }
 
-if(typeof sleep === 'undefined') {
-    const sleep = m => new Promise(r => setTimeout(r, m));
-    DeclareGlobalFunc('sleep', sleep);
+if(typeof abortablesleep === 'undefined') {
+    //const sleep = m => new Promise(r => setTimeout(r, m));
+    const abortablesleep = (ms, signal) => new Promise(function(resolve) {
+        const onTimerDone = function() {
+            resolve();
+            signal.removeEventListener('abort', stoptimer);
+        };
+        let timer = setTimeout(function() {
+            console.log('sleep done');
+            onTimerDone();
+        }, ms);
+
+        const stoptimer = function() {
+            console.log('aborted sleep');            
+            onTimerDone();
+            clearTimeout(timer);            
+        };
+        signal.addEventListener('abort', stoptimer);
+    });
+    DeclareGlobalFunc('abortablesleep', abortablesleep);
 }
 
+let FAQ_MUTEX = new Mutex();
 async function fillAudioQueue(time) {
-    let mutex = new Mutex();
-    let unlock = await mutex.lock();    
-    
-    let initializing = 1;
+    // Stop the previous FAQ before starting
+    FACAbortController.abort();
+    FACAbortController = new AbortController();
     let mysignal = FACAbortController.signal;
+    let unlock = await FAQ_MUTEX.lock();    
+    if(mysignal.aborted) {
+        console.log('abort after mutex acquire');
+        unlock();
+        return;
+    }
+    let initializing = 1;
+    
 TRACKLOOP:while(1) {
         // advance the track
         AQID++;
@@ -311,15 +339,17 @@ TRACKLOOP:while(1) {
             if(!track.nwdrflac || (NWDRFLAC !== track.nwdrflac)) {
                 track.nwdrflac = null;
                 await NWDRFLAC.close();
-                NWDRFLAC = null;                
+                NWDRFLAC = null;
+                if(mysignal.aborted) {
+                    console.log('abort after cleanup');
+                    unlock();
+                    return;
+                }                
             }
         }
         else if(track.nwdrflac) {
             track.nwdrflac = null;            
-        }
-        if(mysignal.aborted) {
-            console.log('abort after cleanup');
-        }
+        }       
         
         // open the track
         for(let failedtimes = 0; !track.nwdrflac; ) {             
@@ -361,10 +391,10 @@ TRACKLOOP:while(1) {
         let playbackinfo = {'duration' : track.duration};        
         while(dectime < track.nwdrflac.totalPCMFrameCount) {
             // if plenty of audio is queued. Don't download            
-            while(AQ_unqueuedTime() >= 10) {
-                await sleep(25);
+            while(AQ_unqueuedTime() >= 20) {
+                await abortablesleep(25, mysignal);
                 if(mysignal.aborted) {
-                    console.log('aborted sleep');
+                    console.log('handling aborted sleep');
                     unlock();                     
                     return;
                 }                    
@@ -407,14 +437,14 @@ TRACKLOOP:while(1) {
             }
          
             // Add to the audio queue
-            let aqItem = { 'buffer' : buffer, 'duration' : todec, 'aqid' : AQID, 'skiptime' : (dectime / track.nwdrflac.sampleRate), 'track' : track, 'playbackinfo' : playbackinfo};
+            let aqItem = { 'buffer' : buffer, 'duration' : todec, 'aqid' : AQID, 'skiptime' : (dectime / track.nwdrflac.sampleRate), 'track' : track, 'playbackinfo' : playbackinfo, 'timers' : []};
             // At start and end track update the GUI
             let isEnd = ((dectime+todec) === track.nwdrflac.totalPCMFrameCount);
             if(isStart || isEnd) {            
                 aqItem.func = function(startTime, endTime) {
                     if(isStart) {
-                        console.log('Graphics start timer at ' + startTime); 
-                        GraphicsTimers.push({'time': startTime, 'func': function() {                               
+                        console.log('aqid: ' + aqItem.aqid + ' start timer at ' + startTime + ' currentTime ' + MainAudioContext.currentTime);
+                        aqItem.timers.push({'time': startTime, 'func': function() {                             
                             seekbar.min = 0;
                             seekbar.max = playbackinfo.duration;
                             SetEndtimeText(playbackinfo.duration);
@@ -427,8 +457,8 @@ TRACKLOOP:while(1) {
                         isStart = false;
                     }
                     if(isEnd) {
-                        console.log('Graphics end timer at ' + endTime);
-                        GraphicsTimers.push({'time': endTime, 'func': function(){
+                        console.log('aqid: ' + aqItem.aqid + ' end timer at ' + endTime + ' currentTime ' + MainAudioContext.currentTime); 
+                        aqItem.timers.push({'time': endTime, 'func': function(){
                             let curTime = 0;
                             SetEndtimeText(0);                    
                             SetCurtimeText(curTime);
@@ -468,9 +498,8 @@ rptrackbtn.addEventListener('change', function(e) {
     
     console.log('rptrack abort');
     AQ_stopAudioWithoutID(aqid); // stop the audio queue of next track(s)
-    GraphicsTimers = [];
-    FACAbortController.abort();  // stop the decode queue of next tracks(s)
-    FACAbortController = new AbortController();
+    //FACAbortController.abort();  // stop the decode queue of next tracks(s)
+    //FACAbortController = new AbortController();
 
     if(e.target.checked) {
         // repeat the currently playing track
@@ -508,9 +537,8 @@ rptrackbtn.addEventListener('change', function(e) {
      if(AudioQueue[0]) {
          Tracks_QueueCurrent = AudioQueue[0].track;    
          AQ_stopAudioWithoutID(-1);
-         GraphicsTimers = [];
-         FACAbortController.abort();  // stop the decode queue of next tracks(s)
-         FACAbortController = new AbortController();
+         //FACAbortController.abort();
+         //FACAbortController = new AbortController();
          
          let stime = Number(e.target.value);
          console.log('SEEK ' + stime);
@@ -539,9 +567,8 @@ rptrackbtn.addEventListener('change', function(e) {
 
     Tracks_QueueCurrent = prevtrack;
     AQ_stopAudioWithoutID(-1);
-    GraphicsTimers = [];
-    FACAbortController.abort();  // stop the decode queue of next tracks(s)
-    FACAbortController = new AbortController();
+    //FACAbortController.abort();  // stop the decode queue of next tracks(s)
+    //FACAbortController = new AbortController();
 
     fillAudioQueue();    
  });
@@ -562,9 +589,8 @@ rptrackbtn.addEventListener('change', function(e) {
 
     Tracks_QueueCurrent = nexttrack;
     AQ_stopAudioWithoutID(-1);
-    GraphicsTimers = [];
-    FACAbortController.abort();  // stop the decode queue of next tracks(s)
-    FACAbortController = new AbortController();
+    //FACAbortController.abort();  // stop the decode queue of next tracks(s)
+    //FACAbortController = new AbortController();
 
     fillAudioQueue(); 
  });

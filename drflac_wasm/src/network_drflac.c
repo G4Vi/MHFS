@@ -14,13 +14,12 @@ typedef float float32_t;
 typedef struct {
     char *url;
     unsigned fileoffset;
-    drflac *pFlac;
     unsigned filesize;
-    uint8_t startData[NETWORK_DR_FLAC_START_CACHE];
-    bool startOk;
-    bool failed;
+    drflac *pFlac;
     unsigned signal_id;
-    bool isrunning;
+    bool failed; 
+    bool startOk;      
+    uint8_t startData[NETWORK_DR_FLAC_START_CACHE];
 } NetworkDrFlac;
 
 
@@ -64,7 +63,7 @@ EM_JS(unsigned, do_fetch, (const char *url, unsigned start, unsigned end, void *
             xhr.onload = function () {
                 signal.removeEventListener('abort', handler);
                 if (this.status >= 200 && this.status < 300) {
-                    console.log('xhr success');
+                    //console.log('xhr success');
                     resolve(xhr.response);
                 } else {
                     console.log('xhr fail');                   
@@ -75,7 +74,7 @@ EM_JS(unsigned, do_fetch, (const char *url, unsigned start, unsigned end, void *
                 }
             };
             xhr.onerror = function () {
-                console.log('xhr on error');
+                console.log('xhr onerror');
                 signal.removeEventListener('abort', handler);
                 reject({
                     status: this.status,
@@ -84,7 +83,7 @@ EM_JS(unsigned, do_fetch, (const char *url, unsigned start, unsigned end, void *
             };
             
             xhr.onabort = function() {
-                console.log('xhr abort');
+                console.log('xhr onabort');
                 signal.removeEventListener('abort', handler);
                 reject({
                     status: this.status,
@@ -93,7 +92,7 @@ EM_JS(unsigned, do_fetch, (const char *url, unsigned start, unsigned end, void *
             };
 
             xhr.send();
-            console.log('sending xhr');
+            //console.log('sending xhr');
         });
         }
         
@@ -139,8 +138,7 @@ EM_JS(unsigned, do_fetch, (const char *url, unsigned start, unsigned end, void *
             let dataHeap = new Uint8Array(Module.HEAPU8.buffer, bufferOut, thedata.byteLength);
             dataHeap.set(new Uint8Array(thedata));
     
-            // return the number of bytes downloaded
-            console.log('network_drflac: fetch completed, returning');
+            // return the number of bytes downloaded           
             return dataHeap.byteLength;
         } catch(error) {
             console.error(error + ' with ' + jsurl);            
@@ -155,39 +153,57 @@ static size_t on_read_network(void* pUserData, void* bufferOut, size_t bytesToRe
     NetworkDrFlac *nwdrflac = (NetworkDrFlac *)pUserData;
     if(nwdrflac->failed)
     {
-        printf("network_drflac: on_read_network called when failed\n");           
-        return 0;
-    }    
-
-    // try to avoid seeking too far    
+        printf("network_drflac: already failed\n");
+        goto on_read_network_FAILED;
+    }
     unsigned endoffset = nwdrflac->fileoffset+bytesToRead-1;
-    // not sure if this is right
+
+    // adjust params based on file size 
     if(nwdrflac->filesize > 0)
     {
-        if(nwdrflac->fileoffset >= nwdrflac->filesize) return 0;       
-        if(endoffset >= nwdrflac->filesize) endoffset = nwdrflac->filesize - 1;     
+        if(nwdrflac->fileoffset >= nwdrflac->filesize)
+        {
+            printf("network_drflac: fileoffset >= filesize %u %u\n", nwdrflac->fileoffset, nwdrflac->filesize);
+            goto on_read_network_FAILED;
+        }       
+        if(endoffset >= nwdrflac->filesize)
+        {
+            unsigned newendoffset = nwdrflac->filesize - 1;
+            printf("network_drflac: truncating endoffset from %u to %u\n", endoffset, newendoffset);
+            endoffset = newendoffset;
+            bytesToRead = endoffset - nwdrflac->fileoffset + 1;            
+        }     
     }
 
+    // nothing to read, do nothing
+    if(bytesToRead == 0)
+    {
+        printf("network_drflac: reached end of stream\n");
+        return 0;
+    }
+
+    // download and copy into buffer
     size_t bytesread;
     if((endoffset > (NETWORK_DR_FLAC_START_CACHE-1)) || !nwdrflac->startOk)
     {
         bytesread = do_fetch(nwdrflac->url, nwdrflac->fileoffset, endoffset, bufferOut, &nwdrflac->filesize, nwdrflac->signal_id);       
-        if(bytesread == 0) nwdrflac->failed = true;
+        if(bytesread == 0)
+        {
+            printf("network_drflac: do_fetch read 0 bytes\n");  
+            goto on_read_network_FAILED;
+        }
     }
     else
     {
-        bytesread = endoffset-nwdrflac->fileoffset+1;
+        bytesread = bytesToRead; 
         memcpy(bufferOut, &nwdrflac->startData[nwdrflac->fileoffset], bytesread);
-    }     
-    
-    if(nwdrflac->failed)
-    {
-        printf("network_drflac: failed on_read_network\n");           
-        return 0;
-    }
-
+    }   
     nwdrflac->fileoffset += bytesread;
     return bytesread;
+
+on_read_network_FAILED:
+    nwdrflac->failed = true;
+    return 0;
 }
     
 /*
@@ -195,10 +211,10 @@ static size_t on_read_network(void* pUserData, void* bufferOut, size_t bytesToRe
 */
 static drflac_bool32 on_seek_network(void* pUserData, int offset, drflac_seek_origin origin)
 {
-    DRFLAC_ASSERT(offset >= 0);  /* <-- Never seek backwards. */
     NetworkDrFlac *ndrflac = (NetworkDrFlac *)pUserData;
     if(ndrflac->failed)
     {
+        printf("network_drflac: already failed, breaking\n");
         return DRFLAC_FALSE;
     }
 
@@ -213,16 +229,12 @@ static drflac_bool32 on_seek_network(void* pUserData, int offset, drflac_seek_or
     }
     if((ndrflac->filesize != 0) &&  (tempoffset >= ndrflac->filesize))
     {
+        printf("network_drflac: seek past end of stream\n");
         return DRFLAC_FALSE;
     }
 
     ndrflac->fileoffset = tempoffset;
     return DRFLAC_TRUE;
-}
-
-void network_drflac_set_cancel(NetworkDrFlac *ndrflac)
-{
-    if(ndrflac->isrunning) ndrflac->failed = true;
 }
 
 void *network_drflac_open(const char *url, const unsigned sigid)
@@ -231,43 +243,32 @@ void *network_drflac_open(const char *url, const unsigned sigid)
     NetworkDrFlac *ndrflac = malloc(sizeof(NetworkDrFlac));
     unsigned urlbuflen = strlen(url)+1;
     ndrflac->url = malloc(urlbuflen);
+
+    // set signal_id in every async function
+    ndrflac->signal_id = sigid;
+
     memcpy(ndrflac->url, url, urlbuflen);
     ndrflac->fileoffset = 0;
     ndrflac->filesize = 0;
-    ndrflac->failed = false;
+    ndrflac->failed = false; // must be reset if set    
     ndrflac->startOk = false;
-    ndrflac->pFlac = NULL;
-    ndrflac->signal_id = sigid;
+    ndrflac->pFlac = NULL;      
+    
+    // optimization, cache the first NETWORK_DR_FLAC_START_CACHE bytes        
+    printf("network_drflac: loading cache of : %s\n", ndrflac->url);
+    size_t bytesread = do_fetch(ndrflac->url, 0, (NETWORK_DR_FLAC_START_CACHE-1), &ndrflac->startData, &ndrflac->filesize, ndrflac->signal_id);
+    ndrflac->startOk = (bytesread <= ndrflac->filesize) && (bytesread == NETWORK_DR_FLAC_START_CACHE);
+    if(ndrflac->failed) goto network_drflac_open_FAILED;
 
-   
-    // remove this garbage
-    /*EM_ASM({
-        Module.GetJSObject($0).addEventListener('abort', function(){
-            console.log('network_drflac: setting cancel');
-            Module.ccall('network_drflac_set_cancel', null, ["number"], [$1]);
-        });        
-    }, sigid, ndrflac);*/
+    // finally open the file
+    drflac *pFlac = drflac_open(&on_read_network, &on_seek_network, ndrflac, NULL);
+    if((pFlac == NULL) || ndrflac->failed) goto network_drflac_open_FAILED;         
+    
+    ndrflac->pFlac = pFlac;
+    printf("network_drflac: opened successfully: %s\n", ndrflac->url);
+    return ndrflac;    
 
-    do {
-        ndrflac->isrunning = true;
-
-        // optimization, cache the first NETWORK_DR_FLAC_START_CACHE bytes        
-        printf("network_drflac: loading cache of : %s\n", ndrflac->url);
-        size_t bytesread = do_fetch(ndrflac->url, 0, (NETWORK_DR_FLAC_START_CACHE-1), &ndrflac->startData, &ndrflac->filesize, ndrflac->signal_id);
-        ndrflac->startOk = (bytesread <= ndrflac->filesize) && (bytesread == NETWORK_DR_FLAC_START_CACHE);
-        if(ndrflac->failed) break;
-
-        // finally open the file
-        drflac *pFlac = drflac_open(&on_read_network, &on_seek_network, ndrflac, NULL);
-        if((pFlac == NULL) || ndrflac->failed) break;          
-        
-        ndrflac->pFlac = pFlac;
-        printf("network_drflac: opened successfully: %s\n", ndrflac->url);
-        
-        ndrflac->isrunning = false;
-        return ndrflac;
-    } while(0);
-
+network_drflac_open_FAILED:
     printf("network_drflac: failed to open drflac or failed for %s\n", ndrflac->url);
     free(ndrflac->url);
     free(ndrflac);
@@ -297,40 +298,37 @@ uint8_t network_drflac_channels(const NetworkDrFlac *ndrflac)
 /* returns of the number of bytes of the wav file */
 uint64_t network_drflac_read_pcm_frames_s16_to_wav(NetworkDrFlac *ndrflac, uint32_t start_pcm_frame, uint32_t desired_pcm_frames, uint8_t *outWav, const unsigned sigid)
 {   
-    ndrflac->signal_id = sigid; 
+    ndrflac->signal_id = sigid;
     drflac *pFlac = ndrflac->pFlac;
-    const uint32_t currentPCMFrame32 = pFlac->currentPCMFrame;
-    printf("network_drflac:  seeking to %u, currentframe %u\n", start_pcm_frame, currentPCMFrame32);    
-    if(!drflac_seek_to_pcm_frame(ndrflac->pFlac, start_pcm_frame) || ndrflac->failed)
-    {
-        printf("network_drflac: failed seek_to_pcm_frame\n");
-        ndrflac->failed = false;        
-        return 0;
-    }
-
     if(pFlac->bitsPerSample != 16)
     {
         printf("network_drflac: bitspersample not 16: %u\n", pFlac->bitsPerSample);
-        return 0;
+        goto network_drflac_read_pcm_frames_s16_to_wav_FAILED;
+    }      
+
+    // seek to sample    
+    if(!drflac_seek_to_pcm_frame(pFlac, start_pcm_frame) || ndrflac->failed)
+    {
+        uint32_t currentPCMFrame32 = pFlac->currentPCMFrame;
+        printf("network_drflac: failed seek_to_pcm_frame current: %u desired: %u\n", currentPCMFrame32, start_pcm_frame);               
+        goto network_drflac_read_pcm_frames_s16_to_wav_FAILED;
     }
-    printf("network_drflac: seek success. reading %u\n", desired_pcm_frames);
 
     // decode to pcm
     const unsigned framesize = sizeof(int16_t) * pFlac->channels;
-    uint8_t *data = malloc(framesize*desired_pcm_frames);
-    ndrflac->isrunning = true;
+    uint8_t *data = &outWav[44];
     const uint32_t frames_decoded = drflac_read_pcm_frames_s16(pFlac, desired_pcm_frames, (int16_t*)(data));
-    ndrflac->isrunning = false;
-    printf("network_drflac: %s expected %u decoded %u\n", ndrflac->url, desired_pcm_frames, frames_decoded);
+    if(frames_decoded != desired_pcm_frames)
+    {
+        printf("network_drflac: %s expected %u decoded %u\n", ndrflac->url, desired_pcm_frames, frames_decoded);
+    }
     if(ndrflac->failed)
     {
         printf("network_drflac: failed read_pcm_frames\n");
-        ndrflac->failed = false;
-        free(data);
-        return 0;
+        goto network_drflac_read_pcm_frames_s16_to_wav_FAILED;
     }
 
-    // encode to wav
+    // write wav header
     uint32_t audio_data_size = frames_decoded * pFlac->channels * (pFlac->bitsPerSample/8);        
     memcpy(&outWav[0], "RIFF", 4);
     uint32_t chunksize = audio_data_size + 36;
@@ -352,10 +350,13 @@ uint64_t network_drflac_read_pcm_frames_s16_to_wav(NetworkDrFlac *ndrflac, uint3
     memcpy(&outWav[34], &bitspersample, 2);
     memcpy(&outWav[36], "data", 4);
     memcpy(&outWav[40], &audio_data_size, 4);
-    memcpy(&outWav[44], data, audio_data_size);        
-    
-    free(data);    
+
+    // return wav size
     return 44+audio_data_size;
+
+network_drflac_read_pcm_frames_s16_to_wav_FAILED:
+    ndrflac->failed = false;
+    return 0;
 }
 
 void network_drflac_close(NetworkDrFlac *ndrflac)
