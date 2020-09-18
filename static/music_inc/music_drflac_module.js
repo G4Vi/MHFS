@@ -103,8 +103,51 @@ const NetworkDrFlac = async function(theURL, mysignal) {
         return todec.buffer;   
     };
 
+    that.read_pcm_frames_to_AudioBuffer_wav = async function(start, count, mysignal, audiocontext) {
+        let wav = await that.read_pcm_frames_to_wav(start, count, mysignal);
+        if(mysignal.aborted){
+            throw("read_pcm_frames_to_wav aborted");
+        }
+        let audiobuffer = await audiocontext.decodeAudioData(wav);
+        return audiobuffer;
+    };
+
+    that.read_pcm_frames_to_AudioBuffer_f32 = async function(start, count, mysignal, audiocontext) {
+        const f32_size = 4;
+        const pcm_float_frame_size = f32_size * that.channels;
+        let destdata = DrFlac.Module._malloc(count*pcm_float_frame_size); 
+        let sigid = DrFlac.Module.InsertJSObject(mysignal);
+        
+        let unlock = await that.mutex.lock();
+        let samples  = await DrFlac.network_drflac_read_pcm_frames_f32(that.ptr, start, count, destdata, sigid);
+        unlock();
+
+        DrFlac.Module.RemoveJSObject(sigid);
+        if(samples <= 0) {
+            DrFlac.Module._free(destdata);   
+            throw("network_drflac_read_pcm_frames_f32 returned 0 or less");
+        }
+
+        let audiobuffer = audiocontext.createBuffer(that.channels, samples, that.sampleRate);
+        const chansize = samples * f32_size;
+        for( let i = 0; i < that.channels; i++) {
+            let buf = new Float32Array(DrFlac.Module.HEAPU8.buffer, destdata+(chansize*i), samples);
+            audiobuffer.getChannelData(i).set(buf);        
+        }
+
+        DrFlac.Module._free(destdata);
+        return audiobuffer;        
+    };
+
+    that.read_pcm_frames_to_AudioBuffer = async function(start, count, mysignal, audiocontext) {
+        //return that.read_pcm_frames_to_AudioBuffer_wav(start, count, mysignal, audiocontext);
+        return that.read_pcm_frames_to_AudioBuffer_f32(start, count, mysignal, audiocontext);
+    };
+
     return that;
 };
+
+
 
 export default NetworkDrFlac;
 
@@ -122,6 +165,8 @@ Module().then(function(DrFlacMod){
     DrFlac.network_drflac_channels = DrFlacMod.cwrap('network_drflac_channels', "number", ["number"]);
 
     DrFlac.network_drflac_read_pcm_frames_s16_to_wav = DrFlacMod.cwrap('network_drflac_read_pcm_frames_s16_to_wav', "number", ["number", "number", "number", "number", "number"], {async : true});
+
+    DrFlac.network_drflac_read_pcm_frames_f32 = DrFlacMod.cwrap('network_drflac_read_pcm_frames_f32', "number", ["number", "number", "number", "number", "number"], {async : true});
 
     DrFlac.network_drflac_close = DrFlacMod.cwrap('network_drflac_close', null, ["number"]);    
     

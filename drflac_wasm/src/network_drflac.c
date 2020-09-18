@@ -359,6 +359,57 @@ network_drflac_read_pcm_frames_s16_to_wav_FAILED:
     return 0;
 }
 
+
+/* returns of samples */
+uint64_t network_drflac_read_pcm_frames_f32(NetworkDrFlac *ndrflac, uint32_t start_pcm_frame, uint32_t desired_pcm_frames, float32_t *outFloat, const unsigned sigid)
+{   
+    ndrflac->signal_id = sigid;
+    drflac *pFlac = ndrflac->pFlac;  
+
+    // seek to sample    
+    if(!drflac_seek_to_pcm_frame(pFlac, start_pcm_frame) || ndrflac->failed)
+    {
+        uint32_t currentPCMFrame32 = pFlac->currentPCMFrame;
+        printf("network_drflac_read_pcm_frames_f32: failed seek_to_pcm_frame current: %u desired: %u\n", currentPCMFrame32, start_pcm_frame);               
+        goto network_drflac_read_pcm_frames_f32_FAILED;
+    }
+
+    // decode to pcm
+    float32_t *data = malloc(pFlac->channels*sizeof(float32_t)*desired_pcm_frames);
+    const uint32_t frames_decoded = drflac_read_pcm_frames_f32(pFlac, desired_pcm_frames, data);
+    if(frames_decoded != desired_pcm_frames)
+    {
+        printf("network_drflac_read_pcm_frames_f32: %s expected %u decoded %u\n", ndrflac->url, desired_pcm_frames, frames_decoded);
+    }
+    if(ndrflac->failed)
+    {
+        printf("network_drflac_read_pcm_frames_f32: failed read_pcm_frames_f32\n");
+        free(data);
+        goto network_drflac_read_pcm_frames_f32_FAILED;
+    }
+
+    // deinterleave
+    for(unsigned i = 0; i < frames_decoded; i++)
+    {
+        for(unsigned j = 0; j < pFlac->channels; j++)
+        {            
+            unsigned chanIndex = j*frames_decoded;
+            float32_t sample = data[(i*pFlac->channels) + j];
+            outFloat[chanIndex+i] = sample;
+        }
+    }
+    free(data);
+
+    // return number of samples
+    return frames_decoded;
+
+network_drflac_read_pcm_frames_f32_FAILED:
+    ndrflac->failed = false;
+    return 0;
+}
+
+
+
 void network_drflac_close(NetworkDrFlac *ndrflac)
 {
     drflac_close(ndrflac->pFlac);
