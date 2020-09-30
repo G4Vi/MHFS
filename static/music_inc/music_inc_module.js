@@ -167,23 +167,19 @@ function _QueueTrack(trackname, after, before) {
         Tracks_QueueCurrent = track;
         fillAudioQueue();
     }
+    else {
+        // Update text otherwise
+        let tocheck = (AQ_ID() !== -1) ? AudioQueue[0].track : Tracks_QueueCurrent;
+        if(tocheck) {
+            if(tocheck.prev === track) {
+                SetPrevText(track.trackname);
+            }
+            else if(tocheck.next === track) {
+                SetNextText(track.trackname);
+            }
+        }            
+    }    
     
-    // Update text
-    if(AQ_ID() !== -1) {
-        if(AudioQueue[0].track.prev === track) {
-            SetPrevText(track.trackname);
-        }
-        else if(AudioQueue[0].track.next === track) {
-            SetNextText(track.trackname);
-        }
-    }
-    else if(Tracks_QueueCurrent === track) {
-        let prevtext = track.prev ? track.prev.trackname : '';
-        SetPrevText(prevtext);
-        SetPlayText(track.trackname);
-        let nexttext =  track.next ? track.next.trackname : '';
-        SetNextText(nexttext);
-    }
     return track;
 }
 
@@ -199,7 +195,7 @@ function _PlayTrack(trackname) {
     let queueAfter; //falsey is tail
     if(queuePos) {
         queueAfter = queuePos.next;        
-    }
+    }    
 
     AQ_stopAudioWithoutID(-1);
     Tracks_QueueCurrent = null;
@@ -254,11 +250,17 @@ function AQ_clean() {
         
         // remove if it has passed
         if(AudioQueue[i].endTime <= MainAudioContext.currentTime) {
-            console.log('aqid: ' + AudioQueue[i].aqid + ' elapsed, removing');
+            console.log('aqid: ' + AudioQueue[i].aqid + ' segment elapsed, removing');
             toDelete++;
         }
     }
-    if(toDelete) AudioQueue.splice(0, toDelete);
+    if(toDelete) {
+        // if the AQ is empty and there's a current track we fell behind
+        if((toDelete === AudioQueue.length) && (Tracks_QueueCurrent)) {
+            SetPlayText(Tracks_QueueCurrent.trackname + ' {LOADING}');
+        }
+        AudioQueue.splice(0, toDelete);
+    }
 }
 
 //imprecise, in seconds
@@ -324,6 +326,19 @@ if(typeof abortablesleep === 'undefined') {
 
 let FAQ_MUTEX = new Mutex();
 async function fillAudioQueue(time) {
+    // starting a fresh queue, render the text
+    if(Tracks_QueueCurrent) {
+        let track = Tracks_QueueCurrent;
+        let prevtext = track.prev ? track.prev.trackname : '';
+        SetPrevText(prevtext);
+        SetPlayText(track.trackname + ' {LOADING}');
+        let nexttext =  track.next ? track.next.trackname : '';
+        SetNextText(nexttext);
+        SetCurtimeText(time || 0);
+        if(!time) SetSeekbarValue(time || 0);
+        SetEndtimeText(track.duration || 0);        
+    }
+
     // Stop the previous FAQ before starting
     FACAbortController.abort();
     FACAbortController = new AbortController();
@@ -411,10 +426,12 @@ TRACKLOOP:while(1) {
             
             // if plenty of audio is queued. Don't download yet
             let todecsecs = todec / track.nwdrflac.sampleRate;
-            let nextendtime = AQ_unqueuedTime()+todecsecs;
-            console.log('nextendtime ' + nextendtime + ' curdecsecs ' + todecsecs);
-            if(nextendtime > AQMaxDecodedTime) {
-                let mssleep = (nextendtime  - AQMaxDecodedTime) * 1000;
+            const  nextendtime = function(){
+                return (AQ_unqueuedTime()+todecsecs);
+            };
+            console.log('nextendtime ' + nextendtime() + ' curdecsecs ' + todecsecs);
+            while(nextendtime() > AQMaxDecodedTime) {
+                let mssleep = (nextendtime()  - AQMaxDecodedTime) * 1000;
                 await abortablesleep(mssleep, mysignal);
                 if(mysignal.aborted) {
                     console.log('handling aborted sleep');
@@ -561,9 +578,7 @@ rptrackbtn.addEventListener('change', function(e) {
          AQ_stopAudioWithoutID(-1);
          
          let stime = Number(e.target.value);
-         console.log('SEEK ' + stime);
-         SetSeekbarValue(stime);
-         SetCurtimeText(stime);     
+         console.log('SEEK ' + stime);  
          fillAudioQueue(stime);
      }         
  });
