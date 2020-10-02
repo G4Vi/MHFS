@@ -4,7 +4,7 @@ use warnings;
 use feature 'say';
 
 my $debug = 0;
-#my $debug = 1;
+$debug = 1;
 
 my $outdir;
 my @cmd = ('emcc');
@@ -26,7 +26,8 @@ qq$EXPORTED_FUNCTIONS=["_network_drflac_open", "_network_drflac_close", "_networ
 '-s', qq$EXPORTED_RUNTIME_METHODS=["cwrap", "ccall"]$, 
 '-s', 'EXPORT_ES6=1',
 '-s', 'ASSERTIONS=1',
-'-s', 'INITIAL_MEMORY=167772160',
+#'-s', 'INITIAL_MEMORY=655360000',
+#'-s', 'ALLOW_MEMORY_GROWTH=1',
 '-s', 'MODULARIZE=1');
 
 system(@cmd) == 0 or die("failed to build");

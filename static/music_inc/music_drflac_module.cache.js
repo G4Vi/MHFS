@@ -111,7 +111,8 @@ const NetworkDrFlac = async function(theURL, mysignal) {
         let res = re.exec(xhr.getResponseHeader('Content-Range'));
         if(!res) throw("Failed to get filesize")
         that.filesize = Number(res[1]);
-        let bufptr = DrFlac.Module._malloc(xhr.response.byteLength);
+        //let bufptr = DrFlac.Module._malloc(xhr.response.byteLength);
+        let bufptr = DrFlac.Module._malloc(that.filesize);
         let dataHeap = new Uint8Array(DrFlac.Module.HEAPU8.buffer, bufptr, xhr.response.byteLength);
         dataHeap.set(new Uint8Array(xhr.response));  
         
@@ -162,14 +163,20 @@ const NetworkDrFlac = async function(theURL, mysignal) {
             jsptrarray[i] = that.bufs[i];
             jssizearray[i] = that.sizes[i];
         }
-        console.log(that.bufs);        
+              
         // attempt to decode the samples
         let destdata = DrFlac.Module._malloc(count*pcm_float_frame_size);
         let saveptr = DrFlac.network_drflac_clone(that.ptr);
         let samples;
         try {
         samples = DrFlac.network_drflac_read_pcm_frames_f32_mem(that.ptr, start, count, destdata, ptrarray, sizearray, that.bufs.length);
-        DrFlac.network_drflac_free_clone(saveptr); 
+        DrFlac.network_drflac_free_clone(saveptr);       
+        /*if(start < 176400) {
+        let tarr =  new Uint8Array(DrFlac.Module.HEAPU8.buffer, destdata, count*pcm_float_frame_size);
+        var blob = new Blob([tarr], {type: "application/octet-stream"});
+        var objectUrl = URL.createObjectURL(blob);
+        window.open(objectUrl);
+        }*/
         }
         catch(e) {
             DrFlac.network_drflac_restore(that.ptr, saveptr);
@@ -197,13 +204,17 @@ const NetworkDrFlac = async function(theURL, mysignal) {
                 start += that.sizes[i];
             }
             const end = Math.min(start+that.MAXBUFSIZE-1, that.filesize-1);
-            let xhr = await makeRequest('GET', theURL, start, end, mysignal);            
-            let bufptr = DrFlac.Module._malloc(xhr.response.byteLength);
-            let dataHeap = new Uint8Array(DrFlac.Module.HEAPU8.buffer, bufptr, xhr.response.byteLength);
+            let xhr = await makeRequest('GET', theURL, start, end, mysignal);
+            let dataHeap = new Uint8Array(DrFlac.Module.HEAPU8.buffer, that.bufs[0]+that.sizes[0], xhr.response.byteLength);
             dataHeap.set(new Uint8Array(xhr.response));
+            that.sizes[0] += xhr.response.byteLength;
             
+            /*let bufptr = DrFlac.Module._malloc(xhr.response.byteLength);
+            let dataHeap = new Uint8Array(DrFlac.Module.HEAPU8.buffer, bufptr, xhr.response.byteLength);
+            dataHeap.set(new Uint8Array(xhr.response));            
             that.bufs.push(bufptr);
-            that.sizes.push(xhr.response.byteLength);
+            that.sizes.push(xhr.response.byteLength);*/
+
             continue;
         }
 

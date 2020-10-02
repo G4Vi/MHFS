@@ -120,6 +120,10 @@ const NetworkDrFlac = async function(theURL, mysignal) {
         
         let unlock = await that.mutex.lock();
         let samples  = await DrFlac.network_drflac_read_pcm_frames_f32(that.ptr, start, count, destdata, sigid);
+        /*let tarr =  new Uint8Array(DrFlac.Module.HEAPU8.buffer, destdata, count*pcm_float_frame_size);
+        var blob = new Blob([tarr], {type: "application/octet-stream"});
+        var objectUrl = URL.createObjectURL(blob);
+        window.open(objectUrl);*/
         unlock();
 
         DrFlac.Module.RemoveJSObject(sigid);

@@ -456,6 +456,8 @@ typedef enum {
     NDRFLAC_MEM_NEED_MORE = 0xFFFFFFFF
 } NetworkDrFlacMem_Error;
 
+static unsigned last_src = 0;
+static unsigned last_fileoffset = 0;
 static size_t on_read_mem(void* pUserData, void* bufferOut, size_t bytesToRead)
 {
     printf("on_read_mem called\n");
@@ -497,7 +499,25 @@ static size_t on_read_mem(void* pUserData, void* bufferOut, size_t bytesToRead)
     if((endoffset > (NETWORK_DR_FLAC_START_CACHE-1)) || !nwdrflac->startOk)
     {
         const NetworkDrFlacMem *pMem = nwdrflac->pMem;
-        unsigned start_offset = pMem->start_offset;
+        unsigned file_offset = nwdrflac->fileoffset;
+        unsigned src_offset = nwdrflac->fileoffset;
+        unsigned copyable = pMem->bufsizes[0] - src_offset;        
+        if(copyable < bytesToRead)
+        {
+            goto on_read_mem_MORE;
+        }
+        uint8_t  *src = (uint8_t*)(pMem->bufs[0]);
+        src += src_offset;
+        printf("memcpy %u %u %u %u\n", bufferOut, src, bytesToRead, file_offset);
+        memcpy(bufferOut, src, bytesToRead);
+        printf("fileoffset diff %u fileoffset %u lastfileoffset %u\n", file_offset - last_fileoffset, file_offset, last_fileoffset);
+        last_fileoffset = file_offset;
+        printf("src diff %u\n", src - last_src);
+        last_src = src;
+        bytesread += bytesToRead;
+        goto on_read_mem_SUCCESS;
+
+        /*unsigned start_offset = pMem->start_offset;
         uint8_t *outbuf = (uint8_t*)bufferOut;
         unsigned temp_file_offset = nwdrflac->fileoffset;
         printf("memcnt %u fileoffset %u\n", pMem->count, temp_file_offset );
@@ -511,6 +531,7 @@ static size_t on_read_mem(void* pUserData, void* bufferOut, size_t bytesToRead)
             }
 
             // skip to next block, start if past the current block
+            printf("dref bufsize %u\n", *(size_t*)pMem->bufsizes[i]);
             unsigned nextoffset = start_offset + pMem->bufsizes[i];
             printf("memcnt %u fileoffset %u, nextoffset %u startoffset %u bufsize %u\n", pMem->count, temp_file_offset, nextoffset, start_offset,  pMem->bufsizes[i]);
             if(temp_file_offset >=  nextoffset)
@@ -525,12 +546,11 @@ static size_t on_read_mem(void* pUserData, void* bufferOut, size_t bytesToRead)
             src += copystartoffset; 
             const unsigned copyable = pMem->bufsizes[i] - copystartoffset;
             const unsigned tocopy = min(copyable, bytesToRead);  
-            //printf("memcpy %p %p %u, %p %p\n", outbuf, src,  tocopy, bufferOut, pMem->bufs[i]);
-            //printf("memcpy src %p\n");
-            printf("memcpy dest %p\n", outbuf);            
+            printf("memcpy %u %u %u, %u %u\n", outbuf, src,  tocopy, bufferOut, pMem->bufs[i]);
+            printf("memcpy src %p\n", src);        
             memcpy(outbuf, src, tocopy);
-            //printf("memcpy srcnext %p\n", src+tocopy);
-            printf("memcpy dnxt %p\n", outbuf+tocopy); 
+            printf("memcpy srcnext %p\n", src+tocopy);
+            printf("memcpy dest %p dnxt %p\n", outbuf, outbuf+tocopy); 
             bytesToRead -= tocopy;
             bytesread += tocopy;                     
             if(bytesToRead == 0)
@@ -541,8 +561,9 @@ static size_t on_read_mem(void* pUserData, void* bufferOut, size_t bytesToRead)
             temp_file_offset += tocopy;
             start_offset = nextoffset;
             outbuf += tocopy;            
-        }
+        }*/
         // needs more mem
+    on_read_mem_MORE:
         printf("NEED MORE MEM\n");
         EM_ASM(let e = {'name': 'moremem'}; throw(e));
         goto on_read_mem_FAILED;                 
@@ -665,7 +686,11 @@ network_drflac_read_pcm_frames_f32_mem_FAILED:
 }
 
 void *network_drflac_clone(const NetworkDrFlac *ndrflac)
-{
+{    
+    NetworkDrFlac *temp = malloc(sizeof(NetworkDrFlac));
+    memcpy(temp, ndrflac, sizeof(NetworkDrFlac));
+    return temp;
+
     drflac *pFlac = malloc(sizeof(drflac));
     NetworkDrFlac *newndrflac = malloc(sizeof(NetworkDrFlac));
     memcpy(pFlac, ndrflac->pFlac, sizeof(drflac));
@@ -676,6 +701,10 @@ void *network_drflac_clone(const NetworkDrFlac *ndrflac)
 
 void network_drflac_restore(NetworkDrFlac *realndrflac, NetworkDrFlac *clonendrflac)
 {
+    drflac__reset_cache(&realndrflac->pFlac->bs);
+    memcpy(realndrflac, clonendrflac, sizeof(NetworkDrFlac));
+
+    return;
     drflac *realpFlac = realndrflac->pFlac;
     memcpy(realpFlac, clonendrflac->pFlac, sizeof(drflac));
     memcpy(realndrflac, clonendrflac, sizeof(NetworkDrFlac));
@@ -684,6 +713,8 @@ void network_drflac_restore(NetworkDrFlac *realndrflac, NetworkDrFlac *clonendrf
 
 void network_drflac_free_clone(NetworkDrFlac *clonendrflac)
 {
+    free(clonendrflac);
+    return;
     free(clonendrflac->pFlac);
     free(clonendrflac);
 }
