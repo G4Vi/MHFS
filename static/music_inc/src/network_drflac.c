@@ -456,6 +456,44 @@ typedef enum {
     NDRFLAC_MEM_NEED_MORE = 0xFFFFFFFF
 } NetworkDrFlacMem_Error;
 
+
+static drflac_bool32 on_seek_mem(void* pUserData, int offset, drflac_seek_origin origin)
+{
+    NetworkDrFlac *ndrflac = (NetworkDrFlac *)pUserData;
+    if(ndrflac->failed)
+    {
+        printf("network_drflac: already failed, breaking\n");
+        return DRFLAC_FALSE;
+    }
+
+    unsigned tempoffset = ndrflac->fileoffset;
+    if(origin == drflac_seek_origin_current)
+    {
+        tempoffset += offset;
+    }
+    else
+    {
+        tempoffset = offset;
+    }
+    if((ndrflac->filesize != 0) &&  (tempoffset >= ndrflac->filesize))
+    {
+        printf("network_drflac: seek past end of stream\n");
+        return DRFLAC_FALSE;
+    }
+
+    // check if where we seeked is buffered
+    const NetworkDrFlacMem *pMem = ndrflac->pMem;
+    if(tempoffset >= pMem->bufsizes[0])
+    {
+        printf("Attempted to seek past buffered\n!");
+        return DRFLAC_FALSE;
+    }    
+
+    printf("seek update fileoffset %u\n",tempoffset );
+    ndrflac->fileoffset = tempoffset;
+    return DRFLAC_TRUE;
+}
+
 static unsigned last_src = 0;
 static unsigned last_fileoffset = 0;
 static size_t on_read_mem(void* pUserData, void* bufferOut, size_t bytesToRead)
@@ -565,7 +603,7 @@ static size_t on_read_mem(void* pUserData, void* bufferOut, size_t bytesToRead)
         // needs more mem
     on_read_mem_MORE:
         printf("NEED MORE MEM\n");
-        EM_ASM(let e = {'name': 'moremem'}; throw(e));
+        //EM_ASM(let e = {'name': 'moremem'}; throw(e));
         goto on_read_mem_FAILED;                 
     }
     else
@@ -607,7 +645,7 @@ void *network_drflac_open_mem(const char *url, const size_t filesize, const void
     }
 
     // finally open the file
-    drflac *pFlac = drflac_open(&on_read_mem, &on_seek_network, ndrflac, NULL);
+    drflac *pFlac = drflac_open(&on_read_mem, &on_seek_mem, ndrflac, NULL);
     void *failreturn = NULL;
     if(pFlac == NULL)
     {
@@ -637,7 +675,17 @@ uint64_t network_drflac_read_pcm_frames_f32_mem(NetworkDrFlac *ndrflac, uint32_t
     NetworkDrFlacMem nwdrflacmem = {.bufs = mem, .bufsizes = memsize, .count = memcount, .start_offset = 0};
     ndrflac->pMem = &nwdrflacmem;  
 
-    uint64_t failreturn = 0;
+    uint64_t failreturn = NDRFLAC_MEM_NEED_MORE;
+
+    // sanity, have enough data before attempting
+    /*if(ndrflac->pMem->bufsizes[0] < ndrflac->filesize)
+    {
+        if((ndrflac->pMem->bufsizes[0] - ndrflac->fileoffset) < (DR_FLAC_BUFFER_SIZE*2))
+        {
+            goto network_drflac_read_pcm_frames_f32_mem_FAILED;
+        }
+    }*/
+
     // seek to sample 
     printf("seek to %u\n", start_pcm_frame);
     if(!drflac_seek_to_pcm_frame(pFlac, start_pcm_frame) || ndrflac->failed)

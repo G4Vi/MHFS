@@ -166,11 +166,10 @@ const NetworkDrFlac = async function(theURL, mysignal) {
               
         // attempt to decode the samples
         let destdata = DrFlac.Module._malloc(count*pcm_float_frame_size);
-        let saveptr = DrFlac.network_drflac_clone(that.ptr);
         let samples;
         try {
         samples = DrFlac.network_drflac_read_pcm_frames_f32_mem(that.ptr, start, count, destdata, ptrarray, sizearray, that.bufs.length);
-        DrFlac.network_drflac_free_clone(saveptr);       
+  
         /*if(start < 176400) {
         let tarr =  new Uint8Array(DrFlac.Module.HEAPU8.buffer, destdata, count*pcm_float_frame_size);
         var blob = new Blob([tarr], {type: "application/octet-stream"});
@@ -179,7 +178,6 @@ const NetworkDrFlac = async function(theURL, mysignal) {
         }*/
         }
         catch(e) {
-            DrFlac.network_drflac_restore(that.ptr, saveptr);
             if(e.name !== 'moremem') {
                 throw(e);
             }
@@ -265,10 +263,12 @@ Module().then(function(DrFlacMod){
 
     DrFlac.network_drflac_read_pcm_frames_f32_mem = DrFlacMod.cwrap('network_drflac_read_pcm_frames_f32_mem', "number", ["number", "number", "number", "number", "number", "number", "number"]);
 
+    /*
     DrFlac.network_drflac_clone  = DrFlacMod.cwrap('network_drflac_clone', "number", ["number"]);
     DrFlac.network_drflac_restore = DrFlacMod.cwrap('network_drflac_restore', null, ["number", "number"]);
     DrFlac.network_drflac_free_clone = DrFlacMod.cwrap('network_drflac_free_clone', null, ["number"]);
-    
+    */
+   
     console.log('NetworkDrFlac is ready!');
     DrFlac.ready = true;
     if(DrFlac.on_ready) {

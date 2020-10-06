@@ -27,7 +27,7 @@ qq$EXPORTED_FUNCTIONS=["_network_drflac_open", "_network_drflac_close", "_networ
 '-s', 'EXPORT_ES6=1',
 '-s', 'ASSERTIONS=1',
 #'-s', 'INITIAL_MEMORY=655360000',
-#'-s', 'ALLOW_MEMORY_GROWTH=1',
+'-s', 'ALLOW_MEMORY_GROWTH=1',
 '-s', 'MODULARIZE=1');
 
 system(@cmd) == 0 or die("failed to build");
