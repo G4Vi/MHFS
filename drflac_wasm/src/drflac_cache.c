@@ -20,13 +20,7 @@ typedef struct memrange {
 } memrange;
 
 typedef struct {
-    const uint32_t *bufs;
-    const size_t *bufsizes;
-    const unsigned count;
-    const unsigned start_offset;
-
-    // blocks
-    const void *buf;
+    void *buf;
     unsigned blocksize;
     memrange *block;
 } NetworkDrFlacMem;
@@ -43,10 +37,10 @@ typedef struct {
     uint32_t extradata;
 } NetworkDrFlac_Error;
 
-void *network_drflac_mem_create(const void *buf, const unsigned blocksize)
+void *network_drflac_mem_create(const unsigned bufsize, const unsigned blocksize)
 {
-    NetworkDrFlacMem *mem = malloc(sizeof(NetworkDrFlacMem ));
-    mem->buf = buf;
+    NetworkDrFlacMem *mem = malloc(sizeof(NetworkDrFlacMem ));    
+    mem->buf = malloc(bufsize);
     mem->blocksize = blocksize;
     mem->block = NULL;
     return mem;
@@ -60,7 +54,13 @@ void network_drflac_mem_free(NetworkDrFlacMem *pMem)
         free(block);
         block = nextblock;
     }
+    free(pMem->buf);
     free(pMem);
+}
+
+void *network_drflac_mem_bufptr(const NetworkDrFlacMem *pMem)
+{
+    return pMem->buf;
 }
 
 void network_drflac_mem_add_block(NetworkDrFlacMem *pMem, const uint32_t block_start)
@@ -174,47 +174,36 @@ static bool has_necessary_blocks(NetworkDrFlac *ndrflac, const size_t bytesToRea
 {    
     const unsigned blocksize = ndrflac->pMem->blocksize;
     const unsigned last_needed_byte = ndrflac->fileoffset + bytesToRead -1; 
-    bool foundStart = false;
-    
-    unsigned last_next = (ndrflac->fileoffset / ndrflac->pMem->blocksize) * ndrflac->pMem->blocksize;
+
+    // initialize needed block to the block with fileoffset
+    unsigned needed_block = (ndrflac->fileoffset / ndrflac->pMem->blocksize) * ndrflac->pMem->blocksize;
     for(memrange *block = ndrflac->pMem->block; block != NULL; block = block->next)
     {
-        unsigned nextblock = block->start + blocksize;
-        if(!foundStart)
+        if(block->start > needed_block)
         {
-            if(ndrflac->fileoffset >= block->start) 
-            {
-                if(ndrflac->fileoffset < nextblock)
-                {
-                    foundStart = true;
-                    last_next = block->start;
-                }
-                else
-                {
-                    // we passed all the blocks that could include the start
-                    break;
-                }
-                
-            }
+            // block starts after a needed block
+            break;
         }
-        if(foundStart)
+        else if(block->start == needed_block)
         {
-            if(block->start > last_next)
-            {
-                // there's a gap
-                break;
-            }
-            else if(last_needed_byte < nextblock)
+            unsigned nextblock = block->start + blocksize;
+            if(last_needed_byte < nextblock)
             {
                 return true;
             }
-            last_next = nextblock;  
+            needed_block = nextblock;                
         }
     }
 
-    printf("NEED MORE MEM\n");
+    printf("NEED MORE MEM file_offset: %u lastneedbyte %u needed_block %u\n", ndrflac->fileoffset, last_needed_byte, needed_block);
     ndrflac->error->code = NDRFLAC_MEM_NEED_MORE;
-    ndrflac->error->extradata = last_next;
+    ndrflac->error->extradata = needed_block;
+    /*for(memrange *block = ndrflac->pMem->block; block != NULL;)
+    {
+        printf("block: %u\n", block->start);
+        memrange *nextblock = block->next;        
+        block = nextblock;
+    }*/
     return false;
 } 
 
@@ -257,42 +246,28 @@ static size_t on_read_mem(void* pUserData, void* bufferOut, size_t bytesToRead)
     const NetworkDrFlacMem *pMem = nwdrflac->pMem;    
     const unsigned src_offset = nwdrflac->fileoffset;
 
-    /*
-    if(!has_necessary_blocks(nwdrflac, bytesToRead)
+    
+    if(!has_necessary_blocks(nwdrflac, bytesToRead))
     {
         return 0;
     }
-    */
-    
-    unsigned copyable = pMem->bufsizes[0] - src_offset;        
-    if((copyable < bytesToRead) || (src_offset >= pMem->bufsizes[0]))
-    {
-        printf("NEED MORE MEM\n");
-        nwdrflac->error->code = NDRFLAC_MEM_NEED_MORE;
-        return 0;   
-    }
-    
-
-    uint8_t  *src = (uint8_t*)(pMem->bufs[0]);
+    uint8_t  *src = (uint8_t*)(pMem->buf);
     src += src_offset;
-    printf("memcpy %u %u %u srcoffset %u filesize %u buffered %u\n", bufferOut, src, bytesToRead, src_offset, nwdrflac->filesize, pMem->bufsizes[0]);
+    //printf("memcpy %u %u %u srcoffset %u filesize %u buffered %u\n", bufferOut, src, bytesToRead, src_offset, nwdrflac->filesize); 
     memcpy(bufferOut, src, bytesToRead);
-
     nwdrflac->fileoffset += bytesToRead;
     return bytesToRead;
 }
     
-void *network_drflac_open_mem(const size_t filesize, const void *mem, const size_t memsize, NetworkDrFlac_Error *error)
-{ 
-    const NetworkDrFlacMem nwdrflacmem = {.bufs = &mem, .bufsizes = &memsize, .count = 1, .start_offset = 0};   
-
+void *network_drflac_open_mem(const size_t filesize, const NetworkDrFlacMem *pMem, NetworkDrFlac_Error *error)
+{
     printf("network_drflac: allocating %lu\n", sizeof(NetworkDrFlac));
     NetworkDrFlac *ndrflac = malloc(sizeof(NetworkDrFlac));
     ndrflac->fileoffset = 0;
     ndrflac->filesize = filesize;
     ndrflac->error = error;
     ndrflac->pFlac = NULL;    
-    ndrflac->pMem = &nwdrflacmem;
+    ndrflac->pMem = pMem;
 
     // finally open the file
     drflac *pFlac = drflac_open(&on_read_mem, &on_seek_mem, ndrflac, NULL);
@@ -320,11 +295,9 @@ void *network_drflac_open_mem(const size_t filesize, const void *mem, const size
 }
 
 /* returns of samples */
-uint64_t network_drflac_read_pcm_frames_f32_mem(NetworkDrFlac *ndrflac, uint32_t start_pcm_frame, uint32_t desired_pcm_frames, float32_t *outFloat, const void *mem, const size_t *memsize, const size_t memcount, NetworkDrFlac_Error *error)
+uint64_t network_drflac_read_pcm_frames_f32_mem(NetworkDrFlac *ndrflac, uint32_t start_pcm_frame, uint32_t desired_pcm_frames, float32_t *outFloat, NetworkDrFlac_Error *error)
 {   
     drflac *pFlac = ndrflac->pFlac;
-    const NetworkDrFlacMem nwdrflacmem = {.bufs = mem, .bufsizes = memsize, .count = memcount, .start_offset = 0};
-    ndrflac->pMem = &nwdrflacmem;
     ndrflac->error = error;    
 
     // seek to sample 

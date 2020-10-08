@@ -390,7 +390,7 @@ TRACKLOOP:while(1) {
                 let nwdrflac = await NetworkDrFlac(track.url, mysignal);
                 if(mysignal.aborted) {
                     console.log('open aborted success');
-                    nwdrflac.close();
+                    await nwdrflac.close();
                     unlock();
                     return;
                 }
@@ -445,13 +445,6 @@ TRACKLOOP:while(1) {
             let buffer;
             for(let failedcount = 0;!buffer;) {
                 try {
-                    /*let wav = await track.nwdrflac.read_pcm_frames_to_wav(dectime, todec, mysignal);
-                    if(mysignal.aborted) {
-                        console.log('aborted read_pcm_frames success');
-                        unlock();                        
-                        return;
-                    }
-                    buffer = await MainAudioContext.decodeAudioData(wav);*/
                     buffer = await track.nwdrflac.read_pcm_frames_to_AudioBuffer(dectime, todec, mysignal, MainAudioContext);
                     if(mysignal.aborted) {
                         console.log('aborted decodeaudiodata success');
@@ -470,6 +463,9 @@ TRACKLOOP:while(1) {
                         unlock();                        
                         return;
                     }
+                    // assume it's corrupted. free and reinit
+                    await track.nwdrflac.close();
+                    track.nwdrflac = null;
                     failedcount++;
                     if(failedcount == 2) {
                         console.log('Encountered error twice, advancing to next track');                        
