@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <emscripten.h>
-#define DR_FLAC_BUFFER_SIZE 4096
+#define DR_FLAC_BUFFER_SIZE (4096 * 16)
 #define DR_FLAC_NO_STDIO
 #define DR_FLAC_NO_OGG
 #define DR_FLAC_IMPLEMENTATION
@@ -21,7 +21,6 @@ typedef struct {
     const unsigned start_offset;
 
     // blocks
-    const unsigned blockcount;
     const unsigned blocksize;
 } NetworkDrFlacMem;
 
@@ -119,40 +118,30 @@ static drflac_bool32 on_seek_mem(void* pUserData, int offset, drflac_seek_origin
         return DRFLAC_FALSE;
     }
 
-    // check if where we seeked is buffered
-    const NetworkDrFlacMem *pMem = ndrflac->pMem;
-    if(tempoffset >= pMem->bufsizes[0])
-    {
-        printf("Attempted to seek past buffered\n");
-        ndrflac->error->code =  NDRFLAC_MEM_NEED_MORE;
-        return DRFLAC_FALSE;
-    }
-        
-
     printf("seek update fileoffset %u\n",tempoffset );
     ndrflac->fileoffset = tempoffset;
     return DRFLAC_TRUE;
 }
 
-typedef struct {
+typedef struct memrange {
     uint32_t start;
+    struct memrange *next;
 } memrange;
 
 static bool has_necessary_blocks(NetworkDrFlac *ndrflac, const size_t bytesToRead)
 {    
-    const unsigned blockcount = ndrflac->pMem->blockcount;
     const unsigned blocksize = ndrflac->pMem->blocksize;
     memrange *block;
 
-    int startblock = -1;
-    for(unsigned i = 0; i < blockcount; i++)
+    memrange *startblock = NULL;
+    for(; block != NULL; block = block->next)
     {
-        if(block[i].start <= ndrflac->fileoffset)
+        if(block->start <= ndrflac->fileoffset)
         {
-            unsigned nextblock = block[i].start + blocksize;
+            unsigned nextblock = block->start + blocksize;
             if(ndrflac->fileoffset < nextblock)
             {
-                startblock = i;
+                startblock = block;
                 break;
             }
         }
@@ -162,7 +151,7 @@ static bool has_necessary_blocks(NetworkDrFlac *ndrflac, const size_t bytesToRea
             break;
         }        
     }
-    if(startblock == -1)
+    if(startblock == NULL)
     {
         printf("NEED MORE MEM\n");
         ndrflac->error->code = NDRFLAC_MEM_NEED_MORE;
@@ -170,25 +159,26 @@ static bool has_necessary_blocks(NetworkDrFlac *ndrflac, const size_t bytesToRea
         return false;   
     }
 
-    int lastblock = -1;
+    
     unsigned last_needed_byte = ndrflac->fileoffset + bytesToRead -1; 
-    unsigned last_next = block[startblock].start;
-    for(int i = startblock; i < blockcount; i++)
+    unsigned last_next = startblock->start;
+    bool foundEnd = false;
+    for(block = startblock; block != NULL; block->next)
     {
         // there's a gap
-        if(block[i].start > last_next)
+        if(block->start > last_next)
         {
             break;
         }
-        unsigned nextblock = block[i].start + blocksize;
+        unsigned nextblock = block->start + blocksize;
         if(last_needed_byte < nextblock)
         {
-            lastblock = i;
+            foundEnd = true;
             break;
         }
         last_next = nextblock;        
     }
-    if(lastblock == -1)
+    if(!foundEnd)
     {
         printf("NEED MORE MEM\n");
         ndrflac->error->code = NDRFLAC_MEM_NEED_MORE;
@@ -245,7 +235,7 @@ static size_t on_read_mem(void* pUserData, void* bufferOut, size_t bytesToRead)
     */
     
     unsigned copyable = pMem->bufsizes[0] - src_offset;        
-    if(copyable < bytesToRead)
+    if((copyable < bytesToRead) || (src_offset >= pMem->bufsizes[0]))
     {
         printf("NEED MORE MEM\n");
         nwdrflac->error->code = NDRFLAC_MEM_NEED_MORE;
@@ -255,7 +245,7 @@ static size_t on_read_mem(void* pUserData, void* bufferOut, size_t bytesToRead)
 
     uint8_t  *src = (uint8_t*)(pMem->bufs[0]);
     src += src_offset;
-    printf("memcpy %u %u %u %u\n", bufferOut, src, bytesToRead, src_offset);
+    printf("memcpy %u %u %u srcoffset %u filesize %u buffered %u\n", bufferOut, src, bytesToRead, src_offset, nwdrflac->filesize, pMem->bufsizes[0]);
     memcpy(bufferOut, src, bytesToRead);
 
     nwdrflac->fileoffset += bytesToRead;

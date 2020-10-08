@@ -5521,7 +5521,6 @@ static drflac_bool32 drflac__read_and_decode_next_flac_frame(drflac* pFlac)
 
     for (;;) {
         drflac_result result;
-
         if (!drflac__read_next_flac_frame_header(&pFlac->bs, pFlac->bitsPerSample, &pFlac->currentFLACFrame.header)) {
             return DRFLAC_FALSE;
         }
