@@ -89,6 +89,13 @@ return new Promise(function (resolve, reject) {
 });
 }
 
+const GetFileSize = function(xhr) {
+    let re = new RegExp('/([0-9]+)');
+    let res = re.exec(xhr.getResponseHeader('Content-Range'));
+    if(!res) throw("Failed to get filesize");
+    return Number(res[1]);
+};
+
 const NDRFLAC_SUCCESS = 0;
 const NDRFLAC_GENERIC_ERROR = 1;
 const NDRFLAC_MEM_NEED_MORE = 2;
@@ -104,39 +111,40 @@ const NetworkDrFlac = async function(theURL, mysignal) {
         await waitForEvent(DrFlac, 'ready');
     }
     let that = {};
-    that.MAXBUFSIZE = 262144;
+    that.CHUNKSIZE = 262144;
+
+    that.downloadChunk = async function(start) {
+        if(start % that.CHUNKSIZE)
+        {
+            throw("start is not a multiple of CHUNKSIZE: " + start);
+        }        
+        const def_end = start+that.CHUNKSIZE-1;
+        const end = that.filesize ? Math.min(def_end, that.filesize-1) : def_end; 
+        let xhr = await makeRequest('GET', theURL, start, end, mysignal);
+        if(!that.filesize) that.filesize = GetFileSize(xhr);
+        if(!that.bufptr) that.bufptr = DrFlac.Module._malloc(that.filesize);
+        let dataHeap = new Uint8Array(DrFlac.Module.HEAPU8.buffer, that.bufptr+start, xhr.response.byteLength);
+        dataHeap.set(new Uint8Array(xhr.response));  
+        return xhr.response.byteLength;
+    };
     
     // load up mem
-    let end = 262144-1;    
-    for(let attempts = 0; attempts < 20; attempts++)
-    {
-        let xhr = await makeRequest('GET', theURL, 0, end, mysignal);
-        let re = new RegExp('/([0-9]+)');
-        let res = re.exec(xhr.getResponseHeader('Content-Range'));
-        if(!res) throw("Failed to get filesize")
-        that.filesize = Number(res[1]);
-        //let bufptr = DrFlac.Module._malloc(xhr.response.byteLength);
-        let bufptr = DrFlac.Module._malloc(that.filesize);
-        let dataHeap = new Uint8Array(DrFlac.Module.HEAPU8.buffer, bufptr, xhr.response.byteLength);
-        dataHeap.set(new Uint8Array(xhr.response));  
-        
-        // finally open
+    let err;
+    do {
+        let size = await that.downloadChunk(0);
         let err_ptr = DrFlac.network_drflac_create_error();
-        that.ptr = DrFlac.network_drflac_open_mem(that.filesize, bufptr, xhr.response.byteLength, err_ptr);
+        that.ptr = DrFlac.network_drflac_open_mem(that.filesize, that.bufptr, size, err_ptr);
         let err = DrFlac.network_drflac_error_code(err_ptr);
         DrFlac.network_drflac_free_error(err_ptr); 
-        if(!that.ptr) {
-            DrFlac.Module._free(bufptr);
-            if(err != NDRFLAC_MEM_NEED_MORE)
-            {
-                throw("Failed network_drflac_open");
-            }
-            continue;
-        }       
-        that.bufs = [bufptr];
-        that.sizes = [xhr.response.byteLength];
-        break;
-    }
+        if(that.ptr) {
+            that.bufs = [that.bufptr];
+            that.sizes = [size];
+            break;
+        }
+        else if(err !== NDRFLAC_MEM_NEED_MORE){
+            throw("Failed network_drflac_open");
+        }
+    } while(1);   
 
     that.totalPCMFrameCount = DrFlac.network_drflac_totalPCMFrameCount(that.ptr);
     that.sampleRate = DrFlac.network_drflac_sampleRate(that.ptr);
@@ -145,7 +153,7 @@ const NetworkDrFlac = async function(theURL, mysignal) {
    
 
     that.close = async function() {
-        DrFlac.network_drflac_close(that.ptr);
+        if(that.ptr) DrFlac.network_drflac_close(that.ptr);
         for(let i = 0; i < that.bufs.length; i++) {
             DrFlac.Module._free(that.bufs[i]);
         }
@@ -185,21 +193,20 @@ const NetworkDrFlac = async function(theURL, mysignal) {
             DrFlac.network_drflac_free_error(err_ptr);  
             DrFlac.Module._free(ptrarray);
             DrFlac.Module._free(sizearray);            
-        }               
-        
-        if(err === NDRFLAC_MEM_NEED_MORE) {
-            DrFlac.Module._free(destdata);
-
+        }
+        if(err !== NDRFLAC_SUCCESS)
+        {
+            DrFlac.Module._free(destdata);  
+            if(err !== NDRFLAC_MEM_NEED_MORE)
+            {
+                throw("network_drflac_read_pcm_frames_f32_mem returned 0 or less");
+            }
             // download more
             let start = 0;
             for(let i = 0; i < that.sizes.length; i++) {
                 start += that.sizes[i];
             }
-            const end = Math.min(start+that.MAXBUFSIZE-1, that.filesize-1);
-            let xhr = await makeRequest('GET', theURL, start, end, mysignal);
-            let dataHeap = new Uint8Array(DrFlac.Module.HEAPU8.buffer, that.bufs[0]+that.sizes[0], xhr.response.byteLength);
-            dataHeap.set(new Uint8Array(xhr.response));
-            that.sizes[0] += xhr.response.byteLength;  
+            that.sizes[0] += await that.downloadChunk(start);
 
             // reopen drflac
             DrFlac.network_drflac_close(that.ptr);
@@ -207,16 +214,10 @@ const NetworkDrFlac = async function(theURL, mysignal) {
             that.ptr = DrFlac.network_drflac_open_mem(that.filesize, that.bufs[0], that.sizes[0], err_ptr);
             DrFlac.network_drflac_free_error(err_ptr);            
             if(!that.ptr) {
-                DrFlac.Module._free(that.bufs[0]);
                 throw("Failed network_drflac_open");
             }
             continue;
-        }
-        else if(err !== NDRFLAC_SUCCESS)
-        {
-            DrFlac.Module._free(destdata);   
-            throw("network_drflac_read_pcm_frames_f32_mem returned 0 or less");
-        }
+        }      
 
         let audiobuffer = audiocontext.createBuffer(that.channels, samples, that.sampleRate);
         const chansize = samples * f32_size;

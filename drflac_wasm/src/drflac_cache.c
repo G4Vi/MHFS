@@ -14,6 +14,11 @@ typedef float float32_t;
        __typeof__ (b) _b = (b); \
      _a < _b ? _a : _b; })
 
+typedef struct memrange {
+    uint32_t start;
+    struct memrange *next;
+} memrange;
+
 typedef struct {
     const uint32_t *bufs;
     const size_t *bufsizes;
@@ -21,7 +26,9 @@ typedef struct {
     const unsigned start_offset;
 
     // blocks
-    const unsigned blocksize;
+    const void *buf;
+    unsigned blocksize;
+    memrange *block;
 } NetworkDrFlacMem;
 
 typedef enum {
@@ -35,6 +42,44 @@ typedef struct {
     NetworkDrFlac_Err_Vals code;
     uint32_t extradata;
 } NetworkDrFlac_Error;
+
+void *network_drflac_mem_create(const void *buf, const unsigned blocksize)
+{
+    NetworkDrFlacMem *mem = malloc(sizeof(NetworkDrFlacMem ));
+    mem->buf = buf;
+    mem->blocksize = blocksize;
+    mem->block = NULL;
+    return mem;
+}
+
+void network_drflac_mem_free(NetworkDrFlacMem *pMem)
+{
+    for(memrange *block = pMem->block; block != NULL;)
+    {
+        memrange *nextblock = block->next;
+        free(block);
+        block = nextblock;
+    }
+    free(pMem);
+}
+
+void network_drflac_mem_add_block(NetworkDrFlacMem *pMem, const uint32_t block_start)
+{
+    memrange *block = malloc(sizeof(memrange));
+    block->start = block_start;
+    memrange **blocklist = &pMem->block;
+    for(;  *blocklist != NULL;  blocklist = &((*blocklist)->next))
+    {
+        if(block->start < ((*blocklist)->start))
+        {
+            break;
+        }      
+    }
+
+    memrange *nextblock = *blocklist;
+    *blocklist = block;
+    block->next = nextblock;
+}
 
 void *network_drflac_create_error(void)
 {
@@ -123,69 +168,54 @@ static drflac_bool32 on_seek_mem(void* pUserData, int offset, drflac_seek_origin
     return DRFLAC_TRUE;
 }
 
-typedef struct memrange {
-    uint32_t start;
-    struct memrange *next;
-} memrange;
+
 
 static bool has_necessary_blocks(NetworkDrFlac *ndrflac, const size_t bytesToRead)
 {    
     const unsigned blocksize = ndrflac->pMem->blocksize;
-    memrange *block;
-
-    memrange *startblock = NULL;
-    for(; block != NULL; block = block->next)
+    const unsigned last_needed_byte = ndrflac->fileoffset + bytesToRead -1; 
+    bool foundStart = false;
+    
+    unsigned last_next = (ndrflac->fileoffset / ndrflac->pMem->blocksize) * ndrflac->pMem->blocksize;
+    for(memrange *block = ndrflac->pMem->block; block != NULL; block = block->next)
     {
-        if(block->start <= ndrflac->fileoffset)
+        unsigned nextblock = block->start + blocksize;
+        if(!foundStart)
         {
-            unsigned nextblock = block->start + blocksize;
-            if(ndrflac->fileoffset < nextblock)
+            if(ndrflac->fileoffset >= block->start) 
             {
-                startblock = block;
-                break;
+                if(ndrflac->fileoffset < nextblock)
+                {
+                    foundStart = true;
+                    last_next = block->start;
+                }
+                else
+                {
+                    // we passed all the blocks that could include the start
+                    break;
+                }
+                
             }
         }
-        else
+        if(foundStart)
         {
-            // block starts past what we need, there must be a gap need more mem
-            break;
-        }        
-    }
-    if(startblock == NULL)
-    {
-        printf("NEED MORE MEM\n");
-        ndrflac->error->code = NDRFLAC_MEM_NEED_MORE;
-        ndrflac->error->extradata = ndrflac->fileoffset;
-        return false;   
+            if(block->start > last_next)
+            {
+                // there's a gap
+                break;
+            }
+            else if(last_needed_byte < nextblock)
+            {
+                return true;
+            }
+            last_next = nextblock;  
+        }
     }
 
-    
-    unsigned last_needed_byte = ndrflac->fileoffset + bytesToRead -1; 
-    unsigned last_next = startblock->start;
-    bool foundEnd = false;
-    for(block = startblock; block != NULL; block->next)
-    {
-        // there's a gap
-        if(block->start > last_next)
-        {
-            break;
-        }
-        unsigned nextblock = block->start + blocksize;
-        if(last_needed_byte < nextblock)
-        {
-            foundEnd = true;
-            break;
-        }
-        last_next = nextblock;        
-    }
-    if(!foundEnd)
-    {
-        printf("NEED MORE MEM\n");
-        ndrflac->error->code = NDRFLAC_MEM_NEED_MORE;
-        ndrflac->error->extradata = last_next;
-        return false;   
-    }
-    return true;
+    printf("NEED MORE MEM\n");
+    ndrflac->error->code = NDRFLAC_MEM_NEED_MORE;
+    ndrflac->error->extradata = last_next;
+    return false;
 } 
 
 static size_t on_read_mem(void* pUserData, void* bufferOut, size_t bytesToRead)
@@ -253,14 +283,15 @@ static size_t on_read_mem(void* pUserData, void* bufferOut, size_t bytesToRead)
 }
     
 void *network_drflac_open_mem(const size_t filesize, const void *mem, const size_t memsize, NetworkDrFlac_Error *error)
-{   
+{ 
+    const NetworkDrFlacMem nwdrflacmem = {.bufs = &mem, .bufsizes = &memsize, .count = 1, .start_offset = 0};   
+
     printf("network_drflac: allocating %lu\n", sizeof(NetworkDrFlac));
     NetworkDrFlac *ndrflac = malloc(sizeof(NetworkDrFlac));
     ndrflac->fileoffset = 0;
     ndrflac->filesize = filesize;
     ndrflac->error = error;
-    ndrflac->pFlac = NULL;
-    const NetworkDrFlacMem nwdrflacmem = {.bufs = &mem, .bufsizes = &memsize, .count = 1, .start_offset = 0};
+    ndrflac->pFlac = NULL;    
     ndrflac->pMem = &nwdrflacmem;
 
     // finally open the file
