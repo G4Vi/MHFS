@@ -223,7 +223,7 @@ const NetworkDrFlac = async function(theURL, gsignal) {
     that.sampleRate = DrFlac.network_drflac_sampleRate(that.ptr);
     that.bitsPerSample = DrFlac.network_drflac_bitsPerSample(that.ptr);
     that.channels = DrFlac.network_drflac_channels(that.ptr);
-
+    that.url = theURL;
     return that;
 };
 

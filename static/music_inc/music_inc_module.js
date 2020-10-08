@@ -369,23 +369,26 @@ TRACKLOOP:while(1) {
         
         // cleanup nwdrflac
         if(NWDRFLAC) {
-            if(!track.nwdrflac || (NWDRFLAC !== track.nwdrflac)) {
-                track.nwdrflac = null;
+            // we can reuse it if the urls match
+            if(NWDRFLAC.url !== track.url)
+            {
                 await NWDRFLAC.close();
                 NWDRFLAC = null;
                 if(mysignal.aborted) {
                     console.log('abort after cleanup');
                     unlock();
                     return;
-                }                
+                }
             }
-        }
-        else if(track.nwdrflac) {
-            track.nwdrflac = null;            
+            else{
+                console.log('optimization using same nwdrflac: ' + track.url);
+                track.duration = NWDRFLAC.totalPCMFrameCount / NWDRFLAC.sampleRate;
+                track.sampleRate = NWDRFLAC.sampleRate;
+            }
         }       
         
         // open the track
-        for(let failedtimes = 0; !track.nwdrflac; ) {             
+        for(let failedtimes = 0; !NWDRFLAC; ) {             
             try {                
                 let nwdrflac = await NetworkDrFlac(track.url, mysignal);
                 if(mysignal.aborted) {
@@ -395,7 +398,6 @@ TRACKLOOP:while(1) {
                     return;
                 }
                 NWDRFLAC = nwdrflac;                 
-                track.nwdrflac = nwdrflac;
                 track.duration =  nwdrflac.totalPCMFrameCount / nwdrflac.sampleRate;
                 track.sampleRate = nwdrflac.sampleRate;
             }
@@ -418,15 +420,15 @@ TRACKLOOP:while(1) {
         // queue the track
         let dectime = 0;
         if(time) {                         
-            dectime = Math.floor(time * track.nwdrflac.sampleRate);            
+            dectime = Math.floor(time * NWDRFLAC.sampleRate);            
             time = 0;
         }
         let isStart = true;      
-        while(dectime < track.nwdrflac.totalPCMFrameCount) {
-            let todec = Math.min(track.nwdrflac.sampleRate, track.nwdrflac.totalPCMFrameCount - dectime);
+        while(dectime < NWDRFLAC.totalPCMFrameCount) {
+            let todec = Math.min(NWDRFLAC.sampleRate, NWDRFLAC.totalPCMFrameCount - dectime);
             
             // if plenty of audio is queued. Don't download yet
-            let todecsecs = todec / track.nwdrflac.sampleRate;
+            let todecsecs = todec / NWDRFLAC.sampleRate;
             const  nextendtime = function(){
                 return (AQ_unqueuedTime()+todecsecs);
             };
@@ -445,13 +447,13 @@ TRACKLOOP:while(1) {
             let buffer;
             for(let failedcount = 0;!buffer;) {
                 try {
-                    buffer = await track.nwdrflac.read_pcm_frames_to_AudioBuffer(dectime, todec, mysignal, MainAudioContext);
+                    buffer = await NWDRFLAC.read_pcm_frames_to_AudioBuffer(dectime, todec, mysignal, MainAudioContext);
                     if(mysignal.aborted) {
                         console.log('aborted decodeaudiodata success');
                         unlock();                        
                         return;
                     }
-                    if(buffer.duration !== (todec / track.nwdrflac.sampleRate)) {                       
+                    if(buffer.duration !== (todec / NWDRFLAC.sampleRate)) {                       
                         buffer = null;
                         throw('network error? buffer wrong length');
                     }                        
@@ -462,22 +464,22 @@ TRACKLOOP:while(1) {
                         console.log('aborted read_pcm_frames decodeaudiodata catch');
                         unlock();                        
                         return;
-                    }
-                    // assume it's corrupted. free and reinit
-                    await track.nwdrflac.close();
-                    track.nwdrflac = null;
+                    }                   
                     failedcount++;
                     if(failedcount == 2) {
-                        console.log('Encountered error twice, advancing to next track');                        
+                        console.log('Encountered error twice, advancing to next track');
+                         // assume it's corrupted. force free it
+                        await NWDRFLAC.close();
+                        NWDRFLAC = null;                      
                         continue TRACKLOOP;
                     }
                 }
             }
          
             // Add to the audio queue
-            let aqItem = { 'buffer' : buffer, 'duration' : todec, 'aqid' : AQID, 'skiptime' : (dectime / track.nwdrflac.sampleRate), 'track' : track, 'playbackinfo' : {}, 'timers' : []};
+            let aqItem = { 'buffer' : buffer, 'duration' : todec, 'aqid' : AQID, 'skiptime' : (dectime / NWDRFLAC.sampleRate), 'track' : track, 'playbackinfo' : {}, 'timers' : []};
             // At start and end track update the GUI
-            let isEnd = ((dectime+todec) === track.nwdrflac.totalPCMFrameCount);
+            let isEnd = ((dectime+todec) === NWDRFLAC.totalPCMFrameCount);
             if(isStart || isEnd) {            
                 aqItem.func = function(startTime, endTime) {
                     if(isStart) {
