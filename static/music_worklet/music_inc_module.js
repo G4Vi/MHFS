@@ -807,11 +807,35 @@ MainAudioContext = CreateAudioContext({'sampleRate' : 44100 });
 // queue the tracks in the url
 let orig_ptracks = urlParams.getAll('ptrack');
 if (orig_ptracks.length > 0) {
-    QueueTracks(orig_ptracks);
+    //QueueTracks(orig_ptracks);
 }
 
+(async function() {
+    await MainAudioContext.audioWorklet.addModule('worklet_processor.js');
+    const MusicNode = new AudioWorkletNode(MainAudioContext, 'MusicProcessor');
+    MusicNode.connect(MainAudioContext.destination);
+    let trackname = "Chuck Person - Chuck Person's Eccojams Vol 1 (2016 WEB) [FLAC]/A1.flac";
+
+    let track = {'trackname' : trackname, 'url' : geturl(trackname)};
+    FACAbortController.abort();
+    FACAbortController = new AbortController();
+    let mysignal = FACAbortController.signal;
+    let nwdrflac = await NetworkDrFlac(track.url, mysignal);
+    let ab = await nwdrflac.read_pcm_frames_to_AudioBuffer(0, 441000*4, mysignal, MainAudioContext); 
+    console.log(ab);
+    let chanzero = new Float32Array(441000*4);
+    chanzero.set(ab.getChannelData(0));
+    console.log(chanzero);
+    let chanone = new Float32Array(441000*4);
+    chanone.set(ab.getChannelData(1));
+    MusicNode.port.postMessage({'message' : 'addData', 'chanzero': chanzero.buffer, 'chanone' : chanone.buffer}, [chanzero.buffer, chanone.buffer]);
+})();
+
+/*
 setInterval(function() {
     MainAudioLoop();
 }, 25);
 window.requestAnimationFrame(GraphicsLoop);
+*/
+
 //QueueTrack("Chuck Person - Chuck Person's Eccojams Vol 1 (2016 WEB) [FLAC]/A1.flac");
