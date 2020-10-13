@@ -335,6 +335,7 @@ if(typeof abortablesleep === 'undefined') {
     DeclareGlobalFunc('abortablesleep', abortablesleep);
 }
 
+let MusicNode;
 let FAQ_MUTEX = new Mutex();
 async function fillAudioQueue(time) {
     // starting a fresh queue, render the text
@@ -485,6 +486,10 @@ TRACKLOOP:while(1) {
                     }
                 }
             }
+
+            await aqFrames(MusicNode, buffer, track, mysignal);
+            dectime += todec;
+            continue;
          
             // Add to the audio queue
             let aqItem = { 'buffer' : buffer, 'duration' : todec, 'aqid' : AQID, 'skiptime' : (dectime / NWDRFLAC.sampleRate), 'track' : track, 'playbackinfo' : {}, 'timers' : []};
@@ -810,25 +815,77 @@ if (orig_ptracks.length > 0) {
     //QueueTracks(orig_ptracks);
 }
 
+const STATE = {
+    'MORE_DATA' : 0,
+    'FRAMES_AVAILABLE' : 1,// stores the amount of frames available for the producer to fill 
+    'READ_INDEX' : 2,      // used only by processor
+    'WRITE_INDEX' : 3,     // used only by producer
+    'RING_BUFFER_LENGTH': 4,
+};
+let States;
+const ARBLen  = MainAudioContext.sampleRate * 2;
+let AudioRingBuffer;
+if (!self.SharedArrayBuffer) {
+    console.error('SharedArrayBuffer is not supported in browser');
+}
+const SharedBuffers = {
+    states: new SharedArrayBuffer(5*4),
+    arb : [new SharedArrayBuffer(ARBLen * 4), new SharedArrayBuffer(ARBLen * 4)]
+};
+States          = new Int32Array(SharedBuffers.states);
+AudioRingBuffer = [new Float32Array(SharedBuffers.arb[0]), new Float32Array(SharedBuffers.arb[1])];
+States[STATE.FRAMES_AVAILABLE]   = AudioRingBuffer[0].length;
+States[STATE.RING_BUFFER_LENGTH] = AudioRingBuffer[0].length;
+function framesAvail() {
+    return Atomics.load(States, STATE.FRAMES_AVAILABLE);    
+}
+
+function pushFrames(buffer, bufferFrames) {
+    let writeIndex = States[STATE.WRITE_INDEX];
+    let newIndex;
+    for(let chanIndex = 0; chanIndex < buffer.numberOfChannels; chanIndex++) {
+        if((writeIndex + bufferFrames) < AudioRingBuffer[chanIndex].length) {
+            //console.log('write COPY begin ' + writeIndex, ' past end ' + (writeIndex + bufferFrames) + ' tocopy ' + bufferFrames);
+            AudioRingBuffer[chanIndex].set(buffer.getChannelData(chanIndex), writeIndex);
+            newIndex = States[STATE.WRITE_INDEX] + bufferFrames;            
+        }
+        else {
+            let splitIndex =  AudioRingBuffer[chanIndex].length - writeIndex;
+            let firstHalf  = buffer.getChannelData(chanIndex).subarray(0, splitIndex);
+            let secondHalf = buffer.getChannelData(chanIndex).subarray(splitIndex);
+            //console.log('write COPY begin ' + writeIndex, ' past end ' + (writeIndex + firstHalf.length) + ' tocopy ' + firstHalf.length);
+            AudioRingBuffer[chanIndex].set(firstHalf, writeIndex);
+            //console.log('write COPY begin ' + 0, ' past end ' + (secondHalf.length) + ' tocopy ' + secondHalf.length);
+            AudioRingBuffer[chanIndex].set(secondHalf);
+            newIndex = secondHalf.length;            
+        }
+    }
+    States[STATE.WRITE_INDEX] = newIndex;
+}
+
+async function aqFrames(node, buffer, track, mysignal) {
+    MainAudioContext.resume();
+    
+    const bufferFrames = buffer.getChannelData(0).length;
+    while(framesAvail() <  bufferFrames) {
+        let mssleep = ((bufferFrames- framesAvail())/MainAudioContext.sampleRate ) * 1000;
+        await abortablesleep(mssleep, mysignal);
+        if(mysignal.aborted) {
+            console.log('handling aborted sleep');
+            unlock();                     
+            return;
+        }
+    }
+
+    pushFrames(buffer, bufferFrames);    
+    Atomics.sub(States, STATE.FRAMES_AVAILABLE, bufferFrames);
+};
+
 (async function() {
     await MainAudioContext.audioWorklet.addModule('worklet_processor.js');
-    const MusicNode = new AudioWorkletNode(MainAudioContext, 'MusicProcessor');
+    MusicNode = new AudioWorkletNode(MainAudioContext, 'MusicProcessor',  {'numberOfOutputs' : 1, 'outputChannelCount': [2]});
     MusicNode.connect(MainAudioContext.destination);
-    let trackname = "Chuck Person - Chuck Person's Eccojams Vol 1 (2016 WEB) [FLAC]/A1.flac";
-
-    let track = {'trackname' : trackname, 'url' : geturl(trackname)};
-    FACAbortController.abort();
-    FACAbortController = new AbortController();
-    let mysignal = FACAbortController.signal;
-    let nwdrflac = await NetworkDrFlac(track.url, mysignal);
-    let ab = await nwdrflac.read_pcm_frames_to_AudioBuffer(0, 441000*4, mysignal, MainAudioContext); 
-    console.log(ab);
-    let chanzero = new Float32Array(441000*4);
-    chanzero.set(ab.getChannelData(0));
-    console.log(chanzero);
-    let chanone = new Float32Array(441000*4);
-    chanone.set(ab.getChannelData(1));
-    MusicNode.port.postMessage({'message' : 'addData', 'chanzero': chanzero.buffer, 'chanone' : chanone.buffer}, [chanzero.buffer, chanone.buffer]);
+    MusicNode.port.postMessage({'message' : 'init', sharedbuffers : SharedBuffers});    
 })();
 
 /*

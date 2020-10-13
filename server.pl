@@ -935,6 +935,12 @@ package HTTP::BS::Server::Client::Request {
         }        
         $self->{'outheaders'}{'Connection'} //= $self->{'header'}{'Connection'};
         $self->{'outheaders'}{'Connection'} //= 'keep-alive';
+        
+        # SharedArrayBuffer
+        if(index($fullpath, 'static/music_worklet/index.html') != -1) {
+            $self->{'outheaders'}{'Cross-Origin-Opener-Policy'} =  'same-origin';
+            $self->{'outheaders'}{'Cross-Origin-Embedder-Policy'} = 'require-corp';
+        }
 
         # serialize the outgoing headers
         foreach my $header (keys %{$self->{'outheaders'}}) {
