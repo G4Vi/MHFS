@@ -7,14 +7,14 @@ const AQLookahead = 5;          // buffer as long as less than AQLookahead is bu
 
 let MainAudioContext;
 let GainNode;
-let AQID = -1;
-let AudioQueue = [];
 let Tracks_HEAD;
 let Tracks_TAIL;
 let Tracks_QueueCurrent;
 let FACAbortController = new AbortController();
 let SBAR_UPDATING = 0;
 let NWDRFLAC;
+let Timers = [];
+let PlaybackInfo = {};
 
 function DeclareGlobalFunc(name, value) {
     Object.defineProperty(window, name, {
@@ -52,78 +52,25 @@ function CreateAudioContext(options) {
     return mycontext;
 }
 
-let lastMALtime;
-function MainAudioLoop() {
-    if(lastMALtime) {
-        const MALDelta = MainAudioContext.currentTime - lastMALtime;
-        if((MALDelta) > 0.100) {
-            console.log('MAL called super late ' + MALDelta);
-        }
-    }
-    lastMALtime= MainAudioContext.currentTime; 
-    AQ_clean();
-    if(AudioQueue.length === 0) return 0;
-    
-    // advanced past already scheduled audio. bufferTime is the last endTime
-    let bufferTime;
-    let acindex = 0;
-    for(; acindex < AudioQueue.length; acindex++) {
-        if(!AudioQueue[acindex].startTime) break;
-        bufferTime = AudioQueue[acindex].endTime;
-    }
-
-    // adjust / assign bufferTime if needed
-    let timeadjusted = false;
-    if(!bufferTime || (bufferTime < MainAudioContext.currentTime)) {
-        bufferTime =  MainAudioContext.currentTime+AQStartLookahead;
-        console.log('adjusting time to ' + bufferTime);
-        timeadjusted = true;
-    }
-    
-    // queue up to 5 secs ahead
-    const lookaheadtime = MainAudioContext.currentTime + AQLookahead;
-    while(bufferTime < lookaheadtime) {
-        // everything is scheduled break out
-        if(acindex === AudioQueue.length) return;  
-        let toQueue = AudioQueue[acindex];
-
-        let source = MainAudioContext.createBufferSource();        
-        source.buffer = toQueue.buffer;
-        source.connect(GainNode);    
-        source.start(bufferTime, 0);
-        InitPPText();
-        toQueue.source = source;
-
-        toQueue.startTime = bufferTime;
-        if(source.buffer.duration !== (toQueue.duration / toQueue.track.sampleRate)) {
-            console.log('duration wrong');
-        }
-        toQueue.endTime = toQueue.startTime + source.buffer.duration;
-        if(!toQueue.playbackinfo.starttime || timeadjusted) {
-            timeadjusted = false;
-            toQueue.playbackinfo.starttime = toQueue.startTime - toQueue.skiptime;
-        }
-        if(toQueue.func) {                       
-            toQueue.func(toQueue.startTime, toQueue.endTime);
-        }
-
-        bufferTime = toQueue.endTime;         
-        acindex++;        
-    }
-}
-
 function GraphicsLoop() {
-    AQ_clean();
+    // run and remove associated graphics timers
+    let timerdel = 0;
+    for(let j = 0; j < Timers.length; j++) {
+        if(Timers[j].time <= MainAudioContext.currentTime) {
+            Timers[j].func(Timers[j]);
+            timerdel++;
+        }
+    }
+    if(timerdel)Timers.splice(0, timerdel);
     if(SBAR_UPDATING) {
         
         
         
     }
     // show the deets of the current track, if exists, is queued, and is playing  
-    else if(AudioQueue[0] && AudioQueue[0].playbackinfo.starttime && ((MainAudioContext.currentTime-AudioQueue[0].playbackinfo.starttime) >= 0)) {
+    else if(PlaybackInfo && PlaybackInfo.starttime && ((MainAudioContext.currentTime-PlaybackInfo.starttime) >= 0)) {
         //don't advance the clock past the end of queued audio
-        let curTime = MainAudioContext.currentTime-AudioQueue[0].playbackinfo.starttime;       
-        //console.log('current time ' + MainAudioContext.currentTime + 'acurtime ' + curTime + 'starttime ' + AudioQueue[0].playbackinfo.starttime);        
+        let curTime = MainAudioContext.currentTime-PlaybackInfo.starttime;           
         SetCurtimeText(curTime);
         SetSeekbarValue(curTime);
     }   
@@ -180,7 +127,7 @@ function _QueueTrack(trackname, after, before) {
     }
     else {
         // Update text otherwise
-        let tocheck = (AQ_ID() !== -1) ? AudioQueue[0].track : Tracks_QueueCurrent;
+        let tocheck = (PlaybackInfo) ? PlaybackInfo.track : Tracks_QueueCurrent;
         if(tocheck) {
             if(tocheck.prev === track) {
                 SetPrevText(track.trackname);
@@ -196,8 +143,8 @@ function _QueueTrack(trackname, after, before) {
 
 function _PlayTrack(trackname) {
     let queuePos;
-    if(AQ_ID() !== -1) {
-        queuePos = AudioQueue[0].track;
+    if(PlaybackInfo) {
+        queuePos = PlaybackInfo.track;
     }
     else if(Tracks_QueueCurrent) {
         queuePos = Tracks_QueueCurrent;
@@ -208,7 +155,8 @@ function _PlayTrack(trackname) {
         queueAfter = queuePos.next;        
     }    
 
-    AQ_stopAudioWithoutID(-1);
+    // stop all audio
+    StopAudio();
     Tracks_QueueCurrent = null;
     return _QueueTrack(trackname, queuePos, queueAfter);   
 }
@@ -240,77 +188,6 @@ function PlayTracks(tracks) {
     let after = _PlayTrack(trackname);
     if(!tracks.length) return;  
     QueueTracks(tracks, after);
-}
-
-// remove played items from the audio queue
-function AQ_clean() {
-    let toDelete = 0;
-    for(let i = 0; i < AudioQueue.length; i++) {
-        if(! AudioQueue[i].endTime) break;        
-
-        // run and remove associated graphics timers
-        let timerdel = 0;
-        for(let j = 0; j < AudioQueue[i].timers.length; j++) {
-            if(AudioQueue[i].timers[j].time <= MainAudioContext.currentTime) {
-                console.log('aqid: ' + AudioQueue[i].aqid + ' running timer at ' + MainAudioContext.currentTime);
-                AudioQueue[i].timers[j].func(AudioQueue[i].timers[j]);
-                timerdel++;
-            }
-        }
-        if(timerdel)AudioQueue[i].timers.splice(0, timerdel);
-        
-        // remove if it has passed
-        if(AudioQueue[i].endTime <= MainAudioContext.currentTime) {
-            console.log('aqid: ' + AudioQueue[i].aqid + ' segment elapsed, removing');
-            toDelete++;
-        }
-    }
-    if(toDelete) {
-        // if the AQ is empty and there's a current track we fell behind
-        if((toDelete === AudioQueue.length) && (Tracks_QueueCurrent)) {
-            SetPlayText(Tracks_QueueCurrent.trackname + ' {LOADING}');
-        }
-        AudioQueue.splice(0, toDelete);
-    }
-}
-
-//imprecise, in seconds
-function AQ_unqueuedTime() { 
-    let unqueuedtime = 0;
-    for(let i = 0; i < AudioQueue.length; i++) {
-        if(!AudioQueue[i].startTime) {
-            unqueuedtime += (AudioQueue[i].duration / AudioQueue[i].track.sampleRate);
-        }        
-    }
-    return unqueuedtime;
-}
-
-// returns the currently or about to be playing aqid
-function AQ_ID() {
-    AQ_clean();     
-    for(let i = 0; i < AudioQueue.length; i++) {        
-        return AudioQueue[i].aqid;                    
-    }
-    return -1;
-}
-
-function AQ_stopAudioWithoutID(aqid) {
-    if(!AudioQueue.length) return;
-    let dCount = 0;
-    for(let i = AudioQueue.length-1; i >= 0; i--) {
-        if(AudioQueue[i].aqid === aqid) {
-            break;
-        }
-        dCount++;
-        if(AudioQueue[i].source) {
-            AudioQueue[i].source.disconnect();
-            AudioQueue[i].source.stop();
-        }
-        console.log('aqid: ' + AudioQueue[i].aqid + ' AQ_stopAudioWithoutID delete, curr: ' + aqid);
-    }
-    if(dCount) {
-        AudioQueue.splice(AudioQueue.length - dCount, dCount);
-    }    
 }
 
 if(typeof abortablesleep === 'undefined') {
@@ -365,7 +242,6 @@ async function fillAudioQueue(time) {
     
 TRACKLOOP:while(1) {
         // advance the track
-        AQID++;
         if(!initializing) {
             if(!document.getElementById("repeattrack").checked) {
                 Tracks_QueueCurrent = Tracks_QueueCurrent.next;
@@ -436,23 +312,7 @@ TRACKLOOP:while(1) {
         }
         let isStart = true;      
         while(dectime < NWDRFLAC.totalPCMFrameCount) {
-            let todec = Math.min(NWDRFLAC.sampleRate, NWDRFLAC.totalPCMFrameCount - dectime);
-            
-            // if plenty of audio is queued. Don't download yet
-            let todecsecs = todec / NWDRFLAC.sampleRate;
-            const  nextendtime = function(){
-                return (AQ_unqueuedTime()+todecsecs);
-            };
-            console.log('nextendtime ' + nextendtime() + ' curdecsecs ' + todecsecs);
-            while(nextendtime() > AQMaxDecodedTime) {
-                let mssleep = (nextendtime()  - AQMaxDecodedTime) * 1000;
-                await abortablesleep(mssleep, mysignal);
-                if(mysignal.aborted) {
-                    console.log('handling aborted sleep');
-                    unlock();                     
-                    return;
-                }
-            }
+            const todec = Math.min(NWDRFLAC.sampleRate, NWDRFLAC.totalPCMFrameCount - dectime);
             
             // decode
             let buffer;
@@ -487,46 +347,13 @@ TRACKLOOP:while(1) {
                 }
             }
 
-            await aqFrames(MusicNode, buffer, track, mysignal);
-            dectime += todec;
-            continue;
-         
-            // Add to the audio queue
-            let aqItem = { 'buffer' : buffer, 'duration' : todec, 'aqid' : AQID, 'skiptime' : (dectime / NWDRFLAC.sampleRate), 'track' : track, 'playbackinfo' : {}, 'timers' : []};
-            // At start and end track update the GUI
-            let isEnd = ((dectime+todec) === NWDRFLAC.totalPCMFrameCount);
-            if(isStart || isEnd) {            
-                aqItem.func = function(startTime, endTime) {
-                    if(isStart) {
-                        console.log('aqid: ' + aqItem.aqid + ' start timer at ' + startTime + ' currentTime ' + MainAudioContext.currentTime);
-                        aqItem.timers.push({'time': startTime, 'func': function() {                             
-                            seekbar.min = 0;
-                            seekbar.max = track.duration;
-                            SetEndtimeText(track.duration);
-                            SetPlayText(track.trackname);
-                            let prevtext = track.prev ? track.prev.trackname : '';
-                            SetPrevText(prevtext);       
-                            let nexttext =  track.next ? track.next.trackname : '';
-                            SetNextText(nexttext);
-                        }});
-                        isStart = false;
-                    }
-                    if(isEnd) {
-                        console.log('aqid: ' + aqItem.aqid + ' end timer at ' + endTime + ' currentTime ' + MainAudioContext.currentTime); 
-                        aqItem.timers.push({'time': endTime, 'func': function(){
-                            let curTime = 0;
-                            SetEndtimeText(0);                    
-                            SetCurtimeText(curTime);
-                            SetSeekbarValue(curTime);
-                            SetPrevText(track.trackname);
-                            SetPlayText('');
-                            SetNextText('');
-                        }});
-                    }
-                }
+            const isEnd = ((dectime+todec) === NWDRFLAC.totalPCMFrameCount);
+            if(!await aqFrames(buffer, mysignal, track, isStart, isEnd, dectime)) {
+                unlock();
+                return;
             }
-            AudioQueue.push(aqItem);        
-            dectime += todec;
+            isStart = false;
+            dectime += todec;            
         }        
     }
     unlock();
@@ -547,20 +374,19 @@ var dbarea     = document.getElementById('musicdb');
 // BEGIN UI handlers
 
 rptrackbtn.addEventListener('change', function(e) {
-    let aqid = AQ_ID();
-    if(aqid === -1) return;   // nothing is playing repeattrack should do nothing
-    if(aqid === AQID) return; // current playing is still being queued do nothing 
+    if(!PlaybackInfo) return;                              // nothing is playing repeattrack should do nothing
+    if(PlaybackInfo.track === Tracks_QueueCurrent) return; // current playing is still being queued do nothing 
     
     console.log('rptrack abort');
-    AQ_stopAudioWithoutID(aqid); // stop the audio queue of next track(s)
-
+    // stop the audio queue of next track(s)
+    //StopAudio();
     if(e.target.checked) {
         // repeat the currently playing track
-        Tracks_QueueCurrent = AudioQueue[0].track;
+        Tracks_QueueCurrent = PlaybackInfo.track;
     }
     else {
         // queue the next track
-        Tracks_QueueCurrent = AudioQueue[0].track.next;
+        Tracks_QueueCurrent = PlaybackInfo.track.next;
     }
     fillAudioQueue();
  });
@@ -587,23 +413,19 @@ rptrackbtn.addEventListener('change', function(e) {
          return;
      }     
      SBAR_UPDATING = 0;
-     if(AudioQueue[0]) {
-         Tracks_QueueCurrent = AudioQueue[0].track;    
-         AQ_stopAudioWithoutID(-1);
-         
+     if(PlaybackInfo) {
+         Tracks_QueueCurrent = PlaybackInfo.track;    
+         // stop all audio
+         StopAudio();
          let stime = Number(e.target.value);
-         console.log('SEEK ' + stime);  
-         fillAudioQueue(stime);
+         console.log('SEEK ' + stime);
+        fillAudioQueue(stime);
      }         
  });
  
  prevbtn.addEventListener('click', function (e) {
     let prevtrack;
-    if(AudioQueue[0]) {
-        if(!AudioQueue[0].track.prev) return;
-        prevtrack = AudioQueue[0].track.prev;
-    }
-    else if(Tracks_QueueCurrent) {
+    if(Tracks_QueueCurrent) {
         if(!Tracks_QueueCurrent.prev) return;
         prevtrack = Tracks_QueueCurrent.prev;
     }
@@ -615,15 +437,15 @@ rptrackbtn.addEventListener('change', function(e) {
     }
 
     Tracks_QueueCurrent = prevtrack;
-    AQ_stopAudioWithoutID(-1);
+    StopAudio();
     fillAudioQueue();    
  });
  
  nextbtn.addEventListener('click', function (e) {        
     let nexttrack;
-    if(AudioQueue[0]) {
-        if(!AudioQueue[0].track.next) return;
-        nexttrack = AudioQueue[0].track.next;
+    if(PlaybackInfo) {
+        if(!PlaybackInfo.track.next) return;
+        nexttrack = PlaybackInfo.track.next;
     }
     else if(Tracks_QueueCurrent) {
         if(!Tracks_QueueCurrent.next) return;
@@ -634,7 +456,7 @@ rptrackbtn.addEventListener('change', function(e) {
     }
 
     Tracks_QueueCurrent = nexttrack;
-    AQ_stopAudioWithoutID(-1);
+    StopAudio();
     fillAudioQueue(); 
  });
  
@@ -836,9 +658,6 @@ States          = new Int32Array(SharedBuffers.states);
 AudioRingBuffer = [new Float32Array(SharedBuffers.arb[0]), new Float32Array(SharedBuffers.arb[1])];
 States[STATE.FRAMES_AVAILABLE]   = AudioRingBuffer[0].length;
 States[STATE.RING_BUFFER_LENGTH] = AudioRingBuffer[0].length;
-function framesAvail() {
-    return Atomics.load(States, STATE.FRAMES_AVAILABLE);    
-}
 
 function pushFrames(buffer, bufferFrames) {
     let writeIndex = States[STATE.WRITE_INDEX];
@@ -863,28 +682,68 @@ function pushFrames(buffer, bufferFrames) {
     States[STATE.WRITE_INDEX] = newIndex;
 }
 
-async function aqFrames(node, buffer, track, mysignal) {
+async function aqFrames(buffer, mysignal, track, isStart, isEnd, frameindex) {
     MainAudioContext.resume();
     
     const bufferFrames = buffer.getChannelData(0).length;
-    while(framesAvail() <  bufferFrames) {
-        let mssleep = ((bufferFrames- framesAvail())/MainAudioContext.sampleRate ) * 1000;
+    let fAvail;
+    // wait for there to be enough space to queue
+    while(1) {
+        fAvail = Atomics.load(States, STATE.FRAMES_AVAILABLE);
+        if(fAvail > States[STATE.RING_BUFFER_LENGTH]) continue;
+        if(fAvail >= bufferFrames) break;
+        let mssleep = ((bufferFrames- fAvail)/MainAudioContext.sampleRate ) * 1000;
         await abortablesleep(mssleep, mysignal);
         if(mysignal.aborted) {
             console.log('handling aborted sleep');
-            unlock();                     
-            return;
+            return false;
         }
     }
-
+    // not precise as MainAudioContext.currentTime isn't read as the exact time as fAvail.
+    const fBuffered = States[STATE.RING_BUFFER_LENGTH] - fAvail;    
+    const beforeTime = MainAudioContext.currentTime; + (fBuffered/MainAudioContext.sampleRate);
     pushFrames(buffer, bufferFrames);    
     Atomics.sub(States, STATE.FRAMES_AVAILABLE, bufferFrames);
+    if(isStart) {
+        const timerTime = beforeTime + (fBuffered / MainAudioContext.sampleRate);
+        const startTime = beforeTime + ((fBuffered-frameindex) / MainAudioContext.sampleRate);
+        Timers.push({'time': timerTime, 'func': function() {
+            PlaybackInfo = {'starttime':startTime, 'track':track} ;                              
+            seekbar.min = 0;
+            seekbar.max = track.duration;
+            SetEndtimeText(track.duration);
+            SetPlayText(track.trackname);
+            let prevtext = track.prev ? track.prev.trackname : '';
+            SetPrevText(prevtext);       
+            let nexttext =  track.next ? track.next.trackname : '';
+            SetNextText(nexttext);
+        }});
+    }
+    if(isEnd) {
+        const endTime = MainAudioContext.currentTime + ((fBuffered+bufferFrames)/MainAudioContext.sampleRate);
+        Timers.push({'time': endTime, 'func': function(){
+            PlaybackInfo = null;
+            let curTime = 0;
+            SetEndtimeText(0);                    
+            SetCurtimeText(curTime);
+            SetSeekbarValue(curTime);
+            SetPrevText(track.trackname);
+            SetPlayText('');
+            SetNextText('');
+        }});
+    }
+    return true;    
+};
+
+const StopAudio = function() {
+    //Atomics.store(States, STATE.FRAMES_AVAILABLE, States[STATE.RING_BUFFER_LENGTH]); // doesnt work as expected
+    PlaybackInfo = null;
 };
 
 (async function() {
     await MainAudioContext.audioWorklet.addModule('worklet_processor.js');
     MusicNode = new AudioWorkletNode(MainAudioContext, 'MusicProcessor',  {'numberOfOutputs' : 1, 'outputChannelCount': [2]});
-    MusicNode.connect(MainAudioContext.destination);
+    MusicNode.connect(GainNode);
     MusicNode.port.postMessage({'message' : 'init', sharedbuffers : SharedBuffers});    
 })();
 
@@ -892,7 +751,8 @@ async function aqFrames(node, buffer, track, mysignal) {
 setInterval(function() {
     MainAudioLoop();
 }, 25);
-window.requestAnimationFrame(GraphicsLoop);
 */
+window.requestAnimationFrame(GraphicsLoop);
+
 
 //QueueTrack("Chuck Person - Chuck Person's Eccojams Vol 1 (2016 WEB) [FLAC]/A1.flac");

@@ -46,7 +46,11 @@ class MusicProcessor extends AudioWorkletProcessor {
         }
     }
     this._States[STATE.READ_INDEX] = newReadIndex;
-    Atomics.add(this._States, STATE.FRAMES_AVAILABLE, tocopy);
+    Atomics.add(this._States, STATE.FRAMES_AVAILABLE, tocopy); 
+    // if this happens we just reset the buffer, undo if it happened
+    /*if(Atomics.add(this._States, STATE.FRAMES_AVAILABLE, tocopy) === this._RingBufferLength) {
+        Atomics.sub(this._States, STATE.FRAMES_AVAILABLE, tocopy);
+    }*/
   }
 
     process (inputs, outputs, parameters) {
