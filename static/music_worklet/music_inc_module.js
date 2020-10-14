@@ -638,7 +638,7 @@ if (orig_ptracks.length > 0) {
 }
 
 const STATE = {
-    'MORE_DATA' : 0,
+    'RESET' : 0,
     'FRAMES_AVAILABLE' : 1,// stores the amount of frames available for the producer to fill 
     'READ_INDEX' : 2,      // used only by processor
     'WRITE_INDEX' : 3,     // used only by producer
@@ -684,7 +684,7 @@ function pushFrames(buffer, bufferFrames) {
 
 async function aqFrames(buffer, mysignal, track, isStart, isEnd, frameindex) {
     MainAudioContext.resume();
-    
+    while(Atomics.load(States, STATE.RESET) == 1);    
     const bufferFrames = buffer.getChannelData(0).length;
     let fAvail;
     // wait for there to be enough space to queue
@@ -737,6 +737,8 @@ async function aqFrames(buffer, mysignal, track, isStart, isEnd, frameindex) {
 
 const StopAudio = function() {
     //Atomics.store(States, STATE.FRAMES_AVAILABLE, States[STATE.RING_BUFFER_LENGTH]); // doesnt work as expected
+    //Atomics.store(States, STATE.READ_INDEX, States[STATE.WRITE_INDEX]);
+    Atomics.store(States,STATE.RESET, 1);
     PlaybackInfo = null;
 };
 
@@ -747,11 +749,7 @@ const StopAudio = function() {
     MusicNode.port.postMessage({'message' : 'init', sharedbuffers : SharedBuffers});    
 })();
 
-/*
-setInterval(function() {
-    MainAudioLoop();
-}, 25);
-*/
+
 window.requestAnimationFrame(GraphicsLoop);
 
 

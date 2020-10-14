@@ -1,5 +1,5 @@
 const STATE = {
-  'MORE_DATA' : 0,
+  'RESET' : 0,
   'FRAMES_AVAILABLE' : 1,
   'READ_INDEX' : 2,
   'WRITE_INDEX' : 3,
@@ -23,8 +23,9 @@ class MusicProcessor extends AudioWorkletProcessor {
   }
 
   _pullFrames(outputArray) {
-    const readIndex = this._States[STATE.READ_INDEX];
     const fAvail = Atomics.load(this._States, STATE.FRAMES_AVAILABLE);
+    const readIndex = this._States[STATE.READ_INDEX];
+   
     const tocopy = Math.min(this._RingBufferLength -fAvail, outputArray[0].length);
     const nextReadIndex = readIndex + tocopy;
     let newReadIndex;
@@ -57,6 +58,20 @@ class MusicProcessor extends AudioWorkletProcessor {
       if(!this._initialized) {
         return true;
       }
+      
+      if(Atomics.load(this._States, STATE.RESET) == 1) {
+          /*Atomics.store(this._States,STATE.FRAMES_AVAILABLE, this._RingBufferLength);
+          Atomics.store(this._States,STATE.READ_INDEX, 0);
+          Atomics.store(this._States,STATE.WRITE_INDEX, 0); 
+          */
+          this._States[STATE.FRAMES_AVAILABLE] = this._RingBufferLength;
+          this._States[STATE.WRITE_INDEX] = 0;
+          this._States[STATE.READ_INDEX] = 0;           
+          Atomics.store(this._States,STATE.RESET, 0);         
+          return true;
+      }
+      
+      
       this._pullFrames(outputs[0]);
       return true
     }
