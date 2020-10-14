@@ -621,10 +621,11 @@ function BuildPTrack() {
     var urlstring = PTrackUrlParams.toString();
     if (urlstring != '') {
         console.log('replace state begin');
-        window.history.replaceState('playlist', 'Title', '?' + urlstring);
+        //window.history hangs the page
+        //window.history.replaceState('playlist', 'Title', '?' + urlstring);        
         console.log('replace state end');
     }
-    }, 1000);
+    }, 5000);
 }
 
 
@@ -637,60 +638,72 @@ if (orig_ptracks.length > 0) {
     //QueueTracks(orig_ptracks);
 }
 
-const STATE = {
-    'RESET' : 0,
-    'FRAMES_AVAILABLE' : 1,// stores the amount of frames available for the producer to fill 
-    'READ_INDEX' : 2,      // used only by processor
-    'WRITE_INDEX' : 3,     // used only by producer
-    'RING_BUFFER_LENGTH': 4,
+const READER_MSG = {
+    'RESET'     : 0, // data param token
+    'FRAMES_ADD' : 1 // data param number of frames
 };
-let States;
+
+// number of message slots in use
+const MSG_COUNT = {
+    'READER' : 0,
+    'WRITER' : 1
+};
+
 const ARBLen  = MainAudioContext.sampleRate * 2;
-let AudioRingBuffer;
 if (!self.SharedArrayBuffer) {
     console.error('SharedArrayBuffer is not supported in browser');
 }
 const SharedBuffers = {
-    states: new SharedArrayBuffer(5*4),
+    message_count : new SharedArrayBuffer(4*2),
+    reader_messages: new SharedArrayBuffer(4*32),
+    writer_messages : new SharedArrayBuffer(4*4096),
     arb : [new SharedArrayBuffer(ARBLen * 4), new SharedArrayBuffer(ARBLen * 4)]
 };
-States          = new Int32Array(SharedBuffers.states);
-AudioRingBuffer = [new Float32Array(SharedBuffers.arb[0]), new Float32Array(SharedBuffers.arb[1])];
-States[STATE.FRAMES_AVAILABLE]   = AudioRingBuffer[0].length;
-States[STATE.RING_BUFFER_LENGTH] = AudioRingBuffer[0].length;
 
-function pushFrames(buffer, bufferFrames) {
-    let writeIndex = States[STATE.WRITE_INDEX];
-    let newIndex;
-    for(let chanIndex = 0; chanIndex < buffer.numberOfChannels; chanIndex++) {
-        if((writeIndex + bufferFrames) < AudioRingBuffer[chanIndex].length) {
-            //console.log('write COPY begin ' + writeIndex, ' past end ' + (writeIndex + bufferFrames) + ' tocopy ' + bufferFrames);
-            AudioRingBuffer[chanIndex].set(buffer.getChannelData(chanIndex), writeIndex);
-            newIndex = States[STATE.WRITE_INDEX] + bufferFrames;            
+
+import { RingBuffer } from './AudioWriterReader.js'
+const MessageCount = new Uint32Array(SharedBuffers.message_count);
+const AudioWriter    = [RingBuffer.writer(SharedBuffers.arb[0], Float32Array), RingBuffer.writer(SharedBuffers.arb[1], Float32Array)];
+const MessageWriter = RingBuffer.writer(SharedBuffers.reader_messages, Uint32Array);
+const MessageReader = RingBuffer.reader(SharedBuffers.writer_messages, Uint32Array);
+let tok = 0;
+let freeFrames = ARBLen;
+const FreeFrames = function() {
+    const messagetotal = Atomics.load(MessageCount, MSG_COUNT.WRITER);
+    let messages = messagetotal;
+    while(messages > 0) {
+        let message = new Uint32Array(2);
+        MessageReader.read(message,messages);
+        // only process messages with the current token
+        if(message[0] === tok) {
+            freeFrames += message[1];
         }
-        else {
-            let splitIndex =  AudioRingBuffer[chanIndex].length - writeIndex;
-            let firstHalf  = buffer.getChannelData(chanIndex).subarray(0, splitIndex);
-            let secondHalf = buffer.getChannelData(chanIndex).subarray(splitIndex);
-            //console.log('write COPY begin ' + writeIndex, ' past end ' + (writeIndex + firstHalf.length) + ' tocopy ' + firstHalf.length);
-            AudioRingBuffer[chanIndex].set(firstHalf, writeIndex);
-            //console.log('write COPY begin ' + 0, ' past end ' + (secondHalf.length) + ' tocopy ' + secondHalf.length);
-            AudioRingBuffer[chanIndex].set(secondHalf);
-            newIndex = secondHalf.length;            
-        }
+        console.log('message in inc ' + message[0] + ' ' + message[1] + ' tok ' + tok )
+        messages -= 2;
     }
-    States[STATE.WRITE_INDEX] = newIndex;
+    Atomics.sub(MessageCount, MSG_COUNT.WRITER, messagetotal);
+    return freeFrames;
+};
+
+function pushFrames(buffer) {
+    for(let chanIndex = 0; chanIndex < buffer.numberOfChannels; chanIndex++) {
+        AudioWriter[chanIndex].write(buffer.getChannelData(chanIndex));        
+    }
+    let message = new Uint32Array(2);
+    message[0] = READER_MSG.FRAMES_ADD;
+    message[1] = buffer.getChannelData(0).length;
+    MessageWriter.write(message);
+    console.log('message out inc ' + message[0] + ' ' + message[1] + ' tok ' + tok )
+    Atomics.add(MessageCount, MSG_COUNT.READER, 2);
+    freeFrames -= buffer.getChannelData(0).length;    
 }
 
 async function aqFrames(buffer, mysignal, track, isStart, isEnd, frameindex) {
     MainAudioContext.resume();
-    while(Atomics.load(States, STATE.RESET) == 1);    
     const bufferFrames = buffer.getChannelData(0).length;
-    let fAvail;
     // wait for there to be enough space to queue
     while(1) {
-        fAvail = Atomics.load(States, STATE.FRAMES_AVAILABLE);
-        if(fAvail > States[STATE.RING_BUFFER_LENGTH]) continue;
+        const fAvail = FreeFrames();
         if(fAvail >= bufferFrames) break;
         let mssleep = ((bufferFrames- fAvail)/MainAudioContext.sampleRate ) * 1000;
         await abortablesleep(mssleep, mysignal);
@@ -699,11 +712,10 @@ async function aqFrames(buffer, mysignal, track, isStart, isEnd, frameindex) {
             return false;
         }
     }
-    // not precise as MainAudioContext.currentTime isn't read as the exact time as fAvail.
-    const fBuffered = States[STATE.RING_BUFFER_LENGTH] - fAvail;    
+    // not precise as MainAudioContext.currentTime isn't read as the exact time as freeFrames.
+    const fBuffered = ARBLen - freeFrames;    
     const beforeTime = MainAudioContext.currentTime; + (fBuffered/MainAudioContext.sampleRate);
-    pushFrames(buffer, bufferFrames);    
-    Atomics.sub(States, STATE.FRAMES_AVAILABLE, bufferFrames);
+    pushFrames(buffer);    
     if(isStart) {
         const timerTime = beforeTime + (fBuffered / MainAudioContext.sampleRate);
         const startTime = beforeTime + ((fBuffered-frameindex) / MainAudioContext.sampleRate);
@@ -736,10 +748,19 @@ async function aqFrames(buffer, mysignal, track, isStart, isEnd, frameindex) {
 };
 
 const StopAudio = function() {
-    //Atomics.store(States, STATE.FRAMES_AVAILABLE, States[STATE.RING_BUFFER_LENGTH]); // doesnt work as expected
-    //Atomics.store(States, STATE.READ_INDEX, States[STATE.WRITE_INDEX]);
-    Atomics.store(States,STATE.RESET, 1);
+    for(let i = 0; i < AudioWriter.length; i++) {
+        AudioWriter[i].reset();
+    }    
+    freeFrames = ARBLen;
+    tok++;
+    if(tok > 4294967295) tok = 0;
+    let message = new Uint32Array(2);
+    message[0] = READER_MSG.RESET;
+    message[1] = tok;
+    MessageWriter.write(message);
+    Atomics.add(MessageCount, MSG_COUNT.READER, 2);    
     PlaybackInfo = null;
+    console.log('message out inc reset ' + message[0] + ' ' + message[1] + ' tok ' + tok )
 };
 
 (async function() {

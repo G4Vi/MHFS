@@ -1,10 +1,79 @@
-const STATE = {
-  'RESET' : 0,
-  'FRAMES_AVAILABLE' : 1,
-  'READ_INDEX' : 2,
-  'WRITE_INDEX' : 3,
-  'RING_BUFFER_LENGTH': 4,
+//import RingBuffer from "./AudioWriterReader.js" import doesnt work in FF
+
+const READER_MSG = {
+  'RESET'     : 0, // data param token
+  'FRAMES_ADD' : 1 // data param number of frames
 };
+
+// number of message slots in use
+const MSG_COUNT = {
+  'READER' : 0,
+  'WRITER' : 1
+};
+
+
+
+
+class RingBuffer {
+
+  constructor(sab, type){
+    this._readindex = 0;
+    this._writeindex = 0;
+      this._buffer = new type(sab);
+  }
+
+  static reader(sab, type) {     
+      
+      return new RingBuffer(sab, type);
+  }
+
+  static writer(sab, type) {
+     
+      return new RingBuffer(sab, type);
+  }
+
+  write(arr) {
+      const count = arr.length;
+      if((this._writeindex+count) < this._buffer.length) {
+          this._buffer.set(arr, this._writeindex);
+          this._writeindex += count;
+      }
+      else {
+          const splitIndex = this._buffer.length - this._writeindex;
+          const firstHalf = arr.subarray(0, splitIndex);
+          const secondHalf = arr.subarray(splitIndex);
+          this._buffer.set(firstHalf, this._writeindex);
+          this._buffer.set(secondHalf);
+          this._writeindex = secondHalf.length;
+      }
+  }
+
+  read(dest, max) {
+      const tocopy = Math.min(max, dest.length);
+      const nextReadIndex = this._readindex + tocopy;
+      if(nextReadIndex < this._buffer.length) {
+          dest.set(this._buffer.subarray(this._readindex, nextReadIndex));
+          this._readindex += tocopy;       
+      }
+      else {
+          const overflow = nextReadIndex - this._buffer.length;          
+          const firstHalf = this._buffer.subarray(this._readindex);
+          const secondHalf = this._buffer.subarray(0, overflow);  
+          dest.set(firstHalf);
+          dest.set(secondHalf, firstHalf.length);
+          this._readindex = secondHalf.length;          
+      }
+      return tocopy;
+  }
+
+  reset() {
+    this._readindex = 0;
+    this._writeindex = 0;
+  }
+  
+    
+}
+
 
 class MusicProcessor extends AudioWorkletProcessor {
   constructor() {
@@ -13,45 +82,30 @@ class MusicProcessor extends AudioWorkletProcessor {
     this.port.onmessage = (e) => {
           console.log(e.data);
           if(e.data.message == 'init') {
-             const sharedbuffers = e.data.sharedbuffers;
-              this._States = new Int32Array(sharedbuffers.states);
-              this._AudioRingBuffer = [new Float32Array(sharedbuffers.arb[0]), new Float32Array(sharedbuffers.arb[1])];
-              this._RingBufferLength = this._States[STATE.RING_BUFFER_LENGTH];
-              this._initialized = true;
+                const sharedbuffers = e.data.sharedbuffers;              
+                this._MessageCount = new Uint32Array(sharedbuffers.message_count);
+                this._AudioReader    = [RingBuffer.reader(sharedbuffers.arb[0], Float32Array), RingBuffer.reader(sharedbuffers.arb[1], Float32Array)];
+                this._MessageReader = RingBuffer.reader(sharedbuffers.reader_messages, Uint32Array);
+                this._MessageWriter = RingBuffer.writer(sharedbuffers.writer_messages, Uint32Array);              
+                this._tok = 0;
+                this._tempmessagebuf = new Uint32Array(2);
+                this._dataframes = 0;
+                this._initialized = true;
           }
     };
   }
 
   _pullFrames(outputArray) {
-    const fAvail = Atomics.load(this._States, STATE.FRAMES_AVAILABLE);
-    const readIndex = this._States[STATE.READ_INDEX];
-   
-    const tocopy = Math.min(this._RingBufferLength -fAvail, outputArray[0].length);
-    const nextReadIndex = readIndex + tocopy;
-    let newReadIndex;
+    let copied = 0;
     for(let chanIndex = 0; chanIndex < outputArray.length; chanIndex++) {
-        if(nextReadIndex < this._RingBufferLength) {
-          //console.log('read COPY begin ' + readIndex, ' past end ' + nextReadIndex + ' tocopy ' + tocopy + ' currentFrame ' + currentFrame);
-          outputArray[chanIndex].set(this._AudioRingBuffer[chanIndex].subarray(readIndex, nextReadIndex));
-          newReadIndex =  this._States[STATE.READ_INDEX] + tocopy;         
-        }
-        else {
-          let overflow = nextReadIndex - this._RingBufferLength;          
-          let firstHalf = this._AudioRingBuffer[chanIndex].subarray(readIndex);
-          //console.log('read COPY begin ' + readIndex, ' past end ' + (readIndex + firstHalf.length) + ' tocopy ' + firstHalf.length);
-          let secondHalf = this._AudioRingBuffer[chanIndex].subarray(0, overflow);
-          //console.log('read COPY begin ' + 0, ' past end ' + secondHalf.length + ' tocopy ' + secondHalf.length);          
-          outputArray[chanIndex].set(firstHalf);
-          outputArray[chanIndex].set(secondHalf, firstHalf.length);
-          newReadIndex = secondHalf.length;          
-        }
+        copied = this._AudioReader[chanIndex].read(outputArray[chanIndex], this._dataframes);
     }
-    this._States[STATE.READ_INDEX] = newReadIndex;
-    Atomics.add(this._States, STATE.FRAMES_AVAILABLE, tocopy); 
-    // if this happens we just reset the buffer, undo if it happened
-    /*if(Atomics.add(this._States, STATE.FRAMES_AVAILABLE, tocopy) === this._RingBufferLength) {
-        Atomics.sub(this._States, STATE.FRAMES_AVAILABLE, tocopy);
-    }*/
+    if(copied === 0) return;
+    this._tempmessagebuf[0] = this._tok;
+    this._tempmessagebuf[1] = copied;
+    this._MessageWriter.write(this._tempmessagebuf);
+    Atomics.add(this._MessageCount, MSG_COUNT.WRITER, 2);
+    this._dataframes -= copied;    
   }
 
     process (inputs, outputs, parameters) {
@@ -59,17 +113,25 @@ class MusicProcessor extends AudioWorkletProcessor {
         return true;
       }
       
-      if(Atomics.load(this._States, STATE.RESET) == 1) {
-          /*Atomics.store(this._States,STATE.FRAMES_AVAILABLE, this._RingBufferLength);
-          Atomics.store(this._States,STATE.READ_INDEX, 0);
-          Atomics.store(this._States,STATE.WRITE_INDEX, 0); 
-          */
-          this._States[STATE.FRAMES_AVAILABLE] = this._RingBufferLength;
-          this._States[STATE.WRITE_INDEX] = 0;
-          this._States[STATE.READ_INDEX] = 0;           
-          Atomics.store(this._States,STATE.RESET, 0);         
-          return true;
+      // process messages
+      const messagetotal = Atomics.load(this._MessageCount, MSG_COUNT.READER);
+      let messages = messagetotal;
+      while(messages > 0) {
+          this._MessageReader.read(this._tempmessagebuf,messages);
+          if(this._tempmessagebuf[0] === READER_MSG.RESET) {
+            this._tok = this._tempmessagebuf[1];
+            this._dataframes = 0;
+            for(let i = 0; i < this._AudioReader.length; i++) {
+              this._AudioReader[i].reset();
+            }            
+          }
+          else if(this._tempmessagebuf[0] === READER_MSG.FRAMES_ADD) {
+            this._dataframes += this._tempmessagebuf[1];
+          }
+          //console.log('message ' + this._tempmessagebuf[0] + ' ' + this._tempmessagebuf[1] + ' tok ' + this._tok )
+          messages -= 2;
       }
+      Atomics.sub(this._MessageCount, MSG_COUNT.READER, messagetotal);
       
       
       this._pullFrames(outputs[0]);
