@@ -2,8 +2,6 @@
 import {default as NetworkDrFlac} from './music_drflac_module.cache.js'
 // times in seconds
 const AQMaxDecodedTime = 20;    // maximum time decoded, but not queued
-const AQStartLookahead = 0.100; // minimum time to buffer before starting playback
-const AQLookahead = 5;          // buffer as long as less than AQLookahead is buffered
 
 let MainAudioContext;
 let GainNode;
@@ -212,6 +210,78 @@ if(typeof abortablesleep === 'undefined') {
     DeclareGlobalFunc('abortablesleep', abortablesleep);
 }
 
+const abortablesleep_status = async function (ms, signal) {
+    await abortablesleep(ms, signal);
+    if(signal.aborted) {
+        return false;
+    }
+    return true;
+}
+
+let AudioQueue = [];
+const PumpAudioQueue = async function() {
+    while(1) {        
+        const fAvail = FreeFrames();
+        const item = AudioQueue[0];
+        if((!item) || (item.buffer.getChannelData(0).length > fAvail)) {
+            let mysignal = FACAbortController.signal;
+            const tosleep = item ? Math.min(20, (item.buffer.getChannelData(0).length-fAvail)/MainAudioContext.sampleRate) : 20;
+            await abortablesleep(tosleep, mysignal);
+            continue;            
+        }
+        AudioQueue.shift();
+        const buffer = item.buffer;
+        const isStart = item.isStart;
+        const isEnd = item.isEnd;
+        const track = item.track;
+        const frameindex = item.frameindex;
+        const bufferFrames = buffer.getChannelData(0).length;
+
+        // not precise as MainAudioContext.currentTime isn't read as the exact time as the frames
+        const fBuffered = ARBLen - fAvail;    
+        const beforeTime = MainAudioContext.currentTime; + (fBuffered/MainAudioContext.sampleRate);
+        pushFrames(buffer);    
+        if(isStart) {
+            InitPPText();
+            const timerTime = beforeTime + (fBuffered / MainAudioContext.sampleRate);
+            const startTime = beforeTime + ((fBuffered-frameindex) / MainAudioContext.sampleRate);
+            Timers.push({'time': timerTime, 'func': function() {
+                PlaybackInfo = {'starttime':startTime, 'track':track, 'aqindex': item.aqindex};                              
+                seekbar.min = 0;
+                seekbar.max = track.duration;
+                SetEndtimeText(track.duration);
+                SetPlayText(track.trackname);
+                let prevtext = track.prev ? track.prev.trackname : '';
+                SetPrevText(prevtext);       
+                let nexttext =  track.next ? track.next.trackname : '';
+                SetNextText(nexttext);
+            }});
+        }
+        if(isEnd) {
+            const endTime = MainAudioContext.currentTime + ((fBuffered+bufferFrames)/MainAudioContext.sampleRate);
+            Timers.push({'time': endTime, 'func': function(){
+                PlaybackInfo = null;
+                let curTime = 0;
+                SetEndtimeText(0);                    
+                SetCurtimeText(curTime);
+                SetSeekbarValue(curTime);
+                SetPrevText(track.trackname);
+                SetPlayText('');
+                SetNextText('');
+            }});
+        }
+    }
+}
+
+const AQDecTime = function() {
+    let total = 0
+    for(let i = 0; i < AudioQueue.length; i++) {
+        total += AudioQueue[i].buffer.getChannelData(0).length;
+    }
+    return total;
+}
+
+let NextAQIndex = 0;
 let MusicNode;
 let FAQ_MUTEX = new Mutex();
 async function fillAudioQueue(time) {
@@ -268,7 +338,6 @@ TRACKLOOP:while(1) {
                 }
             }
             else{
-                console.log('optimization using same nwdrflac: ' + track.url);
                 track.duration = NWDRFLAC.totalPCMFrameCount / NWDRFLAC.sampleRate;
                 track.sampleRate = NWDRFLAC.sampleRate;
             }
@@ -305,6 +374,7 @@ TRACKLOOP:while(1) {
         }
 
         // queue the track
+        NextAQIndex++;
         let dectime = 0;
         if(time) {                         
             dectime = Math.floor(time * NWDRFLAC.sampleRate);            
@@ -313,6 +383,17 @@ TRACKLOOP:while(1) {
         let isStart = true;      
         while(dectime < NWDRFLAC.totalPCMFrameCount) {
             const todec = Math.min(NWDRFLAC.sampleRate, NWDRFLAC.totalPCMFrameCount - dectime);
+
+            // wait for there to be space
+            const maxsamples = (AQMaxDecodedTime * MainAudioContext.sampleRate);
+            while((AQDecTime()+todec) > maxsamples) {
+                const tosleep = ((AQDecTime() + todec - maxsamples)/ MainAudioContext.sampleRate) * 1000; 
+                if(!(await abortablesleep_status(tosleep, mysignal)))
+                {
+                    unlock();
+                    return;
+                }
+            }
             
             // decode
             let buffer;
@@ -348,12 +429,17 @@ TRACKLOOP:while(1) {
             }
 
             const isEnd = ((dectime+todec) === NWDRFLAC.totalPCMFrameCount);
-            if(!await aqFrames(buffer, mysignal, track, isStart, isEnd, dectime)) {
+            AudioQueue.push({'buffer':buffer, 'track':track, 'isStart':isStart, 'isEnd':isEnd, 'frameindex':dectime, 'aqindex':NextAQIndex});
+            MainAudioContext.resume();
+            isStart = false;
+            dectime += todec;
+            //yield
+            if(!(await abortablesleep_status(0, mysignal)))
+            {
                 unlock();
                 return;
             }
-            isStart = false;
-            dectime += todec;            
+
         }        
     }
     unlock();
@@ -375,11 +461,18 @@ var dbarea     = document.getElementById('musicdb');
 
 rptrackbtn.addEventListener('change', function(e) {
     if(!PlaybackInfo) return;                              // nothing is playing repeattrack should do nothing
-    if(PlaybackInfo.track === Tracks_QueueCurrent) return; // current playing is still being queued do nothing 
+    if(PlaybackInfo.aqindex === NextAQIndex) return; // current playing is still being queued do nothing
     
     console.log('rptrack abort');
-    // stop the audio queue of next track(s)
-    //StopAudio();
+    // clear the audio queue of next tracks
+    for(let i = 0; i < AudioQueue.length; i++)
+    {
+        if(AudioQueue[i].aqindex !== PlaybackInfo.aqindex) {
+            AudioQueue.length = i;
+            break;
+        }
+    }
+    
     if(e.target.checked) {
         // repeat the currently playing track
         Tracks_QueueCurrent = PlaybackInfo.track;
@@ -635,7 +728,7 @@ MainAudioContext = CreateAudioContext({'sampleRate' : 44100 });
 // queue the tracks in the url
 let orig_ptracks = urlParams.getAll('ptrack');
 if (orig_ptracks.length > 0) {
-    //QueueTracks(orig_ptracks);
+    QueueTracks(orig_ptracks);
 }
 
 const READER_MSG = {
@@ -668,17 +761,19 @@ const MessageWriter = RingBuffer.writer(SharedBuffers.reader_messages, Uint32Arr
 const MessageReader = RingBuffer.reader(SharedBuffers.writer_messages, Uint32Array);
 let tok = 0;
 let freeFrames = ARBLen;
+// Avoid GC
+let tempMessageIN  = new Uint32Array(2);
+let tempMessageOUT = new Uint32Array(2);
 const FreeFrames = function() {
     const messagetotal = Atomics.load(MessageCount, MSG_COUNT.WRITER);
     let messages = messagetotal;
     while(messages > 0) {
-        let message = new Uint32Array(2);
-        MessageReader.read(message,messages);
+        MessageReader.read(tempMessageIN,messages);
         // only process messages with the current token
-        if(message[0] === tok) {
-            freeFrames += message[1];
+        if(tempMessageIN[0] === tok) {
+            freeFrames += tempMessageIN[1];
         }
-        console.log('message in inc ' + message[0] + ' ' + message[1] + ' tok ' + tok )
+        //console.log('message in inc ' + message[0] + ' ' + message[1] + ' tok ' + tok )
         messages -= 2;
     }
     Atomics.sub(MessageCount, MSG_COUNT.WRITER, messagetotal);
@@ -689,78 +784,30 @@ function pushFrames(buffer) {
     for(let chanIndex = 0; chanIndex < buffer.numberOfChannels; chanIndex++) {
         AudioWriter[chanIndex].write(buffer.getChannelData(chanIndex));        
     }
-    let message = new Uint32Array(2);
-    message[0] = READER_MSG.FRAMES_ADD;
-    message[1] = buffer.getChannelData(0).length;
-    MessageWriter.write(message);
-    console.log('message out inc ' + message[0] + ' ' + message[1] + ' tok ' + tok )
+    tempMessageOUT[0] = READER_MSG.FRAMES_ADD;
+    tempMessageOUT[1] = buffer.getChannelData(0).length;
+    MessageWriter.write(tempMessageOUT);
+    //console.log('message out inc ' + message[0] + ' ' + message[1] + ' tok ' + tok )
     Atomics.add(MessageCount, MSG_COUNT.READER, 2);
     freeFrames -= buffer.getChannelData(0).length;    
 }
 
-async function aqFrames(buffer, mysignal, track, isStart, isEnd, frameindex) {
-    MainAudioContext.resume();
-    const bufferFrames = buffer.getChannelData(0).length;
-    // wait for there to be enough space to queue
-    while(1) {
-        const fAvail = FreeFrames();
-        if(fAvail >= bufferFrames) break;
-        let mssleep = ((bufferFrames- fAvail)/MainAudioContext.sampleRate ) * 1000;
-        await abortablesleep(mssleep, mysignal);
-        if(mysignal.aborted) {
-            console.log('handling aborted sleep');
-            return false;
-        }
-    }
-    // not precise as MainAudioContext.currentTime isn't read as the exact time as freeFrames.
-    const fBuffered = ARBLen - freeFrames;    
-    const beforeTime = MainAudioContext.currentTime; + (fBuffered/MainAudioContext.sampleRate);
-    pushFrames(buffer);    
-    if(isStart) {
-        const timerTime = beforeTime + (fBuffered / MainAudioContext.sampleRate);
-        const startTime = beforeTime + ((fBuffered-frameindex) / MainAudioContext.sampleRate);
-        Timers.push({'time': timerTime, 'func': function() {
-            PlaybackInfo = {'starttime':startTime, 'track':track} ;                              
-            seekbar.min = 0;
-            seekbar.max = track.duration;
-            SetEndtimeText(track.duration);
-            SetPlayText(track.trackname);
-            let prevtext = track.prev ? track.prev.trackname : '';
-            SetPrevText(prevtext);       
-            let nexttext =  track.next ? track.next.trackname : '';
-            SetNextText(nexttext);
-        }});
-    }
-    if(isEnd) {
-        const endTime = MainAudioContext.currentTime + ((fBuffered+bufferFrames)/MainAudioContext.sampleRate);
-        Timers.push({'time': endTime, 'func': function(){
-            PlaybackInfo = null;
-            let curTime = 0;
-            SetEndtimeText(0);                    
-            SetCurtimeText(curTime);
-            SetSeekbarValue(curTime);
-            SetPrevText(track.trackname);
-            SetPlayText('');
-            SetNextText('');
-        }});
-    }
-    return true;    
-};
+
 
 const StopAudio = function() {
+    AudioQueue = [];
     for(let i = 0; i < AudioWriter.length; i++) {
         AudioWriter[i].reset();
     }    
     freeFrames = ARBLen;
     tok++;
     if(tok > 4294967295) tok = 0;
-    let message = new Uint32Array(2);
-    message[0] = READER_MSG.RESET;
-    message[1] = tok;
-    MessageWriter.write(message);
+    tempMessageOUT[0] = READER_MSG.RESET;
+    tempMessageOUT[1] = tok;
+    MessageWriter.write(tempMessageOUT);
     Atomics.add(MessageCount, MSG_COUNT.READER, 2);    
     PlaybackInfo = null;
-    console.log('message out inc reset ' + message[0] + ' ' + message[1] + ' tok ' + tok )
+    //console.log('message out inc reset ' + message[0] + ' ' + message[1] + ' tok ' + tok )
 };
 
 (async function() {
@@ -772,6 +819,6 @@ const StopAudio = function() {
 
 
 window.requestAnimationFrame(GraphicsLoop);
-
+PumpAudioQueue();
 
 //QueueTrack("Chuck Person - Chuck Person's Eccojams Vol 1 (2016 WEB) [FLAC]/A1.flac");

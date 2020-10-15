@@ -105,7 +105,10 @@ class MusicProcessor extends AudioWorkletProcessor {
     this._tempmessagebuf[1] = copied;
     this._MessageWriter.write(this._tempmessagebuf);
     Atomics.add(this._MessageCount, MSG_COUNT.WRITER, 2);
-    this._dataframes -= copied;    
+    this._dataframes -= copied;
+    if((copied < 128) && (this._AudioReader[0]._readindex > 0)) {
+        console.log('buffer underrun, copied ' + copied);
+    }  
   }
 
     process (inputs, outputs, parameters) {
