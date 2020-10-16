@@ -308,10 +308,11 @@ package HTTP::BS::Server {
     use strict; use warnings;
     use feature 'say';
     use IO::Socket::INET;
-    use Socket qw(IPPROTO_TCP TCP_KEEPALIVE);
+    use Socket qw(IPPROTO_TCP TCP_KEEPALIVE TCP_NODELAY);
     use IO::Poll qw(POLLIN POLLOUT POLLHUP);
     use Scalar::Util qw(weaken);
     use Data::Dumper;
+    use Config;
    
     HTTP::BS::Server::Util->import();
     
@@ -337,6 +338,15 @@ package HTTP::BS::Server {
         #$SERVER->setsockopt(IPPROTO_TCP, $TCP_KEEPCNT, 10) or die;
         #$SERVER->setsockopt(IPPROTO_TCP, $TCP_USER_TIMEOUT, 10000) or die; #doesn't work?
         #$SERVER->setsockopt(SOL_SOCKET, SO_LINGER, pack("II",1,0)) or die; #to stop last ack bullshit
+        
+        # leaving Nagle's algorithm enabled for now as sometimes headers are sent without data
+        #$sock->setsockopt(IPPROTO_TCP, TCP_NODELAY, 1) or die("Failed to set TCP_NODELAY");
+        
+        # linux specific settings. Check in BEGIN?
+        if(index($Config{osname}, 'linux') != -1) {
+            use Socket qw(TCP_QUICKACK);
+            $sock->setsockopt(IPPROTO_TCP, TCP_QUICKACK, 1) or die("Failed to set TCP_QUICKACK");
+        }
         my $evp = EventLoop::Poll->new;
         my %self = ( 'settings' => $settings, 'routes' => $routes, 'route_default' => pop @$routes, 'plugins' => $plugins, 'sock' => $sock, 'evp' => $evp, 'uploaders' => []);
         bless \%self, $class;
@@ -1593,7 +1603,6 @@ package HTTP::BS::Server::Client {
     use feature 'say';
     use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
     use IO::Socket::INET;
-    use Socket qw(IPPROTO_TCP TCP_NODELAY);
     use Errno qw(EINTR EIO :POSIX);
     use Fcntl qw(:seek :mode);
     use File::stat;
