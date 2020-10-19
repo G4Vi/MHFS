@@ -5,6 +5,11 @@ const READER_MSG = {
   'FRAMES_ADD' : 1 // data param number of frames
 };
 
+const WRITER_MSG = {
+  'FRAMES_ADD' : 0, // data param tok and number of frames
+  'START_TIME' : 1  // data param aqindex, time
+}
+
 // number of message slots in use
 const MSG_COUNT = {
   'READER' : 0,
@@ -88,7 +93,8 @@ class MusicProcessor extends AudioWorkletProcessor {
                 this._MessageReader = RingBuffer.reader(sharedbuffers.reader_messages, Uint32Array);
                 this._MessageWriter = RingBuffer.writer(sharedbuffers.writer_messages, Uint32Array);              
                 this._tok = 0;
-                this._tempmessagebuf = new Uint32Array(2);
+                this._tempmessagebuf = new Uint32Array(3);
+                this._tempfloatbuf = new Float32Array(this._tempmessagebuf.buffer);
                 this._dataframes = 0;
                 this._initialized = true;
           }
@@ -101,14 +107,23 @@ class MusicProcessor extends AudioWorkletProcessor {
         copied = this._AudioReader[chanIndex].read(outputArray[chanIndex], this._dataframes);
     }
     if(copied === 0) return;
-    this._tempmessagebuf[0] = this._tok;
-    this._tempmessagebuf[1] = copied;
+    this._tempmessagebuf[0] = WRITER_MSG.FRAMES_ADD;
+    this._tempmessagebuf[1] = this._tok;
+    this._tempmessagebuf[2] = copied;
     this._MessageWriter.write(this._tempmessagebuf);
-    Atomics.add(this._MessageCount, MSG_COUNT.WRITER, 2);
+    Atomics.add(this._MessageCount, MSG_COUNT.WRITER, 3);
     this._dataframes -= copied;
     if((copied < 128) && (this._AudioReader[0]._readindex > 0)) {
         console.log('buffer underrun, copied ' + copied);
     }  
+  }
+
+  _SendTime(time, aqindex) {
+    this._tempmessagebuf[0] = WRITER_MSG.START_TIME;
+    this._tempmessagebuf[1] = aqindex;
+    this._tempfloatbuf[2] = time;
+    this._MessageWriter.write(this._tempmessagebuf);
+    Atomics.add(this._MessageCount, MSG_COUNT.WRITER, 3);
   }
 
     process (inputs, outputs, parameters) {
@@ -126,13 +141,18 @@ class MusicProcessor extends AudioWorkletProcessor {
             this._dataframes = 0;
             for(let i = 0; i < this._AudioReader.length; i++) {
               this._AudioReader[i].reset();
-            }            
+            }
+            messages -= 2;            
           }
           else if(this._tempmessagebuf[0] === READER_MSG.FRAMES_ADD) {
-            this._dataframes += this._tempmessagebuf[1];
+            const fadd = this._tempmessagebuf[1];
+            this._SendTime(currentTime + (this._dataframes/sampleRate), this._tempmessagebuf[2]);
+            this._dataframes += fadd;
+            messages -= 3;
           }
-          //console.log('message ' + this._tempmessagebuf[0] + ' ' + this._tempmessagebuf[1] + ' tok ' + this._tok )
-          messages -= 2;
+          else {
+            messages -= 2;
+          }          
       }
       Atomics.sub(this._MessageCount, MSG_COUNT.READER, messagetotal);
       

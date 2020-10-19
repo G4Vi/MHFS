@@ -12,7 +12,7 @@ let FACAbortController = new AbortController();
 let SBAR_UPDATING = 0;
 let NWDRFLAC;
 let Timers = [];
-let PlaybackInfo = {};
+let PlaybackInfo;
 
 function DeclareGlobalFunc(name, value) {
     Object.defineProperty(window, name, {
@@ -60,6 +60,7 @@ function GraphicsLoop() {
         }
     }
     if(timerdel)Timers.splice(0, timerdel);
+
     if(SBAR_UPDATING) {
         
         
@@ -196,7 +197,7 @@ if(typeof abortablesleep === 'undefined') {
             signal.removeEventListener('abort', stoptimer);
         };
         let timer = setTimeout(function() {
-            console.log('sleep done ' + ms);
+            //console.log('sleep done ' + ms);
             onTimerDone();
         }, ms);
 
@@ -218,71 +219,71 @@ const abortablesleep_status = async function (ms, signal) {
     return true;
 }
 
-let AudioQueue = [];
+const ProcessTimes = function(aqitem, time) {
+    if(aqitem.isStart) {
+        InitPPText();
+        const startTime = time - (aqitem.frameindex / MainAudioContext.sampleRate);
+        Timers.push({'time': time, 'aqindex': aqitem.aqindex, 'func': function() {
+            PlaybackInfo = {'starttime':startTime, 'track':aqitem.track, 'aqindex': aqitem.aqindex};                              
+            seekbar.min = 0;
+            seekbar.max = aqitem.track.duration;
+            SetEndtimeText(aqitem.track.duration);
+            SetPlayText(aqitem.track.trackname);
+            let prevtext = aqitem.track.prev ? aqitem.track.prev.trackname : '';
+            SetPrevText(prevtext);       
+            let nexttext =  aqitem.track.next ? aqitem.track.next.trackname : '';
+            SetNextText(nexttext);
+        }});
+    }
+    if(aqitem.isEnd) {
+        const endTime = time + (aqitem.preciseLength/MainAudioContext.sampleRate);
+        Timers.push({'time': endTime, 'aqindex': aqitem.aqindex, 'func': function(){
+            //console.log('done measured duration ' + (endTime - PlaybackInfo.starttime) + ' expected duration ' + aqitem.track.duration);
+            PlaybackInfo = null;
+            let curTime = 0;
+            SetEndtimeText(0);                    
+            SetCurtimeText(curTime);
+            SetSeekbarValue(curTime);
+            SetPrevText(aqitem.track.trackname);
+            SetPlayText('');
+            SetNextText('');
+        }});
+    }
+}
+
+let AudioQueue = []; // audio that hasn't been queued yet
+let TimeQueue = [];  // data for handling time messages
 const PumpAudioQueue = async function() {
-    while(1) {        
-        const fAvail = FreeFrames();
-        const item = AudioQueue[0];
-        if((!item) || (item.buffer.getChannelData(0).length > fAvail)) {
+    while(1) {
+        // if the actual audioqueue is full or there's nothing to do, sleep 
+        const fAvail = FreeFrames();        
+        if((!AudioQueue[0]) || (AudioQueue[0].preciseLength > fAvail)) {
             let mysignal = FACAbortController.signal;
-            const tosleep = item ? Math.min(20, (item.buffer.getChannelData(0).length-fAvail)/MainAudioContext.sampleRate) : 20;
+            const tosleep = AudioQueue[0] ? Math.min(20, (AudioQueue[0].preciseLength-fAvail)/MainAudioContext.sampleRate) : 20;
             await abortablesleep(tosleep, mysignal);
             continue;            
         }
-        AudioQueue.shift();
-        const buffer = item.buffer;
-        const isStart = item.isStart;
-        const isEnd = item.isEnd;
-        const track = item.track;
-        const frameindex = item.frameindex;
-        const bufferFrames = buffer.getChannelData(0).length;
 
-        // not precise as MainAudioContext.currentTime isn't read as the exact time as the frames
-        const fBuffered = ARBLen - fAvail;    
-        const beforeTime = MainAudioContext.currentTime; + (fBuffered/MainAudioContext.sampleRate);
-        pushFrames(buffer);    
-        if(isStart) {
-            InitPPText();
-            const timerTime = beforeTime + (fBuffered / MainAudioContext.sampleRate);
-            const startTime = beforeTime + ((fBuffered-frameindex) / MainAudioContext.sampleRate);
-            Timers.push({'time': timerTime, 'func': function() {
-                PlaybackInfo = {'starttime':startTime, 'track':track, 'aqindex': item.aqindex};                              
-                seekbar.min = 0;
-                seekbar.max = track.duration;
-                SetEndtimeText(track.duration);
-                SetPlayText(track.trackname);
-                let prevtext = track.prev ? track.prev.trackname : '';
-                SetPrevText(prevtext);       
-                let nexttext =  track.next ? track.next.trackname : '';
-                SetNextText(nexttext);
-            }});
-        }
-        if(isEnd) {
-            const endTime = MainAudioContext.currentTime + ((fBuffered+bufferFrames)/MainAudioContext.sampleRate);
-            Timers.push({'time': endTime, 'func': function(){
-                PlaybackInfo = null;
-                let curTime = 0;
-                SetEndtimeText(0);                    
-                SetCurtimeText(curTime);
-                SetSeekbarValue(curTime);
-                SetPrevText(track.trackname);
-                SetPlayText('');
-                SetNextText('');
-            }});
-        }
+        const item = AudioQueue.shift();
+        // make the audio available to the audio worklet
+        pushFrames(item.buffer, item.aqindex);
+        // we want notifications of time on start and end segments       
+        item.buffer = null;
+        if(item.isStart || item.isEnd) {
+            TimeQueue.push(item);
+        }   
     }
 }
 
 const AQDecTime = function() {
     let total = 0
     for(let i = 0; i < AudioQueue.length; i++) {
-        total += AudioQueue[i].buffer.getChannelData(0).length;
+        total += AudioQueue[i].preciseLength;
     }
     return total;
 }
 
 let NextAQIndex = 0;
-let MusicNode;
 let FAQ_MUTEX = new Mutex();
 async function fillAudioQueue(time) {
     // starting a fresh queue, render the text
@@ -317,7 +318,8 @@ TRACKLOOP:while(1) {
                 Tracks_QueueCurrent = Tracks_QueueCurrent.next;
             }
         }
-        initializing = 0;        
+        initializing = 0; 
+        NextAQIndex++;       
         let track = Tracks_QueueCurrent;
         if(! track) {
             unlock();
@@ -373,8 +375,7 @@ TRACKLOOP:while(1) {
             }
         }
 
-        // queue the track
-        NextAQIndex++;
+        // queue the track        
         let dectime = 0;
         if(time) {                         
             dectime = Math.floor(time * NWDRFLAC.sampleRate);            
@@ -429,11 +430,11 @@ TRACKLOOP:while(1) {
             }
 
             const isEnd = ((dectime+todec) === NWDRFLAC.totalPCMFrameCount);
-            AudioQueue.push({'buffer':buffer, 'track':track, 'isStart':isStart, 'isEnd':isEnd, 'frameindex':dectime, 'aqindex':NextAQIndex});
+            AudioQueue.push({'buffer':buffer, 'track':track, 'isStart':isStart, 'isEnd':isEnd, 'frameindex':dectime, 'aqindex':NextAQIndex, 'preciseLength' : buffer.getChannelData(0).length});
             MainAudioContext.resume();
             isStart = false;
             dectime += todec;
-            //yield
+            // yield in-case it's time to queue
             if(!(await abortablesleep_status(0, mysignal)))
             {
                 unlock();
@@ -446,7 +447,6 @@ TRACKLOOP:while(1) {
 }
 
 var prevbtn    = document.getElementById("prevbtn");
-var sktxt      = document.getElementById("seekfield");
 var seekbar    = document.getElementById("seekbar");
 var ppbtn      = document.getElementById("ppbtn");
 var rptrackbtn = document.getElementById("repeattrack");
@@ -461,7 +461,7 @@ var dbarea     = document.getElementById('musicdb');
 
 rptrackbtn.addEventListener('change', function(e) {
     if(!PlaybackInfo) return;                              // nothing is playing repeattrack should do nothing
-    if(PlaybackInfo.aqindex === NextAQIndex) return; // current playing is still being queued do nothing
+    if(PlaybackInfo.aqindex === NextAQIndex) return;       // current playing is still being queued do nothing
     
     console.log('rptrack abort');
     // clear the audio queue of next tracks
@@ -472,6 +472,25 @@ rptrackbtn.addEventListener('change', function(e) {
             break;
         }
     }
+
+    // clear the time notifications of other tracks
+    for(let i = 0; i < TimeQueue.length; i++)
+    {
+        if(TimeQueue[i].aqindex !== PlaybackInfo.aqindex) {
+            TimeQueue.length = i;
+            break;
+        }
+    }
+
+    // clear timers of other tracks
+    for(let i = 0; i < Timers.length; i++)
+    {
+        if(Timers[i].aqindex !== PlaybackInfo.aqindex) {
+            Timers.length = i;
+            break;
+        }
+    }
+
     
     if(e.target.checked) {
         // repeat the currently playing track
@@ -733,8 +752,13 @@ if (orig_ptracks.length > 0) {
 
 const READER_MSG = {
     'RESET'     : 0, // data param token
-    'FRAMES_ADD' : 1 // data param number of frames
+    'FRAMES_ADD' : 1, // data param number of frames, aqindex
 };
+
+const WRITER_MSG = {
+    'FRAMES_ADD' : 0, // data param tok and number of frames
+    'START_TIME' : 1  // data param aqindex, time
+}
 
 // number of message slots in use
 const MSG_COUNT = {
@@ -762,33 +786,49 @@ const MessageReader = RingBuffer.reader(SharedBuffers.writer_messages, Uint32Arr
 let tok = 0;
 let freeFrames = ARBLen;
 // Avoid GC
-let tempMessageIN  = new Uint32Array(2);
+let tempMessageIN  = new Uint32Array(3);
+let tempMessageINFloat  = new Float32Array(tempMessageIN.buffer);
 let tempMessageOUT = new Uint32Array(2);
+let tempFRAMES_ADD_OUT = new Uint32Array(3);
 const FreeFrames = function() {
     const messagetotal = Atomics.load(MessageCount, MSG_COUNT.WRITER);
     let messages = messagetotal;
     while(messages > 0) {
         MessageReader.read(tempMessageIN,messages);
-        // only process messages with the current token
-        if(tempMessageIN[0] === tok) {
-            freeFrames += tempMessageIN[1];
+        if(tempMessageIN[0] === WRITER_MSG.FRAMES_ADD) {
+            // only process messages with the current token
+            if(tempMessageIN[1] === tok) {
+                freeFrames += tempMessageIN[2];
+            }
         }
+        else if(tempMessageIN[0] === WRITER_MSG.START_TIME) {
+            let stdel = 0;
+            for(let i = 0; i < TimeQueue.length; i++) {
+                if(TimeQueue[i].aqindex === tempMessageIN[1]) {
+                    ProcessTimes(TimeQueue[i], tempMessageINFloat[2]);
+                    stdel++;
+                    break;
+                }
+            }
+            if(stdel)TimeQueue.splice(0, stdel);
+        }
+
         //console.log('message in inc ' + message[0] + ' ' + message[1] + ' tok ' + tok )
-        messages -= 2;
+        messages -= 3;
     }
     Atomics.sub(MessageCount, MSG_COUNT.WRITER, messagetotal);
     return freeFrames;
 };
 
-function pushFrames(buffer) {
+function pushFrames(buffer, aqindex) {
     for(let chanIndex = 0; chanIndex < buffer.numberOfChannels; chanIndex++) {
         AudioWriter[chanIndex].write(buffer.getChannelData(chanIndex));        
     }
-    tempMessageOUT[0] = READER_MSG.FRAMES_ADD;
-    tempMessageOUT[1] = buffer.getChannelData(0).length;
-    MessageWriter.write(tempMessageOUT);
-    //console.log('message out inc ' + message[0] + ' ' + message[1] + ' tok ' + tok )
-    Atomics.add(MessageCount, MSG_COUNT.READER, 2);
+    tempFRAMES_ADD_OUT[0] = READER_MSG.FRAMES_ADD;
+    tempFRAMES_ADD_OUT[1] = buffer.getChannelData(0).length;
+    tempFRAMES_ADD_OUT[2] = aqindex;
+    MessageWriter.write(tempFRAMES_ADD_OUT);
+    Atomics.add(MessageCount, MSG_COUNT.READER, 3);
     freeFrames -= buffer.getChannelData(0).length;    
 }
 
@@ -796,6 +836,9 @@ function pushFrames(buffer) {
 
 const StopAudio = function() {
     AudioQueue = [];
+    Timers = [];
+    TimeQueue = [];
+    
     for(let i = 0; i < AudioWriter.length; i++) {
         AudioWriter[i].reset();
     }    
@@ -805,14 +848,15 @@ const StopAudio = function() {
     tempMessageOUT[0] = READER_MSG.RESET;
     tempMessageOUT[1] = tok;
     MessageWriter.write(tempMessageOUT);
-    Atomics.add(MessageCount, MSG_COUNT.READER, 2);    
+    Atomics.add(MessageCount, MSG_COUNT.READER, 2);
+
     PlaybackInfo = null;
     //console.log('message out inc reset ' + message[0] + ' ' + message[1] + ' tok ' + tok )
 };
 
 (async function() {
     await MainAudioContext.audioWorklet.addModule('worklet_processor.js');
-    MusicNode = new AudioWorkletNode(MainAudioContext, 'MusicProcessor',  {'numberOfOutputs' : 1, 'outputChannelCount': [2]});
+    let MusicNode = new AudioWorkletNode(MainAudioContext, 'MusicProcessor',  {'numberOfOutputs' : 1, 'outputChannelCount': [2]});
     MusicNode.connect(GainNode);
     MusicNode.port.postMessage({'message' : 'init', sharedbuffers : SharedBuffers});    
 })();
