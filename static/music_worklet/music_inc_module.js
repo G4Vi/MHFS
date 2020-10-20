@@ -256,19 +256,21 @@ const PumpAudioQueue = async function() {
         for(let i = 0; i < AudioQueue.length; i++) {
             if(! AudioQueue[i].endTime) break;
             
-             // run and remove associated graphics timers
-             let timerdel = 0;
-             for(let j = 0; j < AudioQueue[i].timers.length; j++) {
-                 if(AudioQueue[i].timers[j].time <= MainAudioContext.currentTime) {
-                     AudioQueue[i].timers[j].func(AudioQueue[i].timers[j]);
-                     timerdel++;
-                 }
-             }
-             if(timerdel)AudioQueue[i].timers.splice(0, timerdel);
+            // run and remove associated graphics timers
+            let timerdel = 0;
+            for(let j = 0; j < AudioQueue[i].timers.length; j++) {
+                if(AudioQueue[i].timers[j].time <= MainAudioContext.currentTime) {
+                    AudioQueue[i].timers[j].func(AudioQueue[i].timers[j]);
+                    timerdel++;
+                }
+            }
+            if(timerdel)AudioQueue[i].timers.splice(0, timerdel);
             
-            
-            if(AudioQueue[i].endTime <= MainAudioContext.currentTime) {
-                toDelete++;
+            // remove if it has passed and it's timers have been run
+            if(AudioQueue[i].timers.length === 0) {
+                if(AudioQueue[i].endTime <= MainAudioContext.currentTime) {
+                    toDelete++;
+                }
             }            
         }
         if(toDelete) {
@@ -445,6 +447,12 @@ TRACKLOOP:while(1) {
                         return;
                     }                   
                     failedcount++;
+                    // probably a network error, sleep before retry
+                    if(!(await abortablesleep_status(2000, mysignal)))
+                    {
+                        unlock();
+                        return;
+                    }
                     //if(failedcount == 2) {
                     if(0) {
                         console.log('Encountered error twice, advancing to next track');
@@ -511,35 +519,34 @@ rptrackbtn.addEventListener('change', function(e) {
  });
  
  ppbtn.addEventListener('click', function (e) {
-     if ((ppbtn.textContent == 'PAUSE')) {
-         MainAudioContext.suspend();           
-         ppbtn.textContent = 'PLAY';                        
-     }
-     else if ((ppbtn.textContent == 'PLAY')) {
-         MainAudioContext.resume();
-         ppbtn.textContent = 'PAUSE';
-     }
+    if ((ppbtn.textContent == 'PAUSE')) {
+        MainAudioContext.suspend();           
+        ppbtn.textContent = 'PLAY';                        
+    }
+    else if ((ppbtn.textContent == 'PLAY')) {
+        MainAudioContext.resume();
+        ppbtn.textContent = 'PAUSE';
+    }
  });
  
  seekbar.addEventListener('mousedown', function (e) {
-     if(!SBAR_UPDATING) {
-         SBAR_UPDATING = 1;         
-     }
+    if(!SBAR_UPDATING) {
+                
+    }
+    SBAR_UPDATING = 1;
  });
  
  seekbar.addEventListener('change', function (e) {
-     if(!SBAR_UPDATING) {
-         return;
-     }     
-     SBAR_UPDATING = 0;
-     if(AudioQueue[0]) {
-         Tracks_QueueCurrent = AudioQueue[0].track;    
-         // stop all audio
-         StopAudio();
-         let stime = Number(e.target.value);
-         console.log('SEEK ' + stime);
-        fillAudioQueue(stime);
-     }         
+    if(!SBAR_UPDATING) {
+        return;
+    }     
+    SBAR_UPDATING = 0;
+    if(!AudioQueue[0]) return;
+    Tracks_QueueCurrent = AudioQueue[0].track;
+    StopAudio();
+    let stime = Number(e.target.value);
+    console.log('SEEK ' + stime);
+    fillAudioQueue(stime);           
  });
  
  prevbtn.addEventListener('click', function (e) {
@@ -579,8 +586,49 @@ rptrackbtn.addEventListener('change', function(e) {
     fillAudioQueue(); 
  });
  
- document.getElementById("volslider").addEventListener('input', function(e) {
-     GainNode.gain.setValueAtTime(e.target.value, MainAudioContext.currentTime); 
+ const SetVolume = function (val) {
+    GainNode.gain.setValueAtTime(val, MainAudioContext.currentTime);
+ }
+ const volslider = document.getElementById("volslider");
+ volslider.addEventListener('input', function(e) {
+    SetVolume(e.target.value);
+ });
+
+ document.addEventListener('keydown', function(event) {
+    if(event.key === ' ') {
+        event.preventDefault();
+        event.stopPropagation();
+        ppbtn.click();
+    }
+    else if(event.key === 'ArrowRight') {
+        event.preventDefault();
+        event.stopPropagation();
+        nextbtn.click();
+    }
+    else if(event.key === 'ArrowLeft') {
+        event.preventDefault();
+        event.stopPropagation();
+        prevbtn.click();
+    }
+    else if(event.key === '+') {
+        event.preventDefault();
+        event.stopPropagation();
+        volslider.stepUp(5);
+        SetVolume(volslider.value);
+    }
+    else if(event.key === '-') {
+        event.preventDefault();
+        event.stopPropagation();
+        volslider.stepDown(5);
+        SetVolume(volslider.value);
+    }
+ });
+
+ document.addEventListener('keyup', function(event) {
+    if((event.key === ' ') || (event.key === 'ArrowRight') ||(event.key === 'ArrowLeft') || (event.key === '+') || (event.key === '-')) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
  });
 
  function GetItemPath(elm) {
