@@ -114,14 +114,14 @@ class MusicProcessor extends AudioWorkletProcessor {
     Atomics.add(this._MessageCount, MSG_COUNT.WRITER, 3);
     this._dataframes -= copied;
     if((copied < 128) && (this._AudioReader[0]._readindex > 0)) {
-        console.log('buffer underrun, copied ' + copied);
+        console.log('audioworklet: buffer underrun, copied ' + copied);
     }  
   }
 
-  _SendTime(time, aqindex) {
+  _SendTime(time) {
     this._tempmessagebuf[0] = WRITER_MSG.START_TIME;
-    this._tempmessagebuf[1] = aqindex;
-    this._tempfloatbuf[2] = time;
+    this._tempmessagebuf[1] = this._tok;
+    this._tempfloatbuf[2]   = time;
     this._MessageWriter.write(this._tempmessagebuf);
     Atomics.add(this._MessageCount, MSG_COUNT.WRITER, 3);
   }
@@ -135,7 +135,7 @@ class MusicProcessor extends AudioWorkletProcessor {
       const messagetotal = Atomics.load(this._MessageCount, MSG_COUNT.READER);
       let messages = messagetotal;
       while(messages > 0) {
-          this._MessageReader.read(this._tempmessagebuf,messages);
+          this._MessageReader.read(this._tempmessagebuf,2);
           if(this._tempmessagebuf[0] === READER_MSG.RESET) {
             this._tok = this._tempmessagebuf[1];
             this._dataframes = 0;
@@ -146,11 +146,13 @@ class MusicProcessor extends AudioWorkletProcessor {
           }
           else if(this._tempmessagebuf[0] === READER_MSG.FRAMES_ADD) {
             const fadd = this._tempmessagebuf[1];
-            this._SendTime(currentTime + (this._dataframes/sampleRate), this._tempmessagebuf[2]);
+            // return the time the frames are queued for
+            this._SendTime(currentTime + (this._dataframes/sampleRate));
             this._dataframes += fadd;
-            messages -= 3;
+            messages -= 2;
           }
           else {
+            console.error('audioworklet: unknown message ' + this._tempmessagebuf[0]);
             messages -= 2;
           }          
       }

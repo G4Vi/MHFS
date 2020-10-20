@@ -3,7 +3,6 @@ import {default as NetworkDrFlac} from './music_drflac_module.cache.js'
 // times in seconds
 const AQMaxDecodedTime = 20;    // maximum time decoded, but not queued
 
-let MainAudioContext;
 let GainNode;
 let Tracks_HEAD;
 let Tracks_TAIL;
@@ -12,6 +11,14 @@ let FACAbortController = new AbortController();
 let SBAR_UPDATING = 0;
 let NWDRFLAC;
 let StartTime;
+function CreateAudioContext(options) {
+    let mycontext = (window.hasWebKit) ? new webkitAudioContext(options) : (typeof AudioContext != "undefined") ? new AudioContext(options) : null;
+    GainNode = mycontext.createGain();
+    GainNode.connect(mycontext.destination);
+    return mycontext;
+}
+let MainAudioContext = CreateAudioContext({'sampleRate' : 44100 });
+let AudioQueue = [];
 
 function DeclareGlobalFunc(name, value) {
     Object.defineProperty(window, name, {
@@ -40,13 +47,6 @@ class Mutex {
       this._locking = this._locking.then(() => willLock);
       return willUnlock;
     }
-}
-
-function CreateAudioContext(options) {
-    let mycontext = (window.hasWebKit) ? new webkitAudioContext(options) : (typeof AudioContext != "undefined") ? new AudioContext(options) : null;
-    GainNode = mycontext.createGain();
-    GainNode.connect(mycontext.destination);
-    return mycontext;
 }
 
 function GraphicsLoop() {
@@ -244,12 +244,110 @@ const ProcessTimes = function(aqitem, time) {
     }
 }
 
-let AudioQueue = []; // audio that hasn't been queued yet
+// READER_MSG - messages sent by the writer (us) to the worklet
+// RESET resets the read index, audio frame count, and sets the token on the audio thread
+// FRAMES_ADD makes frames available for reading to the audio thread
+const READER_MSG = {
+    'RESET'     : 0,  // data param token
+    'FRAMES_ADD' : 1, // data param number of frames
+};
+
+// WRITER_MSG - messages sent by the reader(worklet) to us
+// both messages contain token so the writer knows if they have been sent since last reset
+// FRAMES_ADD makes frames available for writing
+// START_TIME is sent in response to READER_MSG.FRAMES_ADD and contains when those frames will start
+const WRITER_MSG = {
+    'FRAMES_ADD' : 0, // data param token and number of frames
+    'START_TIME' : 1  // data param token, time
+}
+
+// number of messages in each direction
+const MSG_COUNT = {
+    'READER' : 0,
+    'WRITER' : 1
+};
+
+const ARBLen  = MainAudioContext.sampleRate * 2;
+if (!self.SharedArrayBuffer) {
+    console.error('SharedArrayBuffer is not supported in browser');
+}
+const SharedBuffers = {
+    message_count : new SharedArrayBuffer(4*2),
+    reader_messages: new SharedArrayBuffer(4*32),
+    writer_messages : new SharedArrayBuffer(4*4096),
+    arb : [new SharedArrayBuffer(ARBLen * 4), new SharedArrayBuffer(ARBLen * 4)]
+};
+
+
+import { RingBuffer } from './AudioWriterReader.js'
+const MessageCount = new Uint32Array(SharedBuffers.message_count);
+const AudioWriter    = [RingBuffer.writer(SharedBuffers.arb[0], Float32Array), RingBuffer.writer(SharedBuffers.arb[1], Float32Array)];
+const MessageWriter = RingBuffer.writer(SharedBuffers.reader_messages, Uint32Array);
+const MessageReader = RingBuffer.reader(SharedBuffers.writer_messages, Uint32Array);
+let tok = 0;
+let freeFrames = ARBLen;
+// Avoid GC
+let tempMessageIN  = new Uint32Array(3);
+let tempMessageINFloat  = new Float32Array(tempMessageIN.buffer);
+let tempMessageOUT = new Uint32Array(2);
+// Process messages from the audio thread
+const ProcessAudioMessages = function() {
+    const messagetotal = Atomics.load(MessageCount, MSG_COUNT.WRITER);
+    let messages = messagetotal;
+    while(messages > 0) {
+        MessageReader.read(tempMessageIN,messages);
+        // only process messages with the current tok
+        if(tempMessageIN[1] === tok) {
+            if(tempMessageIN[0] === WRITER_MSG.FRAMES_ADD) {
+                freeFrames += tempMessageIN[2];                
+            }
+            else if(tempMessageIN[0] === WRITER_MSG.START_TIME) {
+                for(let i = 0; i < AudioQueue.length; i++) {
+                    if(AudioQueue[i].starttime) continue;
+                    ProcessTimes(AudioQueue[i], tempMessageINFloat[2]);
+                    break;                                   
+                }
+            }
+        }       
+
+        //console.log('message in inc ' + message[0] + ' ' + message[1] + ' tok ' + tok )
+        messages -= 3;
+    }
+    Atomics.sub(MessageCount, MSG_COUNT.WRITER, messagetotal);
+    return freeFrames;
+};
+
+function pushFrames(buffer) {
+    for(let chanIndex = 0; chanIndex < buffer.numberOfChannels; chanIndex++) {
+        AudioWriter[chanIndex].write(buffer.getChannelData(chanIndex));        
+    }    
+    tempMessageOUT[0] = READER_MSG.FRAMES_ADD;
+    tempMessageOUT[1] = buffer.getChannelData(0).length;
+    MessageWriter.write(tempMessageOUT);
+    Atomics.add(MessageCount, MSG_COUNT.READER, 2);
+    freeFrames -= buffer.getChannelData(0).length;    
+}
+
+const StopAudio = function() {
+    AudioQueue = [];    
+    for(let i = 0; i < AudioWriter.length; i++) {
+        AudioWriter[i].reset();
+    }    
+    freeFrames = ARBLen;
+    tok++;
+    if(tok > 4294967295) tok = 0;
+    tempMessageOUT[0] = READER_MSG.RESET;
+    tempMessageOUT[1] = tok;
+    MessageWriter.write(tempMessageOUT);
+    Atomics.add(MessageCount, MSG_COUNT.READER, 2);
+
+    //console.log('message out inc reset ' + message[0] + ' ' + message[1] + ' tok ' + tok )
+};
 
 const PumpAudioQueue = async function() {
     while(1) {
         
-        const fAvail = FreeFrames();
+        const fAvail = ProcessAudioMessages();
         
         // remove already queued segments
         let toDelete = 0;
@@ -295,7 +393,7 @@ const PumpAudioQueue = async function() {
 
         
         // make the audio available to the audio worklet
-        pushFrames(item.buffer, item.aqindex);
+        pushFrames(item.buffer);
         item.queued = true;
         item.buffer = null;  
     }
@@ -797,7 +895,6 @@ function BuildPTrack() {
 
 
 // Main
-MainAudioContext = CreateAudioContext({'sampleRate' : 44100 });
 
 // queue the tracks in the url
 let orig_ptracks = urlParams.getAll('ptrack');
@@ -805,111 +902,12 @@ if (orig_ptracks.length > 0) {
     QueueTracks(orig_ptracks);
 }
 
-const READER_MSG = {
-    'RESET'     : 0, // data param token
-    'FRAMES_ADD' : 1, // data param number of frames, aqindex
-};
-
-const WRITER_MSG = {
-    'FRAMES_ADD' : 0, // data param tok and number of frames
-    'START_TIME' : 1  // data param aqindex, time
-}
-
-// number of message slots in use
-const MSG_COUNT = {
-    'READER' : 0,
-    'WRITER' : 1
-};
-
-const ARBLen  = MainAudioContext.sampleRate * 2;
-if (!self.SharedArrayBuffer) {
-    console.error('SharedArrayBuffer is not supported in browser');
-}
-const SharedBuffers = {
-    message_count : new SharedArrayBuffer(4*2),
-    reader_messages: new SharedArrayBuffer(4*32),
-    writer_messages : new SharedArrayBuffer(4*4096),
-    arb : [new SharedArrayBuffer(ARBLen * 4), new SharedArrayBuffer(ARBLen * 4)]
-};
-
-
-import { RingBuffer } from './AudioWriterReader.js'
-const MessageCount = new Uint32Array(SharedBuffers.message_count);
-const AudioWriter    = [RingBuffer.writer(SharedBuffers.arb[0], Float32Array), RingBuffer.writer(SharedBuffers.arb[1], Float32Array)];
-const MessageWriter = RingBuffer.writer(SharedBuffers.reader_messages, Uint32Array);
-const MessageReader = RingBuffer.reader(SharedBuffers.writer_messages, Uint32Array);
-let tok = 0;
-let freeFrames = ARBLen;
-// Avoid GC
-let tempMessageIN  = new Uint32Array(3);
-let tempMessageINFloat  = new Float32Array(tempMessageIN.buffer);
-let tempMessageOUT = new Uint32Array(2);
-let tempFRAMES_ADD_OUT = new Uint32Array(3);
-const FreeFrames = function() {
-    const messagetotal = Atomics.load(MessageCount, MSG_COUNT.WRITER);
-    let messages = messagetotal;
-    while(messages > 0) {
-        MessageReader.read(tempMessageIN,messages);
-        if(tempMessageIN[0] === WRITER_MSG.FRAMES_ADD) {
-            // only process messages with the current token
-            if(tempMessageIN[1] === tok) {
-                freeFrames += tempMessageIN[2];
-            }
-        }
-        else if(tempMessageIN[0] === WRITER_MSG.START_TIME) {
-            for(let i = 0; i < AudioQueue.length; i++) {
-                if(AudioQueue[i].starttime) continue;
-                if(AudioQueue[i].aqindex === tempMessageIN[1]) {
-                    ProcessTimes(AudioQueue[i], tempMessageINFloat[2]);
-                    break;
-                }                
-            }
-        }
-
-        //console.log('message in inc ' + message[0] + ' ' + message[1] + ' tok ' + tok )
-        messages -= 3;
-    }
-    Atomics.sub(MessageCount, MSG_COUNT.WRITER, messagetotal);
-    return freeFrames;
-};
-
-function pushFrames(buffer, aqindex) {
-    for(let chanIndex = 0; chanIndex < buffer.numberOfChannels; chanIndex++) {
-        AudioWriter[chanIndex].write(buffer.getChannelData(chanIndex));        
-    }
-    tempFRAMES_ADD_OUT[0] = READER_MSG.FRAMES_ADD;
-    tempFRAMES_ADD_OUT[1] = buffer.getChannelData(0).length;
-    tempFRAMES_ADD_OUT[2] = aqindex;
-    MessageWriter.write(tempFRAMES_ADD_OUT);
-    Atomics.add(MessageCount, MSG_COUNT.READER, 3);
-    freeFrames -= buffer.getChannelData(0).length;    
-}
-
-
-
-const StopAudio = function() {
-    AudioQueue = [];    
-    for(let i = 0; i < AudioWriter.length; i++) {
-        AudioWriter[i].reset();
-    }    
-    freeFrames = ARBLen;
-    tok++;
-    if(tok > 4294967295) tok = 0;
-    tempMessageOUT[0] = READER_MSG.RESET;
-    tempMessageOUT[1] = tok;
-    MessageWriter.write(tempMessageOUT);
-    Atomics.add(MessageCount, MSG_COUNT.READER, 2);
-
-    //console.log('message out inc reset ' + message[0] + ' ' + message[1] + ' tok ' + tok )
-};
-
 (async function() {
     await MainAudioContext.audioWorklet.addModule('worklet_processor.js');
     let MusicNode = new AudioWorkletNode(MainAudioContext, 'MusicProcessor',  {'numberOfOutputs' : 1, 'outputChannelCount': [2]});
     MusicNode.connect(GainNode);
     MusicNode.port.postMessage({'message' : 'init', sharedbuffers : SharedBuffers});    
 })();
-
 
 window.requestAnimationFrame(GraphicsLoop);
 PumpAudioQueue();
