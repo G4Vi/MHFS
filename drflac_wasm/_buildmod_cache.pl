@@ -38,3 +38,9 @@ system('rsync', '-a', $outdir.'/', '../static/music_inc')== 0 or die("failed to 
 if($debug) {
     system('rsync', '-a', 'src', '../static/music_inc/') == 0 or die("failed to copy src to music_inc");
 }
+
+
+system('rsync', '-a', $outdir.'/', '../static/music_worklet')== 0 or die("failed to copy to music_inc");
+if($debug) {
+    system('rsync', '-a', 'src', '../static/music_worklet/') == 0 or die("failed to copy src to music_inc");
+}

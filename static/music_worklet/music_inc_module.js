@@ -390,8 +390,11 @@ const PumpAudioQueue = async function() {
             await abortablesleep(tosleep, mysignal);
             continue;            
         }
-
         
+        // sanity checking
+        if(fAvail > (MainAudioContext.sampleRate + (MainAudioContext.sampleRate/2))) {
+            console.error('questionable, lots of frames avail ' + fAvail);
+        }
         // make the audio available to the audio worklet
         pushFrames(item.buffer);
         item.queued = true;
@@ -531,11 +534,7 @@ TRACKLOOP:while(1) {
                         console.log('aborted decodeaudiodata success');
                         unlock();                        
                         return;
-                    }
-                    if(buffer.duration !== (todec / NWDRFLAC.sampleRate)) {                       
-                        buffer = null;
-                        throw('network error? buffer wrong length');
-                    }                        
+                    }                                          
                 }
                 catch(error) {
                     console.error(error);

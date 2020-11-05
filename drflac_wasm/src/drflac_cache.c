@@ -5,6 +5,8 @@
 #define DR_FLAC_NO_OGG
 #define DR_FLAC_IMPLEMENTATION
 #include "dr_flac.h"
+#define MINIAUDIO_IMPLEMENTATION
+#include "miniaudio.h"
 #include <stdbool.h>
 
 typedef float float32_t;
@@ -319,7 +321,7 @@ uint64_t network_drflac_read_pcm_frames_f32_mem(NetworkDrFlac *ndrflac, uint32_t
 
     // decode to pcm
     float32_t *data = malloc(pFlac->channels*sizeof(float32_t)*desired_pcm_frames);
-    const uint32_t frames_decoded = drflac_read_pcm_frames_f32(pFlac, desired_pcm_frames, data);
+    uint32_t frames_decoded = drflac_read_pcm_frames_f32(pFlac, desired_pcm_frames, data);
 
     if(frames_decoded != desired_pcm_frames)
     {
@@ -330,6 +332,27 @@ uint64_t network_drflac_read_pcm_frames_f32_mem(NetworkDrFlac *ndrflac, uint32_t
         printf("network_drflac_read_pcm_frames_f32_mem: failed read_pcm_frames_f32\n");
         free(data);
         return 0;
+    }
+
+     // resample
+    if(pFlac->sampleRate != 44100)
+    {
+        printf("resmapleing\n");
+        ma_resampler_config config = ma_resampler_config_init(ma_format_f32, pFlac->channels, pFlac->sampleRate,  44100, ma_resample_algorithm_linear);
+        ma_resampler resampler;
+        ma_result result = ma_resampler_init(&config, &resampler);
+        ma_uint64 frameCountIn  = frames_decoded;
+        ma_uint64 frameCountOut = ma_resampler_get_expected_output_frame_count(&resampler, frameCountIn);
+        float32_t *pFramesOut = malloc(frameCountOut*pFlac->channels*sizeof(float32_t));
+        ma_result result_process = ma_resampler_process_pcm_frames(&resampler, data, &frameCountIn, pFramesOut, &frameCountOut);
+        free(data);
+        if (result_process != MA_SUCCESS)
+        {
+            printf("network_drflac_read_pcm_frames_f32_mem: failed read_pcm_frames_f32 resample\n");
+            return 0;
+        }
+        data = pFramesOut;
+        frames_decoded = frameCountOut;
     }
 
     // deinterleave

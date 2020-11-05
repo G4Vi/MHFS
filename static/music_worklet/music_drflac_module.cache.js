@@ -158,8 +158,7 @@ const NetworkDrFlac = async function(theURL, gsignal) {
         const samples = DrFlac.network_drflac_read_pcm_frames_f32_mem(that.ptr, start, count, destdata, err_ptr);
         const err = that.freeError(err_ptr);   
         
-        if(err.code !== NDRFLAC_SUCCESS)
-        {
+        if(err.code !== NDRFLAC_SUCCESS) {
             DrFlac.Module._free(destdata);  
             if(err.code !== NDRFLAC_MEM_NEED_MORE)
             {
@@ -177,7 +176,11 @@ const NetworkDrFlac = async function(theURL, gsignal) {
                 throw("Failed network_drflac_open");
             }
             continue;
-        }      
+        }
+        
+        if(that.sampleRate !== audiocontext.sampleRate) {
+            console.error('wrong sample rate');
+        }
 
         let audiobuffer = audiocontext.createBuffer(that.channels, samples, that.sampleRate);
         const chansize = samples * f32_size;
