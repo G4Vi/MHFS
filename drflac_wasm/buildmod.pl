@@ -2,6 +2,7 @@
 use strict;
 use warnings;
 use feature 'say';
+defined $ENV{EMSDK} or die("emsdk not found. maybe source ~/emsdk/emsdk_env.sh");
 
 my $debug = 0;
 $debug = 1;

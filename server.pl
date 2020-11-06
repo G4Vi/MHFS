@@ -947,7 +947,7 @@ package HTTP::BS::Server::Client::Request {
         $self->{'outheaders'}{'Connection'} //= 'keep-alive';
         
         # SharedArrayBuffer
-        if(index($fullpath, 'static/music_worklet/index.html') != -1) {
+        if($fullpath && (index($fullpath, 'static/music_worklet/index.html') != -1)) {
             $self->{'outheaders'}{'Cross-Origin-Opener-Policy'} =  'same-origin';
             $self->{'outheaders'}{'Cross-Origin-Embedder-Policy'} = 'require-corp';
         }
@@ -2491,6 +2491,7 @@ package MusicLibrary {
     use Fcntl ':mode';
     use File::stat;    
     use File::Basename;
+    use File::Path qw(make_path);
     use Scalar::Util qw(looks_like_number);   
     HTTP::BS::Server::Util->import();
     BEGIN {
@@ -2725,24 +2726,6 @@ package MusicLibrary {
     }
     
     my $SEGMENT_DURATION = 5;
-    sub SendLocalTrackSegment {
-        my ($request, $file) = @_;
-        my $filebase = basename($file);
-        $filebase =~ s/\.flac//i;
-        my $tmpdir = $request->{'client'}{'server'}{'settings'}{'TMPDIR'}; 
-        my $tosend = sprintf "$tmpdir/$filebase%03u.flac", $request->{'qs'}{'part'};
-        if(-e $tosend) {
-            $request->SendLocalFile($tosend);
-            return;
-        }
-        my $evp = $request->{'client'}{'server'}{'evp'}; 
-        $request->{'process'} = HTTP::BS::Server::Process->new(['sox', $file, "$tmpdir/$filebase.flac", 'trim', '0', $SEGMENT_DURATION, ':', 'newfile', ':', 'restart'], $evp, { 
-            'SIGCHLD' => sub {
-                $request->SendLocalFile($tosend);            
-            }       
-        });
-    }
-
     my %TRACKDURATION;
     my %TRACKINFO;
     sub SendTrack {
@@ -2764,41 +2747,12 @@ package MusicLibrary {
                 $request->{'outheaders'}{'X-MHFS-TRACKDURATION'} = $TRACKDURATION{$tosend};
                 $request->{'outheaders'}{'X-MHFS-MAXSEGDURATION'} = $SEGMENT_DURATION;
                 my $samples_per_seg = $TRACKINFO{$tosend}{'SAMPLERATE'} * $SEGMENT_DURATION;
-                my $spos = $samples_per_seg * ($request->{'qs'}{'part'} - 1);
-                
+                my $spos = $samples_per_seg * ($request->{'qs'}{'part'} - 1);                
                 my $samples_left = $TRACKINFO{$tosend}{'TOTALSAMPLES'} - $spos;                
                 my $res = Mytest::get_flac($pv, $spos, $samples_per_seg < $samples_left ? $samples_per_seg : $samples_left);
                 $request->SendLocalBuf($res, 'audio/flac');
-                return;
-
-                $request->{'outheaders'}{'X-MHFS-NUMSEGMENTS'} = ceil($TRACKDURATION{$tosend} / $SEGMENT_DURATION);
-                $request->{'outheaders'}{'X-MHFS-TRACKDURATION'} = $TRACKDURATION{$tosend};
-                $request->{'outheaders'}{'X-MHFS-MAXSEGDURATION'} = $SEGMENT_DURATION;
-                SendLocalTrackSegment($request, $tosend);
-                return;
+                return;                
             }
-            # dead code
-            my $evp = $request->{'client'}{'server'}{'evp'};
-            $request->{'process'} = HTTP::BS::Server::Process->new(['soxi', '-D', $tosend], $evp, {
-                'STDOUT' => sub {
-                    my ($stdout) = @_;
-                    my $buf;
-                    $request->{'process'} = undef;
-                    if(!read($stdout, $buf, 4096)) {
-                        say "failed to read soxi";
-                        $request->Send404;
-                    }
-                    else {
-                        my ($duration) = $buf =~ /^(.+)$/;
-                        $request->{'outheaders'}{'X-MHFS-NUMSEGMENTS'} = ceil($duration / $SEGMENT_DURATION);
-                        $request->{'outheaders'}{'X-MHFS-TRACKDURATION'} = $duration;
-                        $request->{'outheaders'}{'X-MHFS-MAXSEGDURATION'} = $SEGMENT_DURATION;
-                        $TRACKDURATION{$tosend} = $duration;
-                        SendLocalTrackSegment($request, $tosend);
-                    }
-                    return -1;                        
-                },                
-            });
         }
         elsif(defined $request->{'qs'}{'fmt'} && ($request->{'qs'}{'fmt'}  eq 'wav')) {
             if(!defined($TRACKINFO{$tosend}))
@@ -2821,17 +2775,10 @@ package MusicLibrary {
                 $endbyte = $wavsize-1;            
             }
             say "start byte" . $startbyte;
-            say "end byte " . $endbyte;
-           
-            say "Mytest::get_wav " . $startbyte . ' ' . $endbyte;
-            
-            #$request->SendLocalBuf(Mytest::get_wav($pv, $startbyte, $endbyte), 'audio/wav', {'bytesize' => $wavsize});
+            say "end byte " . $endbyte;           
+            say "Mytest::get_wav " . $startbyte . ' ' . $endbyte;          
             my $maxsendsize;
-            $maxsendsize = 1048576/2;
-            #$maxsendsize = 524290;
-
-            #$maxsendsize = 262144 * ($TRACKINFO{$tosend}{'BITSPERSAMPLE'}/8) * $TRACKINFO{$tosend}{'NUMCHANNELS'};
-            #$maxsendsize = 42000;
+            $maxsendsize = 1048576/2;            
             say "maxsendsize $maxsendsize " . ' bytespersample ' . ($TRACKINFO{$tosend}{'BITSPERSAMPLE'}/8) . ' numchannels ' . $TRACKINFO{$tosend}{'NUMCHANNELS'};
             $request->SendCallback(sub{
                 my ($fileitem) = @_;
@@ -2902,31 +2849,36 @@ package MusicLibrary {
     
     sub SendLocalTrack {
         my ($request, $file) = @_;    
-        my $evp = $request->{'client'}{'server'}{'evp'};        
-        my $tmpdir = $request->{'client'}{'server'}{'settings'}{'TMPDIR'};  
-        my $filebase = basename($file);
-        # convert to lossy flac if necessary (segmenting a lossy file)     
+        my $evp = $request->{'client'}{'server'}{'evp'};
+        my $tmpfileloc = $request->{'client'}{'server'}{'settings'}{'TMPDIR'} . '/';
+        my $nameloc = $request->{'localtrack'}{'nameloc'}; 
+        $tmpfileloc .= $nameloc if($nameloc);  
+        my $filebase = $request->{'localtrack'}{'basename'};
+
+        # convert to lossy flac if necessary
         my $is_flac = $file =~ /\.flac$/i;
         if(!$is_flac) {
-            if(! $request->{'qs'}{'part'}) {
+            my $wantjustflac = $request->{'qs'}{'fmt'} && ($request->{'qs'}{'fmt'} eq 'flac');
+            if(!$request->{'qs'}{'part'} && !$wantjustflac) {
                 SendTrack($request, $file);
                 return;
             }
             $filebase =~ s/\.[^.]+$/.lossy.flac/;
-            my $tlossy = $tmpdir . '/' . $filebase;
+            $request->{'localtrack'}{'basename'} = $filebase;
+            my $tlossy = $tmpfileloc . $filebase;
             if(-e $tlossy ) {
                 $is_flac = 1;
                 $file = $tlossy;
             }
-            else {
-                my $outfile = $tmpdir . '/' . $filebase;            
-                my @cmd = ('ffmpeg', '-i', $file, '-c:a', 'flac', '-sample_fmt', 's16', $outfile);
+            else {    
+                make_path($tmpfileloc, {chmod => 0755});
+                my @cmd = ('ffmpeg', '-i', $file, '-c:a', 'flac', '-sample_fmt', 's16', $tlossy);
                 my $buf;
                 $request->{'process'} = HTTP::BS::Server::Process->new(\@cmd, $evp, {
                 'SIGCHLD' => sub {
                     # HACK
                     $request->{'client'}{'time'} = clock_gettime(CLOCK_MONOTONIC);
-                    SendLocalTrack($request,$outfile);                
+                    SendLocalTrack($request,$tlossy);                
                 },                    
                 'STDERR' => sub {
                     my ($terr) = @_;
@@ -2938,7 +2890,7 @@ package MusicLibrary {
 
         my $max_sample_rate = $request->{'qs'}{'max_sample_rate'};
         my $bitdepth = $request->{'qs'}{'bitdepth'};             
-
+        # no requirements just send the raw file
         if(! $max_sample_rate) {
             SendTrack($request, $file);
             return;            
@@ -2980,15 +2932,16 @@ package MusicLibrary {
             }                
         }
                 
-        # if we already transcoded/resampled, don't waste time doing it again        
+        # if we already transcoded/resampled, don't waste time doing it again
         foreach my $setting (@desired) {
-            my $tmpfile = $tmpdir . '/' . $setting->[0] . '_' . $setting->[1] . '_' . $filebase;
+            my $tmpfile = $tmpfileloc . $setting->[0] . '_' . $setting->[1] . '_' . $filebase;
             if(-e $tmpfile) {
                 say "No need to resample $tmpfile exists";
                 SendTrack($request, $tmpfile);
                 return;
             }                      
-        }        
+        }
+        make_path($tmpfileloc, {chmod => 0755});        
 
         # resampling
         my $desiredrate;
@@ -3003,12 +2956,11 @@ package MusicLibrary {
             }                
         }
         $desiredrate //= $max_sample_rate;                
-        say "desired rate: $desiredrate";
+        say "desired rate: $desiredrate";        
         # build the command                       
-        my $outfile = $tmpdir . '/' . $bitdepth . '_' . $desiredrate . '_' . $filebase;
+        my $outfile = $tmpfileloc . $bitdepth . '_' . $desiredrate . '_' . $filebase;
         my @cmd = ('sox', $file, '-G', '-b', $bitdepth, $outfile, 'rate', '-v', '-L', $desiredrate, 'dither');
         say "cmd: " . join(' ', @cmd);
-        
         # HACK
         say "client time was: " . $request->{'client'}{'time'};
         $request->{'client'}{'time'} += 30;
@@ -3097,9 +3049,10 @@ package MusicLibrary {
     # Define source types here
     my %sendFiles = (
         'local' => sub {
-            my ($request, $file) = @_;
+            my ($request, $file, $node, $source, $nameloc) = @_;
             return undef if(! -e $file);            
             if( ! -d $file) {
+                $request->{'localtrack'} = { 'nameloc' => $nameloc, 'basename' => $node->[0]};                
                 SendLocalTrack($request, $file);
             }
             else {
@@ -3123,8 +3076,12 @@ package MusicLibrary {
             my $node = FindInLibrary($source->{'lib'}, $request->{'qs'}{'name'});
             next if ! $node;
 
-            my $tfile = $source->{'folder'} . '/' . $request->{'qs'}{'name'};            
-            if($source->{'SendFile'}->($request, $tfile, $node, $source)) {
+            my $tfile = $source->{'folder'} . '/' . $request->{'qs'}{'name'};
+            my $nameloc;
+            if($request->{'qs'}{'name'} =~ /(.+\/).+$/) {
+                $nameloc  = $1;
+            }
+            if($source->{'SendFile'}->($request, $tfile, $node, $source, $nameloc)) {
                 return 1;
             } 
         }
@@ -3211,7 +3168,10 @@ package MusicLibrary {
         $self->{'routes'} = [
             ['/music', sub {
                 my ($request) = @_;
-                return $self->SendLibrary($request);                               
+                if($request->{'qs'}{'segments'} || ($request->{'header'}{'User-Agent'} =~ /Linux/) || $request->{'qs'}{'fmt'} ) {
+                    return $self->SendLibrary($request);
+                }
+                return $request->Send307('static/music_worklet/');                             
             }],
             [ '/music_dl', sub {
                 my ($request) = @_;

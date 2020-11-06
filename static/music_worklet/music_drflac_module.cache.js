@@ -178,10 +178,6 @@ const NetworkDrFlac = async function(theURL, gsignal) {
             continue;
         }
         
-        if(that.sampleRate !== audiocontext.sampleRate) {
-            console.error('wrong sample rate');
-        }
-
         let audiobuffer = audiocontext.createBuffer(that.channels, samples, that.sampleRate);
         const chansize = samples * f32_size;
         for( let i = 0; i < that.channels; i++) {

@@ -2,7 +2,7 @@
 use strict;
 use warnings;
 use feature 'say';
-
+defined $ENV{EMSDK} or die("emsdk not found. maybe source ~/emsdk/emsdk_env.sh");
 system('mkdir', '-p', 'out') == 0 or die("failed to make out dir");
 
 #'--extern-pre-js', 'src/network_drflac.pre.js', 

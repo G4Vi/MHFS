@@ -1,13 +1,18 @@
 #include <stdio.h>
+#include <stdbool.h>
 #include <emscripten.h>
 #define DR_FLAC_BUFFER_SIZE (4096 * 16)
 #define DR_FLAC_NO_STDIO
 #define DR_FLAC_NO_OGG
 #define DR_FLAC_IMPLEMENTATION
 #include "dr_flac.h"
-#define MINIAUDIO_IMPLEMENTATION
-#include "miniaudio.h"
-#include <stdbool.h>
+
+#ifdef NETWORK_DR_FLAC_FORCE_REDBOOK
+    #define MINIAUDIO_IMPLEMENTATION
+    #include "miniaudio.h"
+#endif
+
+
 
 typedef float float32_t;
 
@@ -334,10 +339,11 @@ uint64_t network_drflac_read_pcm_frames_f32_mem(NetworkDrFlac *ndrflac, uint32_t
         return 0;
     }
 
-     // resample
+    #ifdef NETWORK_DR_FLAC_FORCE_REDBOOK
+    // resample
     if(pFlac->sampleRate != 44100)
     {
-        printf("resmapleing\n");
+        printf("Converting samplerate from %u to %u\n", pFlac->sampleRate, 44100);
         ma_resampler_config config = ma_resampler_config_init(ma_format_f32, pFlac->channels, pFlac->sampleRate,  44100, ma_resample_algorithm_linear);
         ma_resampler resampler;
         ma_result result = ma_resampler_init(&config, &resampler);
@@ -354,6 +360,7 @@ uint64_t network_drflac_read_pcm_frames_f32_mem(NetworkDrFlac *ndrflac, uint32_t
         data = pFramesOut;
         frames_decoded = frameCountOut;
     }
+    #endif
 
     // deinterleave
     for(unsigned i = 0; i < frames_decoded; i++)

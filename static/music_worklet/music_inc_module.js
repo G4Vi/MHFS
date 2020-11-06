@@ -68,8 +68,8 @@ function GraphicsLoop() {
 
 function geturl(trackname) {
     let url = '../../music_dl?name=' + encodeURIComponent(trackname);
-    url  += '&max_sample_rate=48000';
-    //url  += '&max_sample_rate=96000';
+    url  += '&max_sample_rate=44100';
+    url  += '&fmt=flac';
     /*if (MAX_SAMPLE_RATE) url += '&max_sample_rate=' + MAX_SAMPLE_RATE;
     if (BITDEPTH) url += '&bitdepth=' + BITDEPTH;
     url += '&gapless=1&gdriveforce=1';*/
@@ -237,9 +237,19 @@ const ProcessTimes = function(aqitem, time) {
             SetEndtimeText(0);                    
             SetCurtimeText(curTime);
             SetSeekbarValue(curTime);
-            SetPrevText(aqitem.track.trackname);
-            SetPlayText('');
-            SetNextText('');
+            if(document.getElementById("repeattrack").checked) {
+                SetPrevText('');
+                SetPlayText('');
+                SetNextText('');
+            }
+            else {
+                SetPrevText(aqitem.track.trackname);
+                const next = aqitem.track.next;
+                const playtext = next ? next.trackname : '';
+                SetPlayText(playtext);
+                const nexttext = (next && next.next) ? next.next.trackname : '';
+                SetNextText(nexttext);
+            }            
         }});
     }
 }
