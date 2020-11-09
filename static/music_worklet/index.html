@@ -33,6 +33,7 @@
 <script>
     // load the DB
     let urlParams = new URLSearchParams(window.location.search);
+    /*
     urlParams.append('fmt', 'musicdbhtml');
     let myRequest = new Request('../../music?'+urlParams.toString());
     fetch(myRequest).then(function(response) {
@@ -42,7 +43,91 @@
         return response.text();        
     }).then((html) => {
         document.getElementById("musicdb").innerHTML = html;
-    });   
+    });
+    */
+
+    /*function escapeHTML( string ) {
+        var pre = document.createElement('pre');
+        var text = document.createTextNode( string );
+        pre.appendChild(text);
+        return pre.innerHTML;
+    }*/
+
+    function escapeHTML(unsafe) {
+    return unsafe
+         .replace(/&/g, "&amp;")
+         .replace(/</g, "&lt;")
+         .replace(/>/g, "&gt;")
+         .replace(/"/g, "&quot;")
+         .replace(/'/g, "&#039;");
+    }
+
+    function dlurl(apiroot, namestack, name) {
+        let str = apiroot + '/music_dl?action=dl&name=';
+        let fullname = '';
+        namestack.forEach(function(elm) {
+            fullname += elm + '/';
+        });
+        fullname += name;
+        return str+encodeURIComponent(fullname);        
+    }
+
+    function trackHTML(apiroot, namestack, name) {
+        let text = '<tr class="track"><td>' + escapeHTML(name) + '</td>';        
+        text += '<td><a href="#">Play</a></td><td><a href="#">Queue</a></td><td><a href="';
+        text += dlurl(apiroot, namestack, name) + '">DL</a></td></tr>'; 
+        return text;
+    }
+
+   
+    urlParams.append('fmt', 'musicdbjson');
+    let myRequest = new Request('../../music?'+urlParams.toString());
+    fetch(myRequest).then(function(response) {
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        return response.json();      
+    }).then((json) => {
+        let text = '';
+        let namestack = [];
+        let files = json.files;        
+        while(files.length > 0) {
+            let file = files.shift();
+            // end of dir
+            if(!file) {
+                namestack.length = namestack.length-1;
+                text += '</tbody></table></td></tr>';
+                if((namestack.length === 0)) {
+                    text += '<br>';
+                }
+
+                continue;
+            }
+            // is directory
+            else if(file.files) {
+                text += '<tr><td><table border="1" class="tbl_track"><tbody><tr class="track"><th>';
+                text += escapeHTML(file.name) + '</th><th><a href="#">Play</a></th><th><a href="#">Queue</a></th><th><a href="';
+                text += dlurl(json.apiroot, namestack, file.name) + '">DL</a></th></tr>';
+                namestack.push(file.name);     
+                file.files.push(null);
+                file.files.push(...files);
+                files = file.files;
+            }
+            else {
+                // single track without dir
+                if(namestack.length === 0) {
+                    text += '<table border="1" class="tbl_track"><tbody>';                    
+                    text += trackHTML(json.apiroot, namestack, file.name);
+                    text += '</tbody></table><br>'
+                }
+                // its a track
+                else {
+                    text += trackHTML(json.apiroot, namestack, file.name);
+                }
+            }
+        }
+        document.getElementById("musicdb").innerHTML = text;
+    });
 </script>
 </body>
 </html>

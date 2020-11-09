@@ -700,7 +700,8 @@ package HTTP::BS::Server::Util {
             'mpd' => 'application/dash+xml',
             'm3u8' => 'application/x-mpegURL',
             'm3u8_v' => 'application/x-mpegURL',
-            'wasm'  => 'application/wasm');
+            'wasm'  => 'application/wasm',
+            'css' => 'text/css');
     
         
     
@@ -2671,6 +2672,29 @@ package MusicLibrary {
         $buf .= '</tr>';     
         return $buf;   
     }
+
+    sub toJSON {
+        my ($self) = @_;
+        my $head = {'files' => [], 'apiroot' => $self->{'settings'}{'WEBPATH'}};
+        my @nodestack = ($head);
+        my @files = (@{$self->{'library'}});
+        while(@files) {
+            my $file = shift @files;
+            if( ! $file) {
+                pop @nodestack;
+                next;
+            }
+            my $node = $nodestack[@nodestack - 1];
+            my $newnode = {'name' => decode('UTF-8', $file->[0])};
+            if($file->[2]) {
+                $newnode->{'files'} = [];
+                push @nodestack, $newnode;
+                @files = (@{$file->[2]}, undef, @files);                
+            }
+            push @{$node->{'files'}}, $newnode;
+        }
+        return encode_json($head);
+    }
     
     
     sub LibraryHTML {
@@ -2691,6 +2715,7 @@ package MusicLibrary {
         #$gapless_template->param(musicdb => '');       
         $self->{'html_gapless'} = encode_utf8($gapless_template->output);
         $self->{'musicdbhtml'} = encode_utf8($buf);
+        $self->{'musicdbjson'} = toJSON($self);
     }
 
     sub SendLibrary {
@@ -2698,6 +2723,10 @@ package MusicLibrary {
 
         if($request->{'qs'}{'fmt'} eq 'musicdbhtml') {
             return $request->SendLocalBuf($self->{'musicdbhtml'}, "text/html; charset=utf-8");
+            return 1;            
+        }
+        elsif($request->{'qs'}{'fmt'} eq 'musicdbjson') {
+            return $request->SendLocalBuf($self->{'musicdbjson'}, "application/json");
             return 1;            
         }
 

@@ -109,11 +109,14 @@ function _QueueTrack(trackname, after, before) {
     }
     
     // if nothing is being queued, start the queue
+    let needsText = 1;
     if(!Tracks_QueueCurrent) {
+        needsText = AudioQueue[0] ? 1 : 0;
         Tracks_QueueCurrent = track;
-        fillAudioQueue();
+        fillAudioQueue();        
     }
-    else {
+
+    if(needsText) {
         // Update text otherwise
         let tocheck = (AudioQueue[0]) ? AudioQueue[0].track : Tracks_QueueCurrent;
         if(tocheck) {
