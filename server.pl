@@ -3542,6 +3542,76 @@ package Youtube {
     1;
 }
 
+package TAR {
+    use strict; use warnings;
+    use feature 'say';
+    use File::stat;
+    use Devel::Peek;
+    use Data::Dumper;
+    use Fcntl ':mode';
+
+    sub tar {
+        my ($file, $out) = @_;
+        my $endslash = rindex($file, "/");
+        my $toremove = '';
+        if($endslash != -1) {
+            $toremove = substr($file, 0, $endslash+1);
+            say "toremove $toremove";
+        }
+        my $torem = length($toremove);
+
+        my @files = ($file);
+        while(@files) {
+            my $file = shift @files;
+            my $st = stat($file);
+            if(!$st) {
+                say "failed to stat $file";
+                return;
+            }
+            my $tarname = substr($file, $torem, 100-1);
+            say 'tar filename ' . $tarname;
+            my $fullmode = $st->mode;
+            my $modestr  = sprintf "%07o", $fullmode & 07777;
+            my $ownerstr = sprintf("%07u", $st->uid);
+            my $groupstr = sprintf("%07u", $st->gid);
+            my $sizestr  = S_ISDIR($fullmode) ? sprintf("%011o", 0) : sprintf("%011o", $st->size);
+            my $modtime =   sprintf("%011o", $st->mtime);
+            my $checksum = sprintf("           ");
+            my $type;
+            if(S_ISDIR($fullmode)) {
+                $type = 5;
+            }
+            elsif(S_ISREG($fullmode)) {
+                $type = 0;                
+            }
+            else {
+                die;
+            }
+            my $packstr = sprintf("Z100Z8Z8Z8Z12Z12Z8cx355");           
+            my $header = pack($packstr, $tarname, $modestr, $ownerstr, $groupstr, $sizestr, $modtime, $type);
+            Dump($header);          
+            print Dumper(unpack("H*",$header));
+            
+            if(S_ISDIR($fullmode)){
+                #my $dh = opendir($file);
+                #$dh or die("failed to open dir");
+                #my @tfiles = readdir($dh);
+                #@files = (@tfiles, @files)
+            }
+            else {
+                open(my $fh, '<', $file) or die("couldnt open file");
+                my $sv;
+                defined(read($fh, $sv, $st->size)) or die("couldn't read file");
+            }
+        }
+        die;        
+    }
+
+
+
+    1;
+}
+
 
 package App::MHFS; #Media Http File Server
 unless (caller) {
