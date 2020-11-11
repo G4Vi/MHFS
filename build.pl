@@ -8,7 +8,7 @@ use File::Spec;
 say "current binary " . $FindBin::Bin;
 my $flacdir = File::Spec->catdir($FindBin::Bin, 'Mytest');
 chdir($flacdir) or die("failed to enter flac dir");
-system('perl', 'Makefile.PL') == 0 or die("Makefile.PL died");
+system('make', '-f', 'MakeMakefile.mk') == 0 or die("Failed to make MakeMakefile.mk");
 system('make') == 0 or die("Make failed");
 
 exit 0;

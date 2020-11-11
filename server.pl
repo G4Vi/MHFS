@@ -201,20 +201,15 @@ package EventLoop::Poll {
                     $obj->onHangUp();
                     $self->remove($handle);
                     say "poll has " . scalar ( $self->{'poll'}->handles) . " handles";                        
-                }                   
-                #if(! looks_like_number($revents ) ) {
-                #    if(! defined $obj->{'route_default'}) {           
-                #        say "client no events;
-                #    }                        
-                #}           
+                }                       
             }
     
         }
         elsif($pollret == 0) {
             #say "pollret == 0";
         }
-        else {
-            say "Poll ERROR";
+        elsif(! $!{EINTR}){
+            say "Poll ERROR $!";
             #return undef;
         }
     }   
@@ -259,8 +254,10 @@ package EventLoop::Poll {
             
             my $add_timer_ = \&add_timer;
             *add_timer = sub {
+                # a start 0 is just supposed to yield
+                $_[1] = 0.000000001 if($_[1] == 0);
                 if($add_timer_->(@_) == 0) {
-                    my ($self, $start) = @_;
+                    my ($self, $start) = @_;                    
                     say "add_timer, updating linux timer to $start";                
                     $self->{'evp_timer'}->settime_linux($start, 0);
                 }
@@ -1002,6 +999,25 @@ package HTTP::BS::Server::Client::Request {
         $data .= $msg;
         my %fileitem = ( buf => $data);
         $self->_SendResponse(\%fileitem);       
+    }
+
+    sub Send503 {
+        my ($self) = @_;
+        my $client = $self->{'client'};
+        my $data = "HTTP/1.1 503 Service Unavailable\r\n";
+        my $mime = getMIME('.html');
+        $data .= "Content-Type: $mime\r\n";
+        $data .= "Retry-After: 5\r\n";
+        if($self->{'header'}{'Connection'} && ($self->{'header'}{'Connection'} eq 'close')) {
+            $data .= "Connection: close\r\n";
+            $self->{'outheaders'}{'Connection'} = 'close';
+        }
+        my $msg = "503 Service Unavailable\r\n";
+        $data .= "Content-Length: " . length($msg) . "\r\n";
+        $data .= "\r\n";
+        $data .= $msg;
+        my %fileitem = ( buf => $data);
+        $self->_SendResponse(\%fileitem); 
     }
 
     sub Send301 {
@@ -2721,13 +2737,15 @@ package MusicLibrary {
     sub SendLibrary {
         my ($self, $request) = @_;
 
-        if($request->{'qs'}{'fmt'} eq 'musicdbhtml') {
-            return $request->SendLocalBuf($self->{'musicdbhtml'}, "text/html; charset=utf-8");
-            return 1;            
-        }
-        elsif($request->{'qs'}{'fmt'} eq 'musicdbjson') {
-            return $request->SendLocalBuf($self->{'musicdbjson'}, "application/json");
-            return 1;            
+        if($request->{'qs'}{'fmt'}) {
+            if($request->{'qs'}{'fmt'} eq 'musicdbhtml') {
+                return $request->SendLocalBuf($self->{'musicdbhtml'}, "text/html; charset=utf-8");
+                return 1;            
+            }
+            elsif($request->{'qs'}{'fmt'} eq 'musicdbjson') {
+                return $request->SendLocalBuf($self->{'musicdbjson'}, "application/json");
+                return 1;            
+            }
         }
 
         # maybe not allow everyone to do this, it blocks the main thread
@@ -3151,7 +3169,7 @@ package MusicLibrary {
                 push @mlibs, $source->{'lib'};                
             }
             print STDERR "freezing\n";
-            my %updatedlibrary = ('libs' => \@mlibs, 'html_gapless' => $self->{'html_gapless'}, 'html' => $self->{'html'});
+            my %updatedlibrary = ('libs' => \@mlibs, 'html_gapless' => $self->{'html_gapless'}, 'html' => $self->{'html'}, 'musicdbhtml' => $self->{'musicdbhtml'}, 'musicdbjson' => $self->{'musicdbjson'});
             my $pipedata = freeze(\%updatedlibrary);
             print STDERR "outputting on pipe\n";  
             print $datachannel $pipedata;
@@ -3160,7 +3178,7 @@ package MusicLibrary {
             my ($out, $err) = @_;                    
             say "From child err: $err";
             my $unthawed = thaw($out);
-            if($unthawed && $unthawed->{'libs'} && $self->{'html_gapless'} && $unthawed->{'html'}){
+            if($unthawed && $unthawed->{'libs'} && $unthawed->{'html_gapless'} && $unthawed->{'html'}){
                 my $temp = $unthawed->{'libs'};
                 if(scalar(@{$temp}) != scalar(@{$self->{'sources'}})) {
                     say "incorrect number of sources, not updating library";                                                
@@ -3172,6 +3190,8 @@ package MusicLibrary {
                     }
                     $self->{'html_gapless'} = $unthawed->{'html_gapless'};
                     $self->{'html'} = $unthawed->{'html'};
+                    $self->{'musicdbhtml'} = $unthawed->{'musicdbhtml'};
+                    $self->{'musicdbjson'} = $unthawed->{'musicdbjson'};
                 }
             }
             else {
@@ -3191,34 +3211,68 @@ package MusicLibrary {
         foreach my $source(@{$self->{'sources'}}) {
             $source->{'SendFile'} //= $sendFiles{$source->{'type'}};        
         }
-        say $pstart . "building music library " . clock_gettime(CLOCK_MONOTONIC);
-        $self->BuildLibraries();        
-        say $pstart ."done building libraries " . clock_gettime(CLOCK_MONOTONIC);        
+
+        # we want to serve 503 instead of 404 when the musiclibrary is loading
+        my $nolibraryroute = sub {
+            my ($request) = @_;
+            $request->Send503();
+        };
         $self->{'routes'} = [
-            ['/music', sub {
-                my ($request) = @_;
-                if($request->{'qs'}{'segments'} || ($request->{'header'}{'User-Agent'} =~ /Linux/) || $request->{'qs'}{'fmt'} ) {
-                    return $self->SendLibrary($request);
-                }
-                return $request->Send307('static/music_worklet/');                             
-            }],
-            [ '/music_dl', sub {
-                my ($request) = @_;
-                return $self->SendFromLibrary($request);
-            }],
-            [ '/music_resources', sub {
-                my ($request) = @_;
-                return $self->SendResources($request);
-            }],                         
+            ['/music', $nolibraryroute],
+            ['/music_dl',$nolibraryroute],
+            ['/music_resources',$nolibraryroute],                         
         ];
 
+        # once the music library is loaded we can serve these real routes
+        my $musicpageroute = sub {
+            my ($request) = @_;
+            if($request->{'qs'}{'segments'} || ($request->{'header'}{'User-Agent'} =~ /Linux/) || $request->{'qs'}{'fmt'} ) {
+                return $self->SendLibrary($request);
+            }
+            return $request->Send307('static/music_worklet/'); 
+        };
+
+        my $musicdlroute = sub {
+            my ($request) = @_;
+            return $self->SendFromLibrary($request);
+        };
+
+        my $musicresourcesroute = sub {
+            my ($request) = @_;
+            return $self->SendResources($request);
+        };       
+
+        my %realroutes = (
+            '/music' => $musicpageroute,
+            '/music_dl' => $musicdlroute,
+            '/music_resources' => $musicresourcesroute,
+        );        
+
         $self->{'timers'} = [
-            [3, 300, sub {
+            # finish initialization once the event loop is running
+            [0, 0, sub {
                 my ($timer, $current_time, $evp) = @_;
-                say "refresh library timer";                
+                say "$pstart init timer";                
                 UpdateLibrariesAsync($self, $evp, sub {
-                    say "refresh library timer done";
+                    say "$pstart init timer done";
+                    my $routesref = $self->{'server'}{'routes'};
+                    for(my $i = (@$routesref)-1; $i >= 0; $i--) {
+                        my $route = $routesref->[$i][0];
+                        if(defined $realroutes{$route}) {
+                            $routesref->[$i][1] = $realroutes{$route};
+                        }
+                    }                    
                 });
+                return undef;
+            }],
+            # update the library periodically
+            [300, 300, sub {
+                my ($timer, $current_time, $evp) = @_;
+                say "$pstart  library timer";                
+                UpdateLibrariesAsync($self, $evp, sub {
+                    say "$pstart library timer done";
+                });
+                return 1;
             }],
         ];
         
@@ -3517,11 +3571,16 @@ package Youtube {
         my $mhfsytdl = $settings->{'BINDIR'} . '/youtube-dl';  
         if(-e $mhfsytdl) {
             say  $pstart . "Using MHFS youtube-dl. Attempting update";
-            system "$mhfsytdl", "-U";
-            if(system("$mhfsytdl --help > /dev/null") != 0) {
-                say $pstart . "youtube-dl binary is invalid. plugin load failed";
-                return undef;
+            if(fork() == 0)
+            {
+                system "$mhfsytdl", "-U";
+                exit 0;
             }
+            
+            #if(system("$mhfsytdl --help > /dev/null") != 0) {
+            #    say $pstart . "youtube-dl binary is invalid. plugin load failed";
+            #    return undef;
+            #}
             $self->{'youtube-dl'} = $mhfsytdl;
             $settings->{'youtube-dl'} = $mhfsytdl;
         }
