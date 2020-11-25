@@ -2,6 +2,8 @@
 import {default as NetworkDrFlac} from './music_drflac_module.cache.js'
 // times in seconds
 const AQMaxDecodedTime = 20;    // maximum time decoded, but not queued
+const DesiredChannels = 2;
+const DesiredSampleRate = 44100;
 
 let GainNode;
 let Tracks_HEAD;
@@ -17,7 +19,7 @@ function CreateAudioContext(options) {
     GainNode.connect(mycontext.destination);
     return mycontext;
 }
-let MainAudioContext = CreateAudioContext({'sampleRate' : 44100 });
+let MainAudioContext = CreateAudioContext({'sampleRate' : DesiredSampleRate });
 let AudioQueue = [];
 
 function DeclareGlobalFunc(name, value) {
@@ -68,7 +70,7 @@ function GraphicsLoop() {
 
 function geturl(trackname) {
     let url = '../../music_dl?name=' + encodeURIComponent(trackname);
-    url  += '&max_sample_rate=44100';
+    url  += '&max_sample_rate=' + DesiredSampleRate;
     url  += '&fmt=flac';
     /*if (MAX_SAMPLE_RATE) url += '&max_sample_rate=' + MAX_SAMPLE_RATE;
     if (BITDEPTH) url += '&bitdepth=' + BITDEPTH;
@@ -490,7 +492,7 @@ TRACKLOOP:while(1) {
         // open the track
         for(let failedtimes = 0; !NWDRFLAC; ) {             
             try {                
-                let nwdrflac = await NetworkDrFlac(track.url, mysignal);
+                let nwdrflac = await NetworkDrFlac(track.url, DesiredChannels, mysignal);
                 if(mysignal.aborted) {
                     console.log('open aborted success');
                     await nwdrflac.close();
@@ -916,7 +918,7 @@ if (orig_ptracks.length > 0) {
 
 (async function() {
     await MainAudioContext.audioWorklet.addModule('worklet_processor.js');
-    let MusicNode = new AudioWorkletNode(MainAudioContext, 'MusicProcessor',  {'numberOfOutputs' : 1, 'outputChannelCount': [2]});
+    let MusicNode = new AudioWorkletNode(MainAudioContext, 'MusicProcessor',  {'numberOfOutputs' : 1, 'outputChannelCount': [DesiredChannels]});
     MusicNode.connect(GainNode);
     MusicNode.port.postMessage({'message' : 'init', sharedbuffers : SharedBuffers});    
 })();

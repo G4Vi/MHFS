@@ -100,7 +100,7 @@ const NDRFLAC_SUCCESS = 0;
 const NDRFLAC_GENERIC_ERROR = 1;
 const NDRFLAC_MEM_NEED_MORE = 2;
 
-const NetworkDrFlac = async function(theURL, gsignal) {    
+const NetworkDrFlac = async function(theURL, deschannels, gsignal) {    
     // make sure drflac is ready. Inlined to avoid await when it's already ready
     while(typeof DrFlac === 'undefined') {
         console.log('music_drflac, no drflac sleeping 5ms');
@@ -112,6 +112,7 @@ const NetworkDrFlac = async function(theURL, gsignal) {
     }
     let that = {};
     that.CHUNKSIZE = 262144;
+    that.desiredchannels = deschannels;
 
     that.downloadChunk = async function(start, mysignal) {
         if(start % that.CHUNKSIZE)
@@ -178,12 +179,25 @@ const NetworkDrFlac = async function(theURL, gsignal) {
             continue;
         }
         
-        let audiobuffer = audiocontext.createBuffer(that.channels, samples, that.sampleRate);
+        let audiobuffer = audiocontext.createBuffer(that.desiredchannels, samples, that.sampleRate);
         const chansize = samples * f32_size;
-        for( let i = 0; i < that.channels; i++) {
-            let buf = new Float32Array(DrFlac.Module.HEAPU8.buffer, destdata+(chansize*i), samples);
-            audiobuffer.getChannelData(i).set(buf);        
+        // if the audio is mono, duplicate to all channels
+        if(that.channels === 1) {
+            let buf = new Float32Array(DrFlac.Module.HEAPU8.buffer, destdata+(chansize), samples);
+            for( let i = 0; i < that.desiredchannels; i++) {
+                audiobuffer.getChannelData(i).set(buf); 
+            }
         }
+        // if the number of channels match just copy
+        else if(that.desiredchannels === that.channels) {
+            for( let i = 0; i < that.channels; i++) {
+                let buf = new Float32Array(DrFlac.Module.HEAPU8.buffer, destdata+(chansize*i), samples);
+                audiobuffer.getChannelData(i).set(buf);                    
+            }
+        }
+        else {
+            throw("Not sure what to do when deschannels " + that.desiredchannels + " track channels " + that.channels);
+        }        
 
         DrFlac.Module._free(destdata);
         return audiobuffer;
@@ -223,6 +237,12 @@ const NetworkDrFlac = async function(theURL, gsignal) {
     that.bitsPerSample = DrFlac.network_drflac_bitsPerSample(that.ptr);
     that.channels = DrFlac.network_drflac_channels(that.ptr);
     that.url = theURL;
+
+    if((that.channels !== 1) && (that.channels !== that.desiredchannels)) {
+        that.close();
+        throw("Failed network_drflac_open, unhandled number of channels")
+    }
+
     return that;
 };
 
