@@ -2106,6 +2106,77 @@ package HTTP::BS::Server::Process {
         return $process;
     }
 
+    sub new_output_process_ex {       
+        my ($class, $evp, $cmd, $context, $stdin) = @_;
+
+        if($stdin) {
+            say "new_output_process_ex: stdin not supported yet";
+            return undef;
+        }
+
+        my $process;
+        $context->{'stdout'} = '';
+        $context->{'stdderr'} = '';        
+        my $prochandlers = {
+        'STDOUT' => sub {
+            my ($handle) = @_;
+            my $buf;
+            while(read($handle, $buf, 100)) {
+                $context->{'stdout'} .= $buf;        
+            }
+            if($context->{'on_stdout_data'}) {
+                $context->{'on_stdout_data'}->($context);
+            }
+            return 1;        
+        },
+        'STDERR' => sub {
+            my ($handle) = @_;
+            my $buf;
+            while(read($handle, $buf, 100)) {
+                $context->{'stderr'} .= $buf;        
+            }
+            return 1;
+        },        
+        'SIGCHLD' => sub {
+            my $obuf;
+            my $handle = $process->{'fd'}{'stdout'}{'fd'};
+            while(read($handle, $obuf, 100000)) {
+                $context->{'stdout'} .= $obuf; 
+                say "stdout sigchld read";            
+            }            
+            my $ebuf;
+            $handle = $process->{'fd'}{'stderr'}{'fd'};
+            while(read($handle, $ebuf, 100000)) {
+                $context->{'sterr'} .= $ebuf;
+                say "stderr sigchld read";              
+            }
+            if($context->{'on_stdout_data'}) {
+                $context->{'on_stdout_data'}->($context);
+            }
+            $context->{'at_exit'}->($context);         
+        },      
+        };
+        
+
+        
+        $process =  $class->new($cmd, $evp, $prochandlers);
+        
+        my $flags = 0;
+        my $handle = $process->{'fd'}{'stderr'}{'fd'};
+        return unless defined $handle ;
+        (0 == fcntl($handle, Fcntl::F_GETFL, $flags)) or return undef;
+        $flags |= Fcntl::O_NONBLOCK;
+        (0 == fcntl($handle, Fcntl::F_SETFL, $flags)) or return undef;
+        $handle = $process->{'fd'}{'stdout'}{'fd'};
+        return unless defined $handle ;
+        (0 == fcntl($handle, Fcntl::F_GETFL, $flags)) or return undef;
+        $flags |= Fcntl::O_NONBLOCK;
+        (0 == fcntl($handle, Fcntl::F_SETFL, $flags)) or return undef;
+        return $process;
+    }
+
+
+
     sub new_child {
         my ($class, $func, $evp, $fddispatch) = @_;        
         my %self = ('time' => clock_gettime(CLOCK_MONOTONIC), 'evp' => $evp);
@@ -3290,6 +3361,7 @@ package Youtube {
     use Encode;
     use Any::URI::Escape;
     use Scalar::Util qw(looks_like_number weaken);
+    use File::stat;
     HTTP::BS::Server::Util->import();
     BEGIN {
         if( ! (eval "use JSON; 1")) {
@@ -3428,8 +3500,65 @@ package Youtube {
         $request->{'process'} = $tprocess;
         return -1;
     }
-    
+
     sub downloadAndServe {
+        my ($self, $request, $video) = @_;
+        weaken($request);
+
+
+        my $filename = $video->{'out_filepath'};
+        my $sendit = sub {
+            # we can send the file
+            if(! $request) {
+                return;
+            }
+            say "sending!!!!";
+            $request->SendLocalFile($filename);
+        };
+
+        my $qs = $request->{'qs'};
+        my @cmd = ($self->{'youtube-dl'}, '--no-part', '--print-traffic', '-f', $self->{'fmts'}{$qs->{"media"} // "video"} // "best", '-o', $video->{"out_filepath"}, '--', $qs->{"id"});
+        $request->{'process'} = HTTP::BS::Server::Process->new_output_process_ex($request->{'client'}{'server'}{'evp'}, \@cmd, {
+            'on_stdout_data' => sub {
+                my ($context) = @_;
+
+                # determine the size of the file
+                # relies on receiving content-length header last
+                my ($cl) = $context->{'stdout'} =~ /^.*Content\-Length:\s(\d+)/s;
+                return 1 if(! $cl);                
+                my ($cr) = $context->{'stdout'} =~ /^.*Content\-Range:\sbytes\s\d+\-\d+\/(\d+)/s;
+                if($cr) {
+                    say "cr $cr";
+                    $cl = $cr if($cr > $cl);                        
+                }
+                say "cl is $cl";
+                UNLOCK_WRITE($filename);
+                LOCK_WRITE($filename, $cl);
+
+                # make sure the file exists and within our parameters                
+                my $st = stat($filename);
+                $st or return;
+                my $minsize = 16384;
+                $minsize = $cl if($cl < $minsize);
+                return if($st->size < $minsize);
+                say "sending, currentsize " . $st->size . ' totalsize ' . $cl;                
+
+                # dont need to check the new data anymore
+                $context->{'on_stdout_data'} = undef;                
+                $sendit->();
+                $request = undef;               
+            },
+            'at_exit' => sub {
+                my ($context) = @_;
+                UNLOCK_WRITE($filename);
+                # last ditch effort, try to send it if we haven't
+                $sendit->();
+            }
+        });
+
+    }
+    
+    sub downloadAndServeold {
         my ($self, $request, $video) = @_;
         weaken($request);
         my ($stdout, $done);
@@ -3709,11 +3838,6 @@ HTTP::BS::Server::Util->import();
 $SIG{PIPE} = sub {
     print STDERR "SIGPIPE @_\n";
 };
-
-sub output_process {
-    warn "output_process alias deprecated, use HTTP::BS::Server::Process->new_output_process";
-    return HTTP::BS::Server::Process->new_output_process(@_);
-}
 
 # main
 my $SCRIPTDIR = dirname(abs_path(__FILE__));
@@ -4181,7 +4305,7 @@ sub ptp_request {
     my @cmd = ('curl', '-s', '-v', '-b', '/tmp/ptp', '-c', '/tmp/ptp', 'https://xxxxxxx.domain/' . $url);    
 
     my $process;
-    $process    = output_process($evp, \@cmd, sub {
+    $process    = HTTP::BS::Server::Process->new_output_process($evp, \@cmd, sub {
         my ($output, $error) = @_;
         if($output) {
             #say 'ptprequest output: ' . $output;
@@ -4196,7 +4320,7 @@ sub ptp_request {
             $tried_login = 1;
             my $postdata = 'username=' . $SETTINGS->{'PTP'}{'username'} . '&password=' . $SETTINGS->{'PTP'}{'password'} . '&passkey=' . $SETTINGS->{'PTP'}{'passkey'};
             my @logincmd = ('curl', '-s', '-v', '-b', '/tmp/ptp', '-c', '/tmp/ptp', '-d', $postdata,  'https://xxxxxxx.domain/ajax.php?action=login');
-            $process = output_process($evp, \@logincmd, sub {
+            $process = HTTP::BS::Server::Process->new_output_process($evp, \@logincmd, sub {
                  my ($output, $error) = @_;
                  # todo error handling
                  ptp_request($evp, $url, $handler, 1);            
@@ -4212,7 +4336,7 @@ sub rtxmlrpc {
     my ($evp, $params, $cb, $stdin) = @_;
     my $process;
     my @cmd = ('rtxmlrpc', @$params, '--config-dir', $SETTINGS->{'CFGDIR'} . '/.pyroscope/');
-    $process    = output_process($evp, \@cmd, sub {
+    $process    = HTTP::BS::Server::Process->new_output_process($evp, \@cmd, sub {
         my ($output, $error) = @_;
         chomp $output;
         #say 'rtxmlrpc output: ' . $output;
@@ -4225,7 +4349,7 @@ sub lstor {
     my ($evp, $params, $cb) = @_;
     my $process;
     my @cmd = ('lstor', '-q', @$params);
-    $process    = output_process($evp, \@cmd, sub {
+    $process    = HTTP::BS::Server::Process->new_output_process($evp, \@cmd, sub {
         my ($output, $error) = @_;
         chomp $output;
         say 'lstor output: ' . $output;
