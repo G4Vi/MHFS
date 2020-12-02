@@ -115,7 +115,7 @@ class MusicProcessor extends AudioWorkletProcessor {
     this._dataframes -= copied;
     if((copied < 128) && (this._AudioReader[0]._readindex > 0)) {
         console.log('audioworklet: buffer underrun, copied ' + copied);
-        alert('aaa');
+        //alert('aaa');
     }  
   }
 

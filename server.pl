@@ -1047,10 +1047,6 @@ package HTTP::BS::Server::Client::Request {
         my $start =  $self->{'header'}{'_RangeStart'};                 
         my $end =  $self->{'header'}{'_RangeEnd'}; 
         my $client = $self->{'client'};
-        if(!( -e $requestfile)) {
-            $self->Send404;           
-            return;
-        }   
         
         my %fileitem = ('requestfile' => $requestfile);          
         if(! open(my $FH, "<", $requestfile)) {
@@ -1096,7 +1092,6 @@ package HTTP::BS::Server::Client::Request {
         my $start = $self->{'header'}{'_RangeStart'};
         my $end = $self->{'header'}{'_RangeEnd'};
         binmode($FH);
-    #seek($FH, 0, 0); #you can't really seek on a pipe, we must create the pipe at the right point
         my %fileitem;
         $fileitem{'fh'} = $FH;  
         my $headtext;
@@ -1312,309 +1307,6 @@ package HTTP::BS::Server::Client::Request {
     1;
 }
 
-package BS::Socket {
-    use strict; use warnings;
-    use feature 'say';
-    use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
-    use IO::Socket::INET;
-    use IO::Poll qw(POLLIN POLLOUT POLLHUP);
-    use Scalar::Util qw(looks_like_number weaken);
-
-    sub new {
-        my ($class, $sock, $server, $handlers) = @_;
-        $sock->blocking(0);
-        my %self = ('sock' => $sock, 'time' => clock_gettime(CLOCK_MONOTONIC), 'inbuf' => '', 'on_read_ready' => $handlers->{'on_read_ready'}, 'on_write_ready' => $handlers->{'on_write_ready'}); 
-        $self{'server'} = $server; #weaken($server);         
-        return bless \%self, $class;
-    }
-
-    sub SetEvents {
-        my ($self, $events) = @_;
-        $self->{'server'}{'evp'}->set($self->{'sock'}, $self, $events);            
-    }
-
-    sub GetEvents {
-        my ($self) = @_;
-        $self->{'server'}{'evp'}->getEvents($self->{'sock'});
-    }
-
-    sub unpoll {
-        my ($self) = @_;
-        $self->{'server'}{'evp'}->remove($self->{'sock'});
-        say "poll has " . scalar ( $self->{'server'}{'evp'}{'poll'}->handles) . " handles";              
-    } 
-
-    sub onReadReady {        
-        my ($self) = @_;
-        my $handle = $self->{'sock'};               
-        my $maxlength = 65536;       
-        my $tempdata;
-        while(defined($handle->recv($tempdata, $maxlength-length($self->{'inbuf'})))) {
-            if(length($tempdata) == 0) {                
-                say 'client read 0 bytes, client read closed';
-                return undef;
-            }
-            $self->{'inbuf'} .= $tempdata;
-            my $res = $self->{'on_read_ready'}->($self);
-            next if($res);
-            return $res;
-        }
-        print ("BS::Socket onReadReady RECV errno: $!\n");
-        if(! $!{EAGAIN}) {                
-            say "ON_ERROR-------------------------------------------------";
-            return undef;          
-        }
-        return '';        
-    }
-
-    sub onWriteReady {
-        my ($self) = @_;
-        my $willwrite;
-        while($willwrite = $self->{'on_write_ready'}->($self)) {          
-            my $sret;
-            #if(!defined($sret = $self->{'sock'}->send($self->{'outbuf'}, MSG_DONTWAIT))) {
-            if(!defined($sret = send($self->{'sock'}, $self->{'outbuf'}, MSG_DONTWAIT))) {
-                print ("BS::Socket onWriteReady RECV errno: $!\n");
-                if(! $!{EAGAIN}) {                
-                    say "ON_ERROR-------------------------------------------------";
-                    return undef;          
-                }
-                return '';
-            }
-            else {
-                use bytes;
-                my $n = length($self->{'outbuf'});
-                # partial write
-                if($sret != $n) {
-                    my $total = $n;
-                    $self->{'outbuf'} = substr($self->{'outbuf'}, $sret);
-                    $n = $n - $sret;
-                    say "wrote $sret bytes out of $total, $n bytes to go";
-                    return '';
-                }
-                # full write
-                else {
-                    $self->{'outbuf'} = undef;
-                }                
-            }
-        }
-        return $willwrite;
-    }
-
-    sub onHangUp {
-        my ($client) = @_;        
-        return undef;    
-    }
-
-    sub DESTROY {
-        my $self = shift;
-        say "BS::Socket destructor called";
-        if($self->{'sock'}) {
-            #shutdown($self->{'sock'}, 2);
-            close($self->{'sock'});  
-        }
-    } 
-
-    1;
-}
-
-package BS::Socket::HTTP::Client {
-    use strict; use warnings;
-    use feature 'say';
-    use IO::Poll qw(POLLIN POLLOUT POLLHUP);
-    use Scalar::Util qw(looks_like_number weaken);
-    use Data::Dumper;
-    use Devel::Peek;
-    sub new {
-        my ($class, $server, $iosocket_settings, $requests, $rdata) = @_;
-        my $sock = IO::Socket::INET->new(%{$iosocket_settings});
-        $sock or die("failed to create socket");
-        my $sdata;
-        my %self = ( 'bs_socket' => BS::Socket->new($sock, $server, {
-            'on_write_ready' => sub {
-                my ($bssocket) = @_;
-                if($bssocket->{'outbuf'}) {
-                    return 1;
-                }
-                $bssocket->SetEvents($bssocket->GetEvents() & (~(POLLOUT)));
-                return '';
-            },
-            'on_read_ready' => sub {
-                my ($bssocket) = @_;
-                $sdata .= $bssocket->{'inbuf'};
-                $bssocket->{'inbuf'} = '';
-                while(1){
-                    my $request = $requests->[0];
-                    if(! $request) {
-                        $bssocket->SetEvents($bssocket->GetEvents() & (~(POLLIN)));
-                        return undef;
-                        #$bssocket->unpoll();                       
-                        #return ''; 
-                    } 
-                    return 1 if(! $sdata);                   
-                    my $contentlength;
-                    if(! $request->[3]) {
-                        say "handling request " . $request->[0];
-                        $request->[3] = {'touched' => 1};                   
-                    }
-                    else 
-                    {
-                        $contentlength = $request->[3]{'contentlength'};
-                    }                                                         
-                    if(! $contentlength) {                        
-                        my $headerend = index($sdata, "\r\n\r\n");
-                        next if($headerend == -1);
-                        if($sdata =~ /Content\-Length:\s+(\d+)/) {
-                            $contentlength = $1;
-                            say "contentlength $contentlength";
-                            $request->[3]{'contentlength'} = $contentlength;                                                         
-                        }
-                        else {
-                            say "error no contentlength in header";
-                            return undef;
-                        }
-                        $sdata = substr $sdata, $headerend + 4;
-                    }
-                    my $dlength = length($sdata);                
-                    if($dlength >= $contentlength) {
-                        say 'data length ' . $dlength;
-                        my $data;
-                        if($dlength > $contentlength) {
-                            $data = substr($sdata, 0, $contentlength);
-                            $sdata = substr($sdata, $contentlength);
-                            $dlength = length($data)
-                        }
-                        else {
-                            $data = $sdata;
-                            $sdata = undef;
-                        }                        
-                        say 'processing ' . $dlength;
-                        $request->[1]->($data, $dlength);                                            
-                        shift @{$requests};
-                        next;                        
-                    }
-                    return 1;                
-                }               
-            }
-        }));
-        $self{'bs_socket'}{'outbuf'} = $rdata;
-        $self{'bs_socket'}->SetEvents(POLLOUT | POLLIN | $EventLoop::Poll::ALWAYSMASK);      
-               
-        return bless \%self, $class;
-    }
-
-    sub conn_settings {
-        my ($c_url, $iosocket_settings) = @_;
-        $iosocket_settings //= {};
-        $iosocket_settings->{'Proto'} ||= 'tcp';        
-        $iosocket_settings->{'Proto'} eq 'tcp' or die('unknown proto ' . $iosocket_settings->{'Proto'});
-        ($c_url =~ /^http:\/\/([^\s\:]+)(?::(\d+))?$/) or die  "can't match url";
-        my $host = $1;        
-        $iosocket_settings->{'PeerPort'} //= $2 // 80;
-        $iosocket_settings->{'PeerHost'} //= $host;
-        return ($host, $iosocket_settings);
-    }
-
-    sub put_buf {
-        my ($class, $server, $c_url, $requests, $iosocket_setting) = @_;
-        my ($host, $iosocket_settings) = conn_settings($c_url, $iosocket_setting);
-        my $outdata;
-        foreach my $request (@{$requests}) {            
-            say "PUT ".$request->[0] . ' ('.$host.':'.$iosocket_settings->{'PeerPort'}.')';           
-            $outdata .= 'PUT '.$request->[0]." HTTP/1.1\r\nHost: ". $host.':'.$iosocket_settings->{'PeerPort'}."\r\n";  
-            die 'error is utf8' if(utf8::is_utf8($request->[2]));              
-            $outdata .= 'Content-Length: ' . length($request->[2]) . "\r\n\r\n";
-            $outdata .= $request->[2];
-        }              
-        return $class->new($server, $iosocket_settings, $requests, $outdata);        
-    }
-
-    sub get {
-        my ($class, $server, $c_url, $requests, $iosocket_setting) = @_;       
-        my ($host, $iosocket_settings) = conn_settings($c_url, $iosocket_setting);
-        my $sock = IO::Socket::INET->new(%{$iosocket_settings});
-        $sock or die("failed to create socket");
-        my $sdata;
-        my %self = ( 'bs_socket' => BS::Socket->new($sock, $server, {
-            'on_write_ready' => sub {
-                my ($bssocket) = @_;
-                if($bssocket->{'outbuf'}) {
-                    return 1;
-                }
-                $bssocket->SetEvents($bssocket->GetEvents() & (~(POLLOUT)));
-                return '';
-            },
-            'on_read_ready' => sub {
-                my ($bssocket) = @_;
-                $sdata .= $bssocket->{'inbuf'};
-                $bssocket->{'inbuf'} = '';
-                while(1){
-                    my $request = $requests->[0];
-                    if(! $request) {
-                        $bssocket->SetEvents($bssocket->GetEvents() & (~(POLLIN)));
-                        return undef;
-                        #$bssocket->unpoll();                       
-                        #return ''; 
-                    } 
-                    return 1 if(! $sdata);                   
-                    my $contentlength;
-                    if(! $request->[2]) {
-                        print "handling request " . $request->[0];
-                        $request->[2] = {'touched' => 1};                   
-                    }
-                    else {
-                        $contentlength = $request->[2]{'contentlength'};
-                    }                                                         
-                    if(! $contentlength) {                        
-                        my $headerend = index($sdata, "\r\n\r\n");
-                        next if($headerend == -1);
-                        if($sdata =~ /Content\-Length:\s+(\d+)/) {
-                            $contentlength = $1;
-                            say "contentlength $contentlength";
-                            $request->[2]{'contentlength'} = $contentlength;                                                         
-                        }
-                        else {
-                            say "error no contentlength in header";
-                            return undef;
-                        }
-                        $sdata = substr $sdata, $headerend + 4;
-                    }
-                    my $dlength = length($sdata);                
-                    if($dlength >= $contentlength) {
-                        say 'data length ' . $dlength;
-                        my $data;
-                        if($dlength > $contentlength) {
-                            $data = substr($sdata, 0, $contentlength);
-                            $sdata = substr($sdata, $contentlength);
-                            $dlength = length($data)
-                        }
-                        else {
-                            $data = $sdata;
-                            $sdata = undef;
-                        }                        
-                        say 'processing ' . $dlength;
-                        $request->[1]->($data, $dlength);                                            
-                        shift @{$requests};
-                        next;                        
-                    }
-                    return 1;                
-                }               
-            }
-        }));
-        my $outdata;
-        foreach my $request (@{$requests}) {            
-            say "GET http://".$host.':'.$iosocket_settings->{'PeerPort'}.$request->[0];            
-            $outdata .= 'GET '.$request->[0]." HTTP/1.1\r\nHost: ". $host.':'.$iosocket_settings->{'PeerPort'}."\r\n\r\n";
-        }
-        $self{'bs_socket'}{'outbuf'} = $outdata;
-        $self{'bs_socket'}->SetEvents(POLLOUT | POLLIN | $EventLoop::Poll::ALWAYSMASK);      
-               
-        return bless \%self, $class;
-    }
-
-    1;
-} 
-
 package HTTP::BS::Server::Client {
     use strict; use warnings;
     use feature 'say';
@@ -1629,7 +1321,6 @@ package HTTP::BS::Server::Client {
     use Carp;
     $SIG{ __DIE__ } = sub { Carp::confess( @_ ) };
 
-    #use HTTP::BS::Server::Request;
     sub new {
         my ($class, $sock, $server) = @_;
         $sock->blocking(0);
@@ -1680,16 +1371,9 @@ package HTTP::BS::Server::Client {
                 say 'Server::Client read 0 bytes, client read closed';
                 return undef;
             }
-            #elsif(! defined $self->{'request'}{'on_read_ready'}) {
-            #    say "recv without on_read_ready?";
-            #    return undef;
-            #}
-            #$self->{'request'}{'rl'} += length($tempdata);
-            #say "read length " . length($tempdata) . ' rl ' . $self->{'request'}{'rl'};
             $self->{'inbuf'} .= $tempdata;
             goto &do_on_data;
         }
-        #print ("HTTP::BS::Server::Client onReadReady RECV errno: $!\n");
         if(! $!{EAGAIN}) {                
             print ("HTTP::BS::Server::Client onReadReady RECV errno: $!\n");
             return undef;          
@@ -1713,8 +1397,7 @@ package HTTP::BS::Server::Client {
                     say "Connection close header set closing conn";
                     say "-------------------------------------------------";                               
                     return undef;              
-                }                
-                #$client->SetEvents(POLLIN | $EventLoop::Poll::ALWAYSMASK );
+                }
                 $client->{'request'} = HTTP::BS::Server::Client::Request->new($client);
                 # handle possible existing read data 
                 goto &do_on_data;                
@@ -1724,7 +1407,14 @@ package HTTP::BS::Server::Client {
             say "response not defined, probably set later by a timer or poll";                     
         }        
         return 1;        
-    }    
+    }
+
+    sub _TSRReturnPrint {
+        my ($sentthiscall) = @_;
+        if($sentthiscall > 0) {
+            say "wrote $sentthiscall bytes";
+        }
+    }     
 
     # TODO not block on read
     sub TrySendResponse {
@@ -1738,16 +1428,17 @@ package HTTP::BS::Server::Client {
             use bytes;
             $bytesToSend = length $buf;        
         }        
-        
+        my $sentthiscall = 0;
         do {
             # Try to send the buf if set
             if(defined $buf) {                
-                use bytes;
-                #my $n = length($buf);                
-                my $remdata = TrySendItem($csock, $buf, $bytesToSend);        
+                use bytes;            
+                my $remdata = TrySendItem($csock, $buf, $bytesToSend);
+                $sentthiscall += $bytesToSend - length($remdata);      
+                
                 # critical conn error
                 if(! defined($remdata)) {
-                    say "-------------------------------------------------";
+                    _TSRReturnPrint($sentthiscall);
                     return undef;
                 }
                 # only update the time if we actually sent some data
@@ -1756,7 +1447,8 @@ package HTTP::BS::Server::Client {
                 }
                 # eagain or not all data sent
                 if($remdata ne '') {
-                    $dataitem->{'buf'} = $remdata;                                        
+                    $dataitem->{'buf'} = $remdata;
+                    _TSRReturnPrint($sentthiscall);                                        
                     return '';
                 }
                 #we sent the full buf                             
@@ -1782,8 +1474,7 @@ package HTTP::BS::Server::Client {
                         $readamt = $tmpsend if($tmpsend < $readamt);
                     }
                     # this is blocking, it shouldn't block for long but it could if it's a pipe especially
-                    $bytesToSend = read($FH, $buf, $readamt);                    
-                    #$bytesToSend = sysread($FH, $buf, $readamt);
+                    $bytesToSend = read($FH, $buf, $readamt);
                     if(! defined($bytesToSend)) {
                         $buf = undef;
                         say "READ ERROR: $!";            
@@ -1795,7 +1486,8 @@ package HTTP::BS::Server::Client {
                             $buf = undef;                        
                         }
                         else {
-                            seek($FH, 0, 1);                       
+                            seek($FH, 0, 1);
+                            _TSRReturnPrint($sentthiscall);                       
                             return '';
                         }
                     }                                        
@@ -1811,8 +1503,8 @@ package HTTP::BS::Server::Client {
         
     
         say "DONE Sending Data";    
-        #return undef; # commented 10-02-18 for keep-alive
-        return 'RequestDone';
+        _TSRReturnPrint($sentthiscall);
+        return 'RequestDone'; # not undef because keep-alive
     }
     
     sub TrySendItem {
@@ -1845,18 +1537,15 @@ package HTTP::BS::Server::Client {
             else {
                 print "send errno $!\n";
                 return undef;
-            }       
-                
+            }                
         }
         elsif($sret != $n) {
             $data = substr($data, $sret);
             $n = $n - $sret;
-            say "wrote $sret bytes out of $total, $n bytes to go";
             return $data;   
         }
         else {
-            # success we sent everything
-            say "wrote $total bytes";           
+            # success we sent everything       
             return '';      
         }   
     }
@@ -2063,7 +1752,7 @@ package HTTP::BS::Server::Process {
             say "broke out stderr";
             return 1;
         },        
-        'SIGCHLD' => sub {
+        'SIGCHLD' => sub {            
             my $obuf;
             my $handle = $process->{'fd'}{'stdout'}{'fd'};
             while(read($handle, $obuf, 100000)) {
@@ -3840,6 +3529,11 @@ $SIG{PIPE} = sub {
 };
 
 # main
+if($ARGV[0] eq 'flush') {
+    STDOUT->autoflush(1);
+    STDERR->autoflush(1);
+}
+
 my $SCRIPTDIR = dirname(abs_path(__FILE__));
 my $CFGDIR = $SCRIPTDIR . '/.conf';
 my $SETTINGS_FILE = $CFGDIR . '/settings.pl';

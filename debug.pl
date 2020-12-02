@@ -28,4 +28,4 @@ chdir($FindBin::Bin) or die("Failed to change to script location");
 system('perl', 'build.pl') == 0 or die("Failed to build MHFS");
 
 # run the server
-exec('perl', 'server.pl');
+exec('perl', 'server.pl', 'flush');
