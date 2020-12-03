@@ -1100,6 +1100,7 @@ package HTTP::BS::Server::Client::Request {
         $self->_SendResponse(\%fileitem);
     }
 
+    # to do get rid of shell escape, launch ssh without blocking
     sub SendFromSSH {
         my ($self, $sshsource, $filename, $node) = @_; 
         my @sshcmd = ('ssh', $sshsource->{'userhost'}, '-p', $sshsource->{'port'}); 
@@ -1130,6 +1131,7 @@ package HTTP::BS::Server::Client::Request {
         return 1;       
     }
 
+    # using curl would be better than netcat for https
     sub Proxy {
         my ($self, $proxy, $node) = @_;
         my $requesttext = $self->{'request'};
@@ -1500,11 +1502,10 @@ package HTTP::BS::Server::Client {
             }
                   
         } while(defined $buf);        
-        $client->{'request'}{'response'} = undef;
-        
-    
-        say "DONE Sending Data";    
+        $client->{'request'}{'response'} = undef;   
+            
         _TSRReturnPrint($sentthiscall);
+        say "DONE Sending Data";
         return 'RequestDone'; # not undef because keep-alive
     }
     
@@ -1751,7 +1752,7 @@ package HTTP::BS::Server::Process {
         'STDOUT' => sub {
             my ($handle) = @_;
             my $buf;
-            while(read($handle, $buf, 100)) {
+            while(read($handle, $buf, 4096)) {
                 $context->{'stdout'} .= $buf;        
             }
             if($context->{'on_stdout_data'}) {              
@@ -1762,7 +1763,7 @@ package HTTP::BS::Server::Process {
         'STDERR' => sub {
             my ($handle) = @_;
             my $buf;
-            while(read($handle, $buf, 100)) {
+            while(read($handle, $buf, 4096)) {
                 $context->{'stderr'} .= $buf;        
             }
             return 1;
@@ -1791,114 +1792,33 @@ package HTTP::BS::Server::Process {
         return $process;
     }
 
-    sub _new_ex_output {
+    # launch a command process with poll handlers
+    sub _new_cmd {
         my ($mpa, $prochandlers, $handlesettings) = @_;
         return $mpa->{'class'}->new($mpa->{'cmd'}, $mpa->{'evp'}, $prochandlers, $handlesettings);
     }
     
-    sub new_output_process_ex {
+    # launch a command process
+    sub new_cmd_process {
         my ($class, $evp, $cmd, $context) = @_;
         my $mpa = {'class' => $class, 'evp' => $evp, 'cmd' => $cmd};
-        return _new_ex(\&_new_ex_output, $mpa, $context); 
+        return _new_ex(\&_new_cmd, $mpa, $context); 
     }
 
-    
-    sub new_output_process_ex_old {       
-        my ($class, $evp, $cmd, $context) = @_;
-
-        my $process;
-        $context->{'stdout'} = '';
-        $context->{'stderr'} = '';        
-        my $prochandlers = {
-        'STDOUT' => sub {
-            my ($handle) = @_;
-            my $buf;
-            while(read($handle, $buf, 100)) {
-                $context->{'stdout'} .= $buf;        
+    # subset of command process, just need the data on SIGCHLD
+    sub new_output_process {
+        my ($class, $evp, $cmd, $handler) = @_;
+        return new_cmd_process($class, $evp, $cmd, {
+            'at_exit' => sub {
+                my ($context) = @_;
+                $handler->($context->{'stdout'}, $context->{'stderr'});
             }
-            if($context->{'on_stdout_data'}) {              
-                $context->{'on_stdout_data'}->($context);            
-            }
-            return 1;        
-        },
-        'STDERR' => sub {
-            my ($handle) = @_;
-            my $buf;
-            while(read($handle, $buf, 100)) {
-                $context->{'stderr'} .= $buf;        
-            }
-            return 1;
-        },        
-        'SIGCHLD' => sub {
-            my $obuf;
-            my $handle = $process->{'fd'}{'stdout'}{'fd'};
-            while(read($handle, $obuf, 100000)) {
-                $context->{'stdout'} .= $obuf; 
-                say "stdout sigchld read";            
-            }            
-            my $ebuf;
-            $handle = $process->{'fd'}{'stderr'}{'fd'};
-            while(read($handle, $ebuf, 100000)) {
-                $context->{'stderr'} .= $ebuf;
-                say "stderr sigchld read";              
-            }
-            if($context->{'on_stdout_data'}) {
-                $context->{'on_stdout_data'}->($context);
-            }
-            $context->{'at_exit'}->($context);         
-        },      
-        };
-
-        $process = $class->new($cmd, $evp, $prochandlers, {'O_NONBLOCK' => 1});
-        return $process;
+        });
     }
 
-    sub _new_legacy_output {
-        my ($make_process, $make_process_args, $handler) = @_;
-        my $stdout;
-        my $stderr;
-        my $process;
-        
-        my $prochandlers = {
-        'STDOUT' => sub {
-            my ($handle) = @_;
-            my $buf;
-            while(read($handle, $buf, 100)) {
-                $stdout .= $buf;        
-            }
-            return 1;        
-        },
-        'STDERR' => sub {
-            my ($handle) = @_;
-            my $buf;
-            while(read($handle, $buf, 100)) {
-                $stderr .= $buf;        
-            }
-            return 1;
-        },        
-        'SIGCHLD' => sub {            
-            my $obuf;
-            my $handle = $process->{'fd'}{'stdout'}{'fd'};
-            while(read($handle, $obuf, 100000)) {
-                $stdout .= $obuf; 
-                say "stdout sigchld read";            
-            }
-            my $ebuf;
-            $handle = $process->{'fd'}{'stderr'}{'fd'};
-            while(read($handle, $ebuf, 100000)) {
-                $stderr .= $ebuf;
-                say "stderr sigchld read";              
-            }
-            $handler->($stdout, $stderr);         
-        },      
-        };       
-
-        $process = $make_process->($make_process_args, $prochandlers);
-        return $process;
-    }
-
-    sub _legacy_output_new_child_process {
-        my ($mpa, $prochandlers) = @_;
+    # launch a process without a new exe with poll handlers
+    sub _new_child {
+        my ($mpa, $prochandlers, $handlesettings) = @_;
               
         my %self = ('time' => clock_gettime(CLOCK_MONOTONIC), 'evp' => $mpa->{'evp'});
         # inreader/inwriter   is the parent to child data channel
@@ -1924,26 +1844,21 @@ package HTTP::BS::Server::Process {
        
         $self{'pid'} = $pid;
         say 'PID '. $pid . ' NEW CHILD';
-        _setup_handlers(\%self, $inwriter, $outreader, $errreader, $prochandlers, {'O_NONBLOCK' => 1});               
+        _setup_handlers(\%self, $inwriter, $outreader, $errreader, $prochandlers, $handlesettings);               
         return bless \%self, $mpa->{'class'};
     }
 
+    # launch a process without a new exe with just sigchld handler
     sub new_output_child {
         my ($class, $evp, $func, $handler) = @_;
         my $mpa = {'class' => $class, 'evp' => $evp, 'func' => $func};
-        return _new_legacy_output(\&_legacy_output_new_child_process, $mpa, $handler);       
-    }
-
-    sub _legacy_output_new_cmd_process {
-        my ($mpa, $prochandlers) = @_;
-        return $mpa->{'class'}->new($mpa->{'cmd'}, $mpa->{'evp'}, $prochandlers, {'O_NONBLOCK' => 1});
-    }
-
-    sub new_output_process {
-        my ($class, $evp, $cmd, $handler) = @_;
-        my $mpa = {'class' => $class, 'evp' => $evp, 'cmd' => $cmd};
-        return _new_legacy_output(\&_legacy_output_new_cmd_process, $mpa, $handler);   
-    }  
+        return _new_ex(\&_new_child, $mpa, {
+            'at_exit' => sub {
+                my ($context) = @_;
+                $handler->($context->{'stdout'}, $context->{'stderr'});
+            }
+        });   
+    }    
 
     sub remove {
         my ($self, $fd) = @_;
@@ -3082,15 +2997,6 @@ package Youtube {
         print "\n";       
         state $tprocess;
         $tprocess = HTTP::BS::Server::Process->new(\@curlcmd, $evp, {
-            #'STDOUT' => sub {
-            #    my ($stdout) = @_;
-            #    my $buf;
-            #    if(read($stdout, $buf, 100000)) {  
-            #        say "did read stdout";             
-            #        $tosend .= $buf;
-            #    }
-            #    return 1;   
-            #},
             'SIGCHLD' => sub {
                 my $stdout = $tprocess->{'fd'}{'stdout'}{'fd'};
                 my $buf;
@@ -3131,7 +3037,7 @@ package Youtube {
 
         my $qs = $request->{'qs'};
         my @cmd = ($self->{'youtube-dl'}, '--no-part', '--print-traffic', '-f', $self->{'fmts'}{$qs->{"media"} // "video"} // "best", '-o', $video->{"out_filepath"}, '--', $qs->{"id"});
-        $request->{'process'} = HTTP::BS::Server::Process->new_output_process_ex($request->{'client'}{'server'}{'evp'}, \@cmd, {
+        $request->{'process'} = HTTP::BS::Server::Process->new_cmd_process($request->{'client'}{'server'}{'evp'}, \@cmd, {
             'on_stdout_data' => sub {
                 my ($context) = @_;
 
