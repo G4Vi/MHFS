@@ -2,6 +2,10 @@ needed noncore perl modules:
 Any::URI::Escape - apt-get install libany-uri-escape-perl
 html escape?
 
+Devel::Cycle  - apt-get install libdevel-cycle-perl
+
+apt-get install libpadwalker-perl
+
 #Unicode::Escape - apt-get install libunicode-escape-perl
 
 optional perl modules:

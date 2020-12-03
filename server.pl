@@ -1176,6 +1176,7 @@ package HTTP::BS::Server::Client::Request {
         {
             use bytes;
             $bytesize //= length($buf);
+            say "bytesize $bytesize";
         }
         my $headtext;   
         my %fileitem;        
@@ -1260,7 +1261,7 @@ package HTTP::BS::Server::Client::Request {
         $self->{'on_read_ready'}->();
     }
     
-    sub PUTBuf{
+    sub PUTBuf {
         my ($self, $handler) = @_;
         if($self->{'header'}{'Content-Length'} > 20000000) {
             say "PUTBuf too big";
@@ -1665,6 +1666,9 @@ package HTTP::BS::Server::Process {
     use IPC::Open3;
     use Scalar::Util qw(looks_like_number weaken);
     use Data::Dumper;
+    use Devel::Peek;
+    use Devel::Cycle;
+
     use Carp;
     $SIG{ __DIE__ } = sub { Carp::confess( @_ ) };
     
@@ -1684,7 +1688,7 @@ package HTTP::BS::Server::Process {
     };
 
     sub _setup_handlers {
-        my ($self, $in, $out, $err, $fddispatch) = @_;
+        my ($self, $in, $out, $err, $fddispatch, $handlesettings) = @_;
         my $pid = $self->{'pid'};
         my $evp = $self->{'evp'};
 
@@ -1712,100 +1716,37 @@ package HTTP::BS::Server::Process {
         }
         else {
             $self->{'fd'}{'stderr'}{'fd'} = $err;
-        } 
+        }
+
+        if($handlesettings->{'O_NONBLOCK'}) {
+            my $flags = 0;
+            # stderr
+            (0 == fcntl($err, Fcntl::F_GETFL, $flags)) or die;#return undef;
+            $flags |= Fcntl::O_NONBLOCK;
+            (0 == fcntl($err, Fcntl::F_SETFL, $flags)) or die;#return undef;
+            # stdout
+            (0 == fcntl($out, Fcntl::F_GETFL, $flags)) or die;#return undef;
+            $flags |= Fcntl::O_NONBLOCK;
+            (0 == fcntl($out, Fcntl::F_SETFL, $flags)) or die;#return undef;
+            return $self;
+        }
     }    
     
     sub new {
-        my ($class, $torun, $evp, $fddispatch) = @_;        
+        my ($class, $torun, $evp, $fddispatch, $handlesettings) = @_;        
         my %self = ('time' => clock_gettime(CLOCK_MONOTONIC), 'evp' => $evp);             
         my $pid = open3(my $in, my $out, my $err = gensym, @$torun) or die "BAD process";        
         $self{'pid'} = $pid;
         say 'PID '. $pid . ' NEW PROCESS: ' . $torun->[0];
-        _setup_handlers(\%self, $in, $out, $err, $fddispatch);               
+        _setup_handlers(\%self, $in, $out, $err, $fddispatch, $handlesettings);               
         return bless \%self, $class;
     }
 
-    sub new_output_process {       
-        my ($class, $evp, $cmd, $handler, $stdin) = @_;
-        my $stdout;
-        my $stderr;
-        my $process;
-        
-        my $prochandlers = {
-        'STDOUT' => sub {
-            my ($handle) = @_;
-            my $buf;
-            say "begin stdout read";
-            while(read($handle, $buf, 100)) {
-                $stdout .= $buf;        
-            }
-            say "broke out stdout";
-            return 1;        
-        },
-        'STDERR' => sub {
-            my ($handle) = @_;
-            my $buf;
-            say "begin stderr read";
-            while(read($handle, $buf, 100)) {
-                $stderr .= $buf;        
-            }
-            say "broke out stderr";
-            return 1;
-        },        
-        'SIGCHLD' => sub {            
-            my $obuf;
-            my $handle = $process->{'fd'}{'stdout'}{'fd'};
-            while(read($handle, $obuf, 100000)) {
-                $stdout .= $obuf; 
-                say "stdout sigchld read";            
-            }
-            my $ebuf;
-            $handle = $process->{'fd'}{'stderr'}{'fd'};
-            while(read($handle, $ebuf, 100000)) {
-                $stderr .= $ebuf;
-                say "stderr sigchld read";              
-            }
-            $handler->($stdout, $stderr);         
-        },      
-        };
-        
-        if($stdin) {
-            $prochandlers->{'STDIN'} = sub {
-                # how to deadlock
-                my ($in) = @_;
-                say "output_process stdin. Possible DEADLOCK location";
-                print $in $stdin; # this could block               
-                return 0;        
-            };   
-        }
-        
-        $process =  $class->new($cmd, $evp, $prochandlers);
-        
-        my $flags = 0;
-        my $handle = $process->{'fd'}{'stderr'}{'fd'};
-        return unless defined $handle ;
-        (0 == fcntl($handle, Fcntl::F_GETFL, $flags)) or return undef;
-        $flags |= Fcntl::O_NONBLOCK;
-        (0 == fcntl($handle, Fcntl::F_SETFL, $flags)) or return undef;
-        $handle = $process->{'fd'}{'stdout'}{'fd'};
-        return unless defined $handle ;
-        (0 == fcntl($handle, Fcntl::F_GETFL, $flags)) or return undef;
-        $flags |= Fcntl::O_NONBLOCK;
-        (0 == fcntl($handle, Fcntl::F_SETFL, $flags)) or return undef;
-        return $process;
-    }
-
-    sub new_output_process_ex {       
-        my ($class, $evp, $cmd, $context, $stdin) = @_;
-
-        if($stdin) {
-            say "new_output_process_ex: stdin not supported yet";
-            return undef;
-        }
-
-        my $process;
+    sub _new_ex {
+        my ($make_process, $make_process_args, $context) = @_;
+         my $process;
         $context->{'stdout'} = '';
-        $context->{'stdderr'} = '';        
+        $context->{'stderr'} = '';        
         my $prochandlers = {
         'STDOUT' => sub {
             my ($handle) = @_;
@@ -1813,8 +1754,8 @@ package HTTP::BS::Server::Process {
             while(read($handle, $buf, 100)) {
                 $context->{'stdout'} .= $buf;        
             }
-            if($context->{'on_stdout_data'}) {
-                $context->{'on_stdout_data'}->($context);
+            if($context->{'on_stdout_data'}) {              
+                $context->{'on_stdout_data'}->($context);            
             }
             return 1;        
         },
@@ -1836,7 +1777,7 @@ package HTTP::BS::Server::Process {
             my $ebuf;
             $handle = $process->{'fd'}{'stderr'}{'fd'};
             while(read($handle, $ebuf, 100000)) {
-                $context->{'sterr'} .= $ebuf;
+                $context->{'stderr'} .= $ebuf;
                 say "stderr sigchld read";              
             }
             if($context->{'on_stdout_data'}) {
@@ -1845,59 +1786,75 @@ package HTTP::BS::Server::Process {
             $context->{'at_exit'}->($context);         
         },      
         };
-        
 
-        
-        $process =  $class->new($cmd, $evp, $prochandlers);
-        
-        my $flags = 0;
-        my $handle = $process->{'fd'}{'stderr'}{'fd'};
-        return unless defined $handle ;
-        (0 == fcntl($handle, Fcntl::F_GETFL, $flags)) or return undef;
-        $flags |= Fcntl::O_NONBLOCK;
-        (0 == fcntl($handle, Fcntl::F_SETFL, $flags)) or return undef;
-        $handle = $process->{'fd'}{'stdout'}{'fd'};
-        return unless defined $handle ;
-        (0 == fcntl($handle, Fcntl::F_GETFL, $flags)) or return undef;
-        $flags |= Fcntl::O_NONBLOCK;
-        (0 == fcntl($handle, Fcntl::F_SETFL, $flags)) or return undef;
+        $process = $make_process->($make_process_args, $prochandlers, {'O_NONBLOCK' => 1});
         return $process;
     }
 
-
-
-    sub new_child {
-        my ($class, $func, $evp, $fddispatch) = @_;        
-        my %self = ('time' => clock_gettime(CLOCK_MONOTONIC), 'evp' => $evp);
-        # inreader/inwriter   is the parent to child data channel
-        # outreader/outwriter is the child to parent data channel
-        # errreader/errwriter is the child to parent log channel    
-        pipe(my $inreader, my $inwriter)   or die("pipe failed $!");
-        pipe(my $outreader, my $outwriter) or die("pipe failed $!");
-        pipe(my $errreader, my $errwriter) or die("pipe failed $!");
-        my $pid = fork();
-        if($pid == 0) {
-            close($inwriter);
-            close($outreader);
-            close($errreader);
-            open(STDIN,  "<&", $inreader) or die("Can't dup \$inreader to STDIN");
-            open(STDOUT, ">&", $errwriter) or die("Can't dup \$errwriter to STDOUT");
-            open(STDERR, ">&", $errwriter) or die("Can't dup \$errwriter to STDERR");
-            $func->($outwriter);
-            exit 0;
-        }
-        close($inreader);
-        close($outwriter);
-        close($errwriter);             
-       
-        $self{'pid'} = $pid;
-        say 'PID '. $pid . ' NEW CHILD';
-        _setup_handlers(\%self, $inwriter, $outreader, $errreader, $fddispatch);               
-        return bless \%self, $class;
+    sub _new_ex_output {
+        my ($mpa, $prochandlers, $handlesettings) = @_;
+        return $mpa->{'class'}->new($mpa->{'cmd'}, $mpa->{'evp'}, $prochandlers, $handlesettings);
+    }
+    
+    sub new_output_process_ex {
+        my ($class, $evp, $cmd, $context) = @_;
+        my $mpa = {'class' => $class, 'evp' => $evp, 'cmd' => $cmd};
+        return _new_ex(\&_new_ex_output, $mpa, $context); 
     }
 
-    sub new_output_child {       
-        my ($class, $evp, $func, $handler, $stdin) = @_;
+    
+    sub new_output_process_ex_old {       
+        my ($class, $evp, $cmd, $context) = @_;
+
+        my $process;
+        $context->{'stdout'} = '';
+        $context->{'stderr'} = '';        
+        my $prochandlers = {
+        'STDOUT' => sub {
+            my ($handle) = @_;
+            my $buf;
+            while(read($handle, $buf, 100)) {
+                $context->{'stdout'} .= $buf;        
+            }
+            if($context->{'on_stdout_data'}) {              
+                $context->{'on_stdout_data'}->($context);            
+            }
+            return 1;        
+        },
+        'STDERR' => sub {
+            my ($handle) = @_;
+            my $buf;
+            while(read($handle, $buf, 100)) {
+                $context->{'stderr'} .= $buf;        
+            }
+            return 1;
+        },        
+        'SIGCHLD' => sub {
+            my $obuf;
+            my $handle = $process->{'fd'}{'stdout'}{'fd'};
+            while(read($handle, $obuf, 100000)) {
+                $context->{'stdout'} .= $obuf; 
+                say "stdout sigchld read";            
+            }            
+            my $ebuf;
+            $handle = $process->{'fd'}{'stderr'}{'fd'};
+            while(read($handle, $ebuf, 100000)) {
+                $context->{'stderr'} .= $ebuf;
+                say "stderr sigchld read";              
+            }
+            if($context->{'on_stdout_data'}) {
+                $context->{'on_stdout_data'}->($context);
+            }
+            $context->{'at_exit'}->($context);         
+        },      
+        };
+
+        $process = $class->new($cmd, $evp, $prochandlers, {'O_NONBLOCK' => 1});
+        return $process;
+    }
+
+    sub _new_legacy_output {
+        my ($make_process, $make_process_args, $handler) = @_;
         my $stdout;
         my $stderr;
         my $process;
@@ -1906,24 +1863,20 @@ package HTTP::BS::Server::Process {
         'STDOUT' => sub {
             my ($handle) = @_;
             my $buf;
-            say "begin stdout read";
             while(read($handle, $buf, 100)) {
                 $stdout .= $buf;        
             }
-            say "broke out stdout";
             return 1;        
         },
         'STDERR' => sub {
             my ($handle) = @_;
             my $buf;
-            say "begin stderr read";
             while(read($handle, $buf, 100)) {
                 $stderr .= $buf;        
             }
-            say "broke out stderr";
             return 1;
         },        
-        'SIGCHLD' => sub {
+        'SIGCHLD' => sub {            
             my $obuf;
             my $handle = $process->{'fd'}{'stdout'}{'fd'};
             while(read($handle, $obuf, 100000)) {
@@ -1938,32 +1891,58 @@ package HTTP::BS::Server::Process {
             }
             $handler->($stdout, $stderr);         
         },      
-        };
-        
-        if($stdin) {
-            $prochandlers->{'STDIN'} = sub {
-                # how to deadlock
-                my ($in) = @_;
-                say "output_process stdin. Possible DEADLOCK location";
-                print $in $stdin; # this could block               
-                return 0;        
-            };   
-        }
-        
-        $process =  $class->new_child($func, $evp, $prochandlers);
-        
-        my $flags = 0;
-        my $handle = $process->{'fd'}{'stderr'}{'fd'};
-        return unless defined $handle ;
-        (0 == fcntl($handle, Fcntl::F_GETFL, $flags)) or return undef;
-        $flags |= Fcntl::O_NONBLOCK;
-        (0 == fcntl($handle, Fcntl::F_SETFL, $flags)) or return undef;
-        $handle = $process->{'fd'}{'stdout'}{'fd'};
-        return unless defined $handle ;
-        (0 == fcntl($handle, Fcntl::F_GETFL, $flags)) or return undef;
-        $flags |= Fcntl::O_NONBLOCK;
-        (0 == fcntl($handle, Fcntl::F_SETFL, $flags)) or return undef;
+        };       
+
+        $process = $make_process->($make_process_args, $prochandlers);
         return $process;
+    }
+
+    sub _legacy_output_new_child_process {
+        my ($mpa, $prochandlers) = @_;
+              
+        my %self = ('time' => clock_gettime(CLOCK_MONOTONIC), 'evp' => $mpa->{'evp'});
+        # inreader/inwriter   is the parent to child data channel
+        # outreader/outwriter is the child to parent data channel
+        # errreader/errwriter is the child to parent log channel    
+        pipe(my $inreader, my $inwriter)   or die("pipe failed $!");
+        pipe(my $outreader, my $outwriter) or die("pipe failed $!");
+        pipe(my $errreader, my $errwriter) or die("pipe failed $!");
+        my $pid = fork();
+        if($pid == 0) {
+            close($inwriter);
+            close($outreader);
+            close($errreader);
+            open(STDIN,  "<&", $inreader) or die("Can't dup \$inreader to STDIN");
+            open(STDOUT, ">&", $errwriter) or die("Can't dup \$errwriter to STDOUT");
+            open(STDERR, ">&", $errwriter) or die("Can't dup \$errwriter to STDERR");
+            $mpa->{'func'}->($outwriter);
+            exit 0;
+        }
+        close($inreader);
+        close($outwriter);
+        close($errwriter);             
+       
+        $self{'pid'} = $pid;
+        say 'PID '. $pid . ' NEW CHILD';
+        _setup_handlers(\%self, $inwriter, $outreader, $errreader, $prochandlers, {'O_NONBLOCK' => 1});               
+        return bless \%self, $mpa->{'class'};
+    }
+
+    sub new_output_child {
+        my ($class, $evp, $func, $handler) = @_;
+        my $mpa = {'class' => $class, 'evp' => $evp, 'func' => $func};
+        return _new_legacy_output(\&_legacy_output_new_child_process, $mpa, $handler);       
+    }
+
+    sub _legacy_output_new_cmd_process {
+        my ($mpa, $prochandlers) = @_;
+        return $mpa->{'class'}->new($mpa->{'cmd'}, $mpa->{'evp'}, $prochandlers, {'O_NONBLOCK' => 1});
+    }
+
+    sub new_output_process {
+        my ($class, $evp, $cmd, $handler) = @_;
+        my $mpa = {'class' => $class, 'evp' => $evp, 'cmd' => $cmd};
+        return _new_legacy_output(\&_legacy_output_new_cmd_process, $mpa, $handler);   
     }  
 
     sub remove {
@@ -1985,61 +1964,6 @@ package HTTP::BS::Server::Process {
     }
     
     1;    
-}
-
-package HTTP::BS::Server::Process::Python {
-    use strict; use warnings;
-    use feature 'say';
-
-    # create the pool of python
-    my $MAX_PYTHONS = 10;
-    my $initialized; 
-    my @freeprocesses;
-    my @waiting;      
-
-    sub new {
-        my ($class, $evp, $do_hash) = @_;
-
-        if(! $initialized) {
-            for(my $i = 0; $i< $MAX_PYTHONS; $i++) {
-                my $process = HTTP::BS::Server::Process(['python'], $evp, {
-                    'STDIN' => sub {
-                        say "HTTP::BS::Server::Process::Python stdin";
-                        # write here
-                    },
-                    'STDOUT' => sub {
-                        say "HTTP::BS::Server::Process::Python stdout";
-                        # read and process
-                    },
-                    'STDERR' => sub {
-                        say "HTTP::BS::Server::Process::Python stderr";
-                        # read and process
-                    },
-                    'SIGCHLD' => sub {
-                        say "HTTP::BS::Server::Process::Python SIGCHLD";
-                        # read and process
-                    }                    
-                });
-                push @freeprocesses, $process;
-            }
-            say "HTTP::BS::Server::Process::Python pool initialized, " . scalar(@freeprocesses) . ' processes';
-        }
-        my %self = ( 'evp' => $evp, 'do_hash' => $do_hash);
-        bless \%self, $class;
-        my $process = shift @freeprocesses;
-        if(!$process) {
-            say "out of free python processes, queuing";
-            push @waiting, \%self;
-            return \%self;
-        }
-        # set do_hash for process
-
-        # manage file descriptors
-
-        # return
-        return \%self;
-    }
-    1;
 }
 
 package GDRIVE {
@@ -3235,7 +3159,7 @@ package Youtube {
                 # dont need to check the new data anymore
                 $context->{'on_stdout_data'} = undef;                
                 $sendit->();
-                $request = undef;               
+                $request = undef;              
             },
             'at_exit' => sub {
                 my ($context) = @_;
@@ -3244,89 +3168,8 @@ package Youtube {
                 $sendit->();
             }
         });
-
-    }
-    
-    sub downloadAndServeold {
-        my ($self, $request, $video) = @_;
-        weaken($request);
-        my ($stdout, $done);
-        my $qs = $request->{'qs'};
-        my @cmd = ($self->{'youtube-dl'}, '--no-part', '--print-traffic', '-f', $self->{'fmts'}{$qs->{"media"} // "video"} // "best", '-o', $video->{"out_filepath"}, '--', $qs->{"id"});
-        $request->{'process'} = HTTP::BS::Server::Process->new(\@cmd, $request->{'client'}{'server'}{'evp'}, {
-        'STDOUT' => sub {
-            my($out) = @_;
-            my $buf;
-            while(read($out, $buf, 100)) {
-                $stdout .= $buf;        
-            }
-            return 1 if($done);
-            my $filename = $video->{'out_filepath'};
-            return 1 if(! (-e $filename));
-            my $minsize = $self->{'minsize'};
-            if(defined($minsize) && ((-s $filename) < $minsize)) {                      
-                return 1;
-            }                    
-            my ($cl) = $stdout =~ /^.*Content\-Length:\s(\d+)/s;
-            return 1 if(! $cl);
-            say "stdout $stdout";
-            my ($cr) = $stdout =~ /^.*Content\-Range:\sbytes\s\d+\-\d+\/(\d+)/s;
-            if($cr) {
-                say "cr $cr";
-                $cl = $cr if($cr > $cl);                        
-            }                    
-            say "cl is $cl";
-            UNLOCK_WRITE($filename);
-            LOCK_WRITE($filename, $cl);
-            if($request) {
-                $request->SendLocalFile($filename);                        
-            }
-            else {
-                say "request died, not sending";
-            }                    
-            $done = 1;
-            return 1;
-        },
-        'STDERR' => sub {                    
-            my ($err) = @_;
-            my $buf;
-            # log this somewhere?
-            while(read($err, $buf, 100)) { }
-            return 1;
-        },
-        'SIGCHLD' => sub {
-            my ($exitcode) = @_;
-            my $filename = $video->{'out_filepath'};
-            if (!$done) {                
-                if(! -e $filename) {
-                    say "youtube-dl failed ($exitcode), file not done in SIGCHLD. file doesnt exist 404";
-                    $request->Send404 if($request);
-                }
-                else {
-                    say "youtube-dl probably failed ($exitcode). sending file anyways";
-                    $request->SendLocalFile($filename) if($request);
-                }
-            }
-            else {
-                UNLOCK_WRITE($filename);
-            }
-        },
-        });
-        my $process = $request->{'process'}; 
-        my $flags = 0;
-        my $handle = $process->{'fd'}{'stderr'}{'fd'};
-        return unless defined $handle ;
-        (0 == fcntl($handle, Fcntl::F_GETFL, $flags)) or return undef;
-        $flags |= Fcntl::O_NONBLOCK;
-        (0 == fcntl($handle, Fcntl::F_SETFL, $flags)) or return undef;
-        $handle = $process->{'fd'}{'stdout'}{'fd'};
-        return unless defined $handle ;
-        (0 == fcntl($handle, Fcntl::F_GETFL, $flags)) or return undef;
-        $flags |= Fcntl::O_NONBLOCK;
-        (0 == fcntl($handle, Fcntl::F_SETFL, $flags)) or return undef;  
-
-        return 1;        
-    }
+        return 1;
+    }    
     
     sub getOutBase {
         my ($self, $qs) = @_;
@@ -4027,7 +3870,7 @@ sub ptp_request {
 }
 
 sub rtxmlrpc {
-    my ($evp, $params, $cb, $stdin) = @_;
+    my ($evp, $params, $cb) = @_;
     my $process;
     my @cmd = ('rtxmlrpc', @$params, '--config-dir', $SETTINGS->{'CFGDIR'} . '/.pyroscope/');
     $process    = HTTP::BS::Server::Process->new_output_process($evp, \@cmd, sub {
@@ -4035,7 +3878,7 @@ sub rtxmlrpc {
         chomp $output;
         #say 'rtxmlrpc output: ' . $output;
         $cb->($output);   
-    }, $stdin);
+    });
     return $process;
 }
 
@@ -4078,19 +3921,6 @@ sub torrent_d_size_bytes {
         $callback->($output);       
     });
 }
-
-# awful and broken
-sub torrent_load_raw_verbose {
-    my ($evp, $data, $callback) = @_;
-    rtxmlrpc($evp, ['load.raw_verbose', '@-' ],sub {
-        my ($output) = @_;
-        if($output =~ /ERROR/) {
-            $output = undef;           
-        }
-        $callback->($output);       
-    }, $data);
-}
-
 
 sub torrent_load_verbose {
     my ($evp, $filename, $callback) = @_;
@@ -4233,17 +4063,6 @@ sub get_SI_size {
         return sprintf("%.2f MiB", $mebibytes);                        
     }
 }
-
-#sub torrent_information {
-#    my ($evp, $infohash, $cb) = @_;
-#    rtxmlrpc($evp, ['d.multicall2', $infohash, '', 'd.name=', 'd.size_bytes=', 'd.bytes_done='], sub {    
-#    my ($output) = @_;
-#    if($output =~ /ERROR/) {
-#        $output = undef;           
-#    }
-#    $callback->($output);    
-#    });
-#}
 
 sub torrent_file_information {
     my ($evp, $infohash, $name, $cb) = @_;
@@ -4518,8 +4337,10 @@ sub player_video {
         $buf .= '</form>';  
         $qs->{'searchstr'} //= '';
         my $url = 'torrents.php?searchstr=' . $qs->{'searchstr'} . '&json=noredirect';
-        $qs->{'page'} = int($qs->{'page'});
-        $url .= '&page=' . $qs->{'page'} if( $qs->{'page'});         
+        if( $qs->{'page'}) {
+            $qs->{'page'} = int($qs->{'page'});
+            $url .= '&page=' . $qs->{'page'} ; 
+        }                
         ptp_request($evp, $url, sub {        
             my ($result) = @_;
             if(! $result) {
@@ -4580,7 +4401,7 @@ sub player_video {
             }           
             $buf .= "</body>";
             $buf .= "</html>";  
-            $request->SendLocalBuf($buf, "text/html");
+            $request->SendLocalBuf(encode_utf8($buf), "text/html");
         
         });   
         return;
