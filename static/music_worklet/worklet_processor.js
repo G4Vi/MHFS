@@ -24,7 +24,7 @@ class RingBuffer {
   constructor(sab, type){
     this._readindex = 0;
     this._writeindex = 0;
-      this._buffer = new type(sab);
+    this._buffer = new type(sab);    
   }
 
   static reader(sab, type) {     
@@ -74,9 +74,43 @@ class RingBuffer {
   reset() {
     this._readindex = 0;
     this._writeindex = 0;
+  } 
+
+}
+
+class AudioReader {
+  // takes an array of SharedArrayBuffers, one for each channel
+  constructor(sabs) {
+    this.count = 0; // stores number of sample-frames
+    this.arbs = [];
+    for(let i = 0; i < sabs.length; i++) {
+      this.arbs[i] = RingBuffer.reader(sabs[i], Float32Array);
+    }
   }
-  
-    
+
+  reset() {
+    this.count = 0;
+    for(let i = 0; i < this.arbs.length; i++) {
+      this.arbs[i].reset();
+    }
+  }
+
+  add(num) {
+    this.count += num;
+    if(this.count > this.arbs[0]._buffer.length) {
+      console.error('bufferoverrun dropping frames');
+      this.count = this.arbs[0]._buffer.length;      
+    }    
+  }
+
+  read(outputArray) {
+    let copied = 0;
+    for(let chanIndex = 0; chanIndex < outputArray.length; chanIndex++) {
+        copied = this.arbs[chanIndex].read(outputArray[chanIndex], this.count);
+    }
+    this.count -= copied;
+    return copied;
+  }
 }
 
 
@@ -89,34 +123,26 @@ class MusicProcessor extends AudioWorkletProcessor {
           if(e.data.message == 'init') {
                 const sharedbuffers = e.data.sharedbuffers;              
                 this._MessageCount = new Uint32Array(sharedbuffers.message_count);
-                this._AudioReader    = [RingBuffer.reader(sharedbuffers.arb[0], Float32Array), RingBuffer.reader(sharedbuffers.arb[1], Float32Array)];
+                this._AudioReader    = new AudioReader(sharedbuffers.arb);
                 this._MessageReader = RingBuffer.reader(sharedbuffers.reader_messages, Uint32Array);
                 this._MessageWriter = RingBuffer.writer(sharedbuffers.writer_messages, Uint32Array);              
                 this._tok = 0;
                 this._tempmessagebuf = new Uint32Array(3);
                 this._tempfloatbuf = new Float32Array(this._tempmessagebuf.buffer);
-                this._dataframes = 0;
                 this._initialized = true;
           }
     };
   }
 
   _pullFrames(outputArray) {
-    let copied = 0;
-    for(let chanIndex = 0; chanIndex < outputArray.length; chanIndex++) {
-        copied = this._AudioReader[chanIndex].read(outputArray[chanIndex], this._dataframes);
-    }
+    let copied = this._AudioReader.read(outputArray);
+    // if copied < 128 there was an underrun
     if(copied === 0) return;
     this._tempmessagebuf[0] = WRITER_MSG.FRAMES_ADD;
     this._tempmessagebuf[1] = this._tok;
     this._tempmessagebuf[2] = copied;
     this._MessageWriter.write(this._tempmessagebuf);
-    Atomics.add(this._MessageCount, MSG_COUNT.WRITER, 3);
-    this._dataframes -= copied;
-    if((copied < 128) && (this._AudioReader[0]._readindex > 0)) {
-        console.log('audioworklet: buffer underrun, copied ' + copied);
-        //alert('aaa');
-    }  
+    Atomics.add(this._MessageCount, MSG_COUNT.WRITER, 3);     
   }
 
   _SendTime(time) {
@@ -137,19 +163,18 @@ class MusicProcessor extends AudioWorkletProcessor {
       let messages = messagetotal;
       while(messages > 0) {
           this._MessageReader.read(this._tempmessagebuf,2);
+          // RESET, clear the count, no audio data is available
           if(this._tempmessagebuf[0] === READER_MSG.RESET) {
             this._tok = this._tempmessagebuf[1];
-            this._dataframes = 0;
-            for(let i = 0; i < this._AudioReader.length; i++) {
-              this._AudioReader[i].reset();
-            }
+            this._AudioReader.reset();           
             messages -= 2;            
           }
+          // FRAMES_ADD increment the count, new audio data available
           else if(this._tempmessagebuf[0] === READER_MSG.FRAMES_ADD) {
             const fadd = this._tempmessagebuf[1];
             // return the time the frames are queued for
-            this._SendTime(currentTime + (this._dataframes/sampleRate));
-            this._dataframes += fadd;
+            this._SendTime(currentTime + (this._AudioReader.count/sampleRate));
+            this._AudioReader.add(fadd);
             messages -= 2;
           }
           else {
@@ -159,7 +184,7 @@ class MusicProcessor extends AudioWorkletProcessor {
       }
       Atomics.sub(this._MessageCount, MSG_COUNT.READER, messagetotal);
       
-      
+      // fill the buffer with our audio if we have it
       this._pullFrames(outputs[0]);
       return true
     }

@@ -610,14 +610,31 @@ rptrackbtn.addEventListener('change', function(e) {
     if(AudioQueue[0].aqindex === NextAQIndex) return;       // current playing is still being queued do nothing
     
     console.log('rptrack abort');
+    let trunclen;
     // clear the audio queue of next tracks
     for(let i = 0; i < AudioQueue.length; i++)
     {
         if(AudioQueue[i].aqindex !== AudioQueue[0].aqindex) {
-            AudioQueue.length = i;
-            break;
+            if(!trunclen) {
+                trunclen = i;                
+            }
+            // increment count of audio to cancel
         }
     }
+    if(trunclen) {
+        AudioQueue.length = trunclen;
+        // update tok. set write count to 0 (full)
+        // send message
+            // decrease the reader count to the min of 0
+        // recv message
+           // new write index
+           // write count
+        // increase the writer count to the max 
+        // rollback the write index
+        // what to do if reader count < the amount to decrease
+        
+    }
+    
 
     if(e.target.checked) {
         // repeat the currently playing track

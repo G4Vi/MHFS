@@ -4217,10 +4217,95 @@ sub torrent {
     }
 }
 
+sub player_video_browsemovies {
+    my ($request, $buf) = @_;
+    my $evp = $request->{'client'}{'server'}{'evp'}; 
+    my $qs = $request->{'qs'};   
+    $buf .= '<h1>Browse Movies</h1>';
+    $buf .= '<h3><a href="video">Video</a> | <a href="music">Music</a></h3>';        
+    $buf .= '<form action="video" method="GET">';
+    $buf .= '<input type="hidden" name="action" value="browsemovies">';
+    $buf .= '<input type="text" placeholder="Search" name="searchstr" class="searchfield">';
+    $buf .= '<button type="submit">Search</button>';
+    $buf .= '</form>';  
+    $qs->{'searchstr'} //= '';
+    my $url = 'torrents.php?searchstr=' . $qs->{'searchstr'} . '&json=noredirect';
+    if( $qs->{'page'}) {
+        $qs->{'page'} = int($qs->{'page'});
+        $url .= '&page=' . $qs->{'page'} ; 
+    }                
+    ptp_request($evp, $url, sub {        
+        my ($result) = @_;
+        if(! $result) {
+            $buf .= '<h2>Search Failed</h2>';              
+        }
+        else {                
+            # get a list of movies on disk
+            my $moviedir;               
+            my @dlmovies;
+            if(opendir($moviedir, $SETTINGS->{'MEDIALIBRARIES'}{'movies'})) {
+                while(my $movie = readdir($moviedir)) {
+                    if(! -d ($SETTINGS->{'MEDIALIBRARIES'}{'movies'} . '/' . $movie)) {
+                        $movie =~ s/\.[^.]+$//;
+                    }
+                    push @dlmovies, $movie;
+                }
+                closedir($moviedir);                    
+            }
+
+            # compare with the search results and display
+            my $json = decode_json($result);
+            my $numresult = $json->{'TotalResults'};
+            my $numpages = ceil($numresult/50);
+            say "numresult $numresult pages $numpages";                
+            foreach my $movie (@{$json->{'Movies'}}) {
+                $buf .= '<table class="tbl_movie" border="1"><tbody>';
+                $buf .= '<tr><th>' . $movie->{'Title'} . ' [' . $movie->{'Year'} . ']</th><th>Time</th><th>Size</th><th>Snatches</th><th>Seeds</th><th>Leeches</th></tr>';
+                foreach my $torrent ( @{$movie->{'Torrents'}}) {
+                    $buf .= '<tr><td>' . $torrent->{'Codec'} . ' / ' . $torrent->{'Container'} . ' / ' . $torrent->{'Source'} . ' / ' . $torrent->{'Resolution'};
+                    ($buf .= ' / ' . $torrent->{'Scene'}) if $torrent->{'Scene'} eq 'true';
+                    ($buf .= ' / ' . $torrent->{'RemasterTitle'}) if $torrent->{'RemasterTitle'};                        
+                    ($buf .= ' / ' . $torrent->{'GoldenPopcorn'}) if $torrent->{'GoldenPopcorn'} eq 'true';
+                    my $sizeprint = get_SI_size($torrent->{'Size'});  
+                    my $viewtext = '[DL]';
+                    # attempt to note already downloaded movies. this has false postive matches
+                    # todo compare sizes
+                    my $releasename = $torrent->{'ReleaseName'};
+                    say 'testing releasename ' . $releasename;                        
+                    foreach my $dlmovie (@dlmovies) {                                                       
+                        if($dlmovie eq $releasename) {
+                            $viewtext = '[VIEW]';
+                            say 'match with ' . $dlmovie;
+                            last;     
+                        }                        
+                    }                       
+                    $buf .= '<a href="torrent?ptpid=' . $torrent->{'Id'} . '">' . $viewtext . '</a></td><td>' . $torrent->{'UploadTime'} . '</td><td>' . $sizeprint . '</td><td>' . $torrent->{'Snatched'} . '</td><td>' .  $torrent->{'Seeders'} . '</td><td>' .  $torrent->{'Leechers'} . '</td></tr>';                    
+                }
+                $buf .= '<tbody></table><br>';                    
+            }
+
+            # navigation between pages of search results
+            $qs->{'page'} ||= 1;
+            if( $qs->{'page'} > 1) {
+                $buf .= '<a href="video?action=browsemovies&searchstr=' .  $qs->{'searchstr'} . '&page=1">' . ${escape_html('<<First')}  .'</a> |';
+                $buf .= '<a href="video?action=browsemovies&searchstr=' .  $qs->{'searchstr'} . '&page=' . ($qs->{'page'} - 1) . '">' . ${escape_html('<Prev')} . '</a>';                
+            }
+            if ($qs->{'page'} < $numpages) {
+                $buf .= '<a href="video?action=browsemovies&searchstr=' .  $qs->{'searchstr'} . '&page=' . ($qs->{'page'} + 1) . '">' . ${escape_html('Next>')} . '</a> |';                 
+                $buf .= '<a href="video?action=browsemovies&searchstr=' .  $qs->{'searchstr'} . '&page=' . $numpages . '">' . ${escape_html('Last>>')} . '</a>';                                    
+            }
+        }           
+        $buf .= "</body>";
+        $buf .= "</html>";  
+        $request->SendLocalBuf(encode_utf8($buf), "text/html");
+    
+    });
+}
+
 sub player_video {
     my ($request) = @_;
     my $qs = $request->{'qs'};   
-    my $fmt = video_get_format($qs->{'fmt'});
+   
     my $buf =  "<html>";
     $buf .= "<head>";
     $buf .= '<style type="text/css">';
@@ -4233,83 +4318,7 @@ sub player_video {
     
     $qs->{'action'} //= 'library';
     if($qs->{'action'} eq 'browsemovies') {
-        my $evp = $request->{'client'}{'server'}{'evp'};    
-        $buf .= '<h1>Browse Movies</h1>';
-        $buf .= '<h3><a href="video">Video</a> | <a href="music">Music</a></h3>';        
-        $buf .= '<form action="video" method="GET">';
-        $buf .= '<input type="hidden" name="action" value="browsemovies">';
-        $buf .= '<input type="text" placeholder="Search" name="searchstr" class="searchfield">';
-        $buf .= '<button type="submit">Search</button>';
-        $buf .= '</form>';  
-        $qs->{'searchstr'} //= '';
-        my $url = 'torrents.php?searchstr=' . $qs->{'searchstr'} . '&json=noredirect';
-        if( $qs->{'page'}) {
-            $qs->{'page'} = int($qs->{'page'});
-            $url .= '&page=' . $qs->{'page'} ; 
-        }                
-        ptp_request($evp, $url, sub {        
-            my ($result) = @_;
-            if(! $result) {
-                $buf .= '<h2>Search Failed</h2>';              
-            }
-            else {                
-                #$request->SendLocalBuf($result, "text/json");
-                #return;
-                my $moviedir;               
-                my @dlmovies;
-                if(opendir($moviedir, $SETTINGS->{'MEDIALIBRARIES'}{'movies'})) {
-                    while(my $movie = readdir($moviedir)) {
-                        if(! -d ($SETTINGS->{'MEDIALIBRARIES'}{'movies'} . '/' . $movie)) {
-                            $movie =~ s/\.[^.]+$//;
-                        }
-                        push @dlmovies, $movie;
-                    }
-                    closedir($moviedir);                    
-                }
-                my $json = decode_json($result);
-                my $numresult = $json->{'TotalResults'};
-                my $numpages = ceil($numresult/50);
-                say "numresult $numresult pages $numpages";                
-                foreach my $movie (@{$json->{'Movies'}}) {
-                    $buf .= '<table class="tbl_movie" border="1"><tbody>';
-                    $buf .= '<tr><th>' . $movie->{'Title'} . ' [' . $movie->{'Year'} . ']</th><th>Time</th><th>Size</th><th>Snatches</th><th>Seeds</th><th>Leeches</th></tr>';
-                    foreach my $torrent ( @{$movie->{'Torrents'}}) {
-                        $buf .= '<tr><td>' . $torrent->{'Codec'} . ' / ' . $torrent->{'Container'} . ' / ' . $torrent->{'Source'} . ' / ' . $torrent->{'Resolution'};
-                        ($buf .= ' / ' . $torrent->{'Scene'}) if $torrent->{'Scene'} eq 'true';
-                        ($buf .= ' / ' . $torrent->{'RemasterTitle'}) if $torrent->{'RemasterTitle'};                        
-                        ($buf .= ' / ' . $torrent->{'GoldenPopcorn'}) if $torrent->{'GoldenPopcorn'} eq 'true';
-                        my $sizeprint = get_SI_size($torrent->{'Size'});  
-                        my $viewtext = '[DL]';
-                        # attempt to note already downloaded movies. this has false postive matches
-                        # todo compare sizes
-                        my $releasename = $torrent->{'ReleaseName'};
-                        say 'testing releasename ' . $releasename;                        
-                        foreach my $dlmovie (@dlmovies) {                                                       
-                            if($dlmovie eq $releasename) {
-                                $viewtext = '[VIEW]';
-                                say 'match with ' . $dlmovie;
-                                last;     
-                            }                        
-                        }                       
-                        $buf .= '<a href="torrent?ptpid=' . $torrent->{'Id'} . '">' . $viewtext . '</a></td><td>' . $torrent->{'UploadTime'} . '</td><td>' . $sizeprint . '</td><td>' . $torrent->{'Snatched'} . '</td><td>' .  $torrent->{'Seeders'} . '</td><td>' .  $torrent->{'Leechers'} . '</td></tr>';                    
-                    }
-                    $buf .= '<tbody></table><br>';                    
-                }
-                $qs->{'page'} ||= 1;
-                if( $qs->{'page'} > 1) {
-                    $buf .= '<a href="video?action=browsemovies&searchstr=' .  $qs->{'searchstr'} . '&page=1">' . ${escape_html('<<First')}  .'</a> |';
-                    $buf .= '<a href="video?action=browsemovies&searchstr=' .  $qs->{'searchstr'} . '&page=' . ($qs->{'page'} - 1) . '">' . ${escape_html('<Prev')} . '</a>';                
-                }
-                if ($qs->{'page'} < $numpages) {
-                    $buf .= '<a href="video?action=browsemovies&searchstr=' .  $qs->{'searchstr'} . '&page=' . ($qs->{'page'} + 1) . '">' . ${escape_html('Next>')} . '</a> |';                 
-                    $buf .= '<a href="video?action=browsemovies&searchstr=' .  $qs->{'searchstr'} . '&page=' . $numpages . '">' . ${escape_html('Last>>')} . '</a>';                                    
-                }
-            }           
-            $buf .= "</body>";
-            $buf .= "</html>";  
-            $request->SendLocalBuf(encode_utf8($buf), "text/html");
-        
-        });   
+        player_video_browsemovies($request, $buf);   
         return;
     }   
     
@@ -4322,6 +4331,7 @@ sub player_video {
         @libraries = ($qs->{'library'});    
     }
     my %libraryprint = ( 'movies' => 'Movies', 'tv' => 'TV', 'other' => 'Other');
+    my $fmt = video_get_format($qs->{'fmt'});
     foreach my $library (@libraries) {
         my $dir = $SETTINGS->{'MEDIALIBRARIES'}{$library};
         (-d $dir) or next;
@@ -4350,7 +4360,7 @@ sub player_video {
     $buf .= '</script>';
     $buf .= "</body>";
     $buf .= "</html>";  
-    $request->SendLocalBuf($buf, "text/html"); 
+    $request->SendLocalBuf(encode_utf8($buf), "text/html"); 
 }
 
 sub video_library_html {
