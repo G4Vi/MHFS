@@ -680,7 +680,11 @@ rptrackbtn.addEventListener('change', function(e) {
  
  prevbtn.addEventListener('click', function (e) {
     let prevtrack;
-    if(Tracks_QueueCurrent) {
+    if(AudioQueue[0]) {
+        if(!AudioQueue[0].track.prev) return;
+        prevtrack = AudioQueue[0].track.prev;
+    }
+    else if(Tracks_QueueCurrent) {
         if(!Tracks_QueueCurrent.prev) return;
         prevtrack = Tracks_QueueCurrent.prev;
     }
