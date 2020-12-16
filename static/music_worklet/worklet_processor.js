@@ -1,13 +1,16 @@
 //import RingBuffer from "./AudioWriterReader.js" import doesnt work in FF
 
 const READER_MSG = {
-  'RESET'     : 0, // data param token
-  'FRAMES_ADD' : 1 // data param number of frames
+  'RESET'     : 0,  // data param token
+  'FRAMES_ADD' : 1, // data param number of frames
+  'STOP_AT'    : 2  // data param token, uint64 starting_frame to stop
 };
 
 const WRITER_MSG = {
-  'FRAMES_ADD' : 0, // data param tok and number of frames
-  'START_TIME' : 1  // data param aqindex, time
+  'FRAMES_ADD' : 0,  // data param tok and number of frames
+  'START_TIME' : 1,  // data param tok, time
+  'START_FRAME': 2,  // data param tok, uint64 frame
+  'WRITE_INFO' : 3   // data param tok, uint32 writeindex, uint32 count
 }
 
 // number of message slots in use
@@ -111,6 +114,14 @@ class AudioReader {
     this.count -= copied;
     return copied;
   }
+
+  writeindex() {
+    let wi = this.arbs[0]._readindex + this.count;
+    if(wi >= this.arbs[0]._buffer.length) {
+      wi -= this.arbs[0]._buffer.length;
+    }
+    return wi;
+  }
 }
 
 
@@ -129,6 +140,8 @@ class MusicProcessor extends AudioWorkletProcessor {
                 this._tok = 0;
                 this._tempmessagebuf = new Uint32Array(3);
                 this._tempfloatbuf = new Float32Array(this._tempmessagebuf.buffer);
+                this._tempbigbuf = new Uint32Array(4);
+                this._tempbigbuf64 = new BigUint64Array(this._tempbigbuf.buffer);
                 this._initialized = true;
           }
     };
@@ -153,6 +166,23 @@ class MusicProcessor extends AudioWorkletProcessor {
     Atomics.add(this._MessageCount, MSG_COUNT.WRITER, 3);
   }
 
+  _SendFrame(frameNum) {
+    this._tempbigbuf[0] = WRITER_MSG.START_FRAME;
+    this._tempbigbuf[1] = this._tok;
+    this._tempbigbuf64[1] = BigInt(frameNum);
+    this._MessageWriter.write(this._tempbigbuf);
+    Atomics.add(this._MessageCount, MSG_COUNT.WRITER, 4);
+  }
+
+  _SendWriteInfo(wi, count) {
+    this._tempbigbuf[0] = WRITER_MSG.WRITE_INFO;
+    this._tempbigbuf[1] = this._tok;
+    this._tempbigbuf[2] = wi;
+    this._tempbigbuf[3] = count;
+    this._MessageWriter.write(this._tempbigbuf);
+    Atomics.add(this._MessageCount, MSG_COUNT.WRITER, 4);
+  }
+
     process (inputs, outputs, parameters) {
       if(!this._initialized) {
         return true;
@@ -174,8 +204,19 @@ class MusicProcessor extends AudioWorkletProcessor {
             const fadd = this._tempmessagebuf[1];
             // return the time the frames are queued for
             this._SendTime(currentTime + (this._AudioReader.count/sampleRate));
+            this._SendFrame(currentFrame + this._AudioReader.count);
             this._AudioReader.add(fadd);
             messages -= 2;
+          }
+          // STOP_AT stop audio starting at time(decrease the count)
+          else if(this._tempmessagebuf[0] === READER_MSG.STOP_AT) {
+            this._tok = this._tempmessagebuf[1];
+            this._MessageReader.read(this._tempbigbuf,2);
+            const cancelat = Number(this._tempbigbuf64[0]);          
+            this._AudioReader.count =  cancelat > currentFrame ? (cancelat - currentFrame) : 0;
+            const writeindex = this._AudioReader.writeindex();
+            this._SendWriteInfo(writeindex, this._AudioReader.count);
+            messages -= 4;
           }
           else {
             console.error('audioworklet: unknown message ' + this._tempmessagebuf[0]);

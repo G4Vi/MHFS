@@ -265,6 +265,7 @@ const ProcessTimes = function(aqitem, time) {
 const READER_MSG = {
     'RESET'     : 0,  // data param token
     'FRAMES_ADD' : 1, // data param number of frames
+    'STOP_AT'    : 2  // data parm token, uint64 frame to stop at
 };
 
 // WRITER_MSG - messages sent by the reader(worklet) to us
@@ -273,8 +274,16 @@ const READER_MSG = {
 // START_TIME is sent in response to READER_MSG.FRAMES_ADD and contains when those frames will start
 const WRITER_MSG = {
     'FRAMES_ADD' : 0, // data param token and number of frames
-    'START_TIME' : 1  // data param token, time
+    'START_TIME' : 1, // data param token, float32 time
+    'START_FRAME': 2, // data param token, uint64 frame
+    'WRITE_INFO' : 3  // data param token, writeindex, writecount
 }
+const MessageInDataLength = [];
+MessageInDataLength[WRITER_MSG.FRAMES_ADD] = 1;
+MessageInDataLength[WRITER_MSG.START_TIME] = 1;
+MessageInDataLength[WRITER_MSG.START_FRAME]= 2;
+MessageInDataLength[WRITER_MSG.WRITE_INFO] = 2;
+
 
 // number of messages in each direction
 const MSG_COUNT = {
@@ -282,13 +291,13 @@ const MSG_COUNT = {
     'WRITER' : 1
 };
 
-const ARBLen  = MainAudioContext.sampleRate * 2;
+const ARBLen  = MainAudioContext.sampleRate * 20;
 if (!self.SharedArrayBuffer) {
     console.error('SharedArrayBuffer is not supported in browser');
 }
 const SharedBuffers = {
     message_count : new SharedArrayBuffer(4*2),
-    reader_messages: new SharedArrayBuffer(4*32),
+    reader_messages: new SharedArrayBuffer(4*4096),
     writer_messages : new SharedArrayBuffer(4*4096),
     arb : [new SharedArrayBuffer(ARBLen * 4), new SharedArrayBuffer(ARBLen * 4)]
 };
@@ -302,31 +311,56 @@ const MessageReader = RingBuffer.reader(SharedBuffers.writer_messages, Uint32Arr
 let tok = 0;
 let freeFrames = ARBLen;
 // Avoid GC
-let tempMessageIN  = new Uint32Array(3);
-let tempMessageINFloat  = new Float32Array(tempMessageIN.buffer);
+let tempMessageIn  = new ArrayBuffer(4*4);
+let tempMessageInUint32  = new Uint32Array(tempMessageIn);
+let tempMessageInFloat32 = new Float32Array(tempMessageIn);
+let tempMessageInUint64  = new BigUint64Array(tempMessageIn);
 let tempMessageOUT = new Uint32Array(2);
+let tempMessageBigOUT = new Uint32Array(4);
+let tempMessageBigOUT64 = new BigUint64Array(tempMessageBigOUT.buffer);
+
 // Process messages from the audio thread
 const ProcessAudioMessages = function() {
     const messagetotal = Atomics.load(MessageCount, MSG_COUNT.WRITER);
     let messages = messagetotal;
     while(messages > 0) {
-        MessageReader.read(tempMessageIN,messages);
+        MessageReader.read(tempMessageInUint32,Math.min(2, messages));
+        messages -= 2;
+        const messageid = tempMessageInUint32[0];
+        const datalength = MessageInDataLength[messageid];
+        const tok_valid = (tempMessageInUint32[1] === tok); 
+        MessageReader.read(tempMessageInUint32, Math.min(datalength, messages));
+        messages -= datalength;
         // only process messages with the current tok
-        if(tempMessageIN[1] === tok) {
-            if(tempMessageIN[0] === WRITER_MSG.FRAMES_ADD) {
-                freeFrames += tempMessageIN[2];                
-            }
-            else if(tempMessageIN[0] === WRITER_MSG.START_TIME) {
-                for(let i = 0; i < AudioQueue.length; i++) {
-                    if(AudioQueue[i].starttime) continue;
-                    ProcessTimes(AudioQueue[i], tempMessageINFloat[2]);
-                    break;                                   
-                }
-            }
-        }       
+        if(!tok_valid) continue;        
 
-        //console.log('message in inc ' + message[0] + ' ' + message[1] + ' tok ' + tok )
-        messages -= 3;
+        if(messageid === WRITER_MSG.FRAMES_ADD) {
+            freeFrames += tempMessageInUint32[0];                
+        }
+        else if(messageid === WRITER_MSG.START_TIME) {
+            for(let i = 0; i < AudioQueue.length; i++) {
+                if(AudioQueue[i].starttime) continue;
+                ProcessTimes(AudioQueue[i], tempMessageInFloat32[0]);
+                break;                                   
+            }
+        }
+        else if(messageid === WRITER_MSG.START_FRAME)
+        {
+            for(let i = 0; i < AudioQueue.length; i++) {
+                if(AudioQueue[i].startframe) continue;
+                AudioQueue[i].startframe = tempMessageInUint64[0];
+                break;
+            }
+        }
+        else if(messageid === WRITER_MSG.WRITE_INFO)
+        {
+            // cancel complete, update write index and write count
+            for(let i = 0; i < AudioWriter.length; i++)
+            {
+                AudioWriter[i]._writeindex = tempMessageInUint32[0];
+            }                
+            freeFrames = ARBLen - tempMessageInUint32[1];             
+        }  
     }
     Atomics.sub(MessageCount, MSG_COUNT.WRITER, messagetotal);
     return freeFrames;
@@ -358,6 +392,28 @@ const StopAudio = function() {
 
     //console.log('message out inc reset ' + message[0] + ' ' + message[1] + ' tok ' + tok )
 };
+
+const StopNextAudio = function() {
+    // clear the audio queue of next tracks
+    for(let i = 0; i < AudioQueue.length; i++)
+    {
+        if(AudioQueue[i].aqindex !== AudioQueue[0].aqindex) {
+            AudioQueue.length = i;
+            
+            // disable writing until cancel has complete
+            tok++;
+            if(tok > 4294967295) tok = 0;
+            freeFrames = 0;
+            // cancel the next audio
+            tempMessageBigOUT[0] = READER_MSG.STOP_AT;
+            tempMessageBigOUT[1] = tok;
+            tempMessageBigOUT64[1] = AudioQueue[i-1].startframe + BigInt(AudioQueue[i-1].preciseLength);
+            MessageWriter.write(tempMessageBigOUT);
+            Atomics.add(MessageCount, MSG_COUNT.READER, 4);            
+            break;
+        }
+    }    
+}
 
 const PumpAudioQueue = async function() {
     while(1) {
@@ -406,10 +462,6 @@ const PumpAudioQueue = async function() {
             continue;            
         }
         
-        // sanity checking
-        if(fAvail > (MainAudioContext.sampleRate + (MainAudioContext.sampleRate/2))) {
-            console.error('questionable, lots of frames avail ' + fAvail);
-        }
         // make the audio available to the audio worklet
         pushFrames(item.buffer);
         item.queued = true;
@@ -609,32 +661,8 @@ rptrackbtn.addEventListener('change', function(e) {
     if(!AudioQueue[0]) return;                              // nothing is playing repeattrack should do nothing
     if(AudioQueue[0].aqindex === NextAQIndex) return;       // current playing is still being queued do nothing
     
-    console.log('rptrack abort');
-    let trunclen;
-    // clear the audio queue of next tracks
-    for(let i = 0; i < AudioQueue.length; i++)
-    {
-        if(AudioQueue[i].aqindex !== AudioQueue[0].aqindex) {
-            if(!trunclen) {
-                trunclen = i;                
-            }
-            // increment count of audio to cancel
-        }
-    }
-    if(trunclen) {
-        AudioQueue.length = trunclen;
-        // update tok. set write count to 0 (full)
-        // send message
-            // decrease the reader count to the min of 0
-        // recv message
-           // new write index
-           // write count
-        // increase the writer count to the max 
-        // rollback the write index
-        // what to do if reader count < the amount to decrease
-        
-    }
-    
+    console.log('rptrack abort');    
+    StopNextAudio();  
 
     if(e.target.checked) {
         // repeat the currently playing track
