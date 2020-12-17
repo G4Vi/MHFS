@@ -11,4 +11,6 @@ drflac_wasm/drflac.js
 drflac_wasm/drflac.wasm
 static/drflac.wasm
 static/drflac.js
+static/music_worklet/decoder/bin
+static/music_worklet/decoder/bin/*
 

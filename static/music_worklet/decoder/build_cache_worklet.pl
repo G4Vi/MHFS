@@ -5,18 +5,18 @@ use feature 'say';
 defined $ENV{EMSDK} or die("emsdk not found. maybe source ~/emsdk/emsdk_env.sh");
 
 my $debug = 0;
-#$debug = 1;
+$debug = 1;
 
 my $outdir;
 my @cmd = ('emcc');
 if($debug) {
-    push @cmd, ("-O0", "-g4", '--source-map-base', './'); #'--source-map-base', 'https://computoid.com/stream/static/music_inc/'); # for chrome
+    push @cmd, ("-O0", "-g4", '--source-map-base', './src/');
     #push @cmd, ('-s', 'SAFE_HEAP=1');
-    $outdir = 'mod_dbg';
+    $outdir = 'bin';
 }
 else {
     push @cmd, ('-O3');
-    $outdir = 'mod_rel';
+    $outdir = 'bin';
 }
 system('mkdir', '-p', $outdir) == 0 or die("failed to create $outdir");
 
@@ -37,7 +37,6 @@ qq$EXPORTED_FUNCTIONS=["_network_drflac_open_mem", "_network_drflac_read_pcm_fra
 
 system(@cmd) == 0 or die("failed to build");
 
-system('rsync', '-a', $outdir.'/', '../static/music_worklet')== 0 or die("failed to copy to music_inc");
 if($debug) {
-    system('rsync', '-a', 'src', '../static/music_worklet/') == 0 or die("failed to copy src to music_inc");
+    system('rsync', '-a', 'src', $outdir.'/') == 0 or die("failed to copy src to music_inc");
 }

@@ -1,5 +1,4 @@
-//import {default as NetworkDrFlac} from './music_drflac_module.js'
-import {default as NetworkDrFlac} from './music_drflac_module.cache.js'
+import {default as NetworkDrFlac} from './decoder/music_drflac_module.cache.js'
 // times in seconds
 const AQMaxDecodedTime = 20;    // maximum time decoded, but not queued
 const DesiredChannels = 2;

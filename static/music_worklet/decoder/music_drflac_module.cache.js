@@ -1,4 +1,4 @@
-import Module from './drflac.js'
+import Module from './bin/drflac.js'
 
 let DrFlac = { 
     'drflac' : true,
