@@ -26,9 +26,6 @@
     <input type="range" min="0" max="1" value="1.0" step="0.01" id="volslider">
 	<label><input name="repeattrack" id="repeattrack" type="checkbox">Repeat Track</label>
 </div>
-<script>
-    window.NetworkDrFlac_startPath = '';
-</script>
 <link rel="modulepreload" href="decoder/bin/drflac.js">
 <link rel="modulepreload" href="decoder/music_drflac_module.cache.js">
 <script src="music_inc_module.js" type="module" async> </script>
@@ -47,13 +44,6 @@
         document.getElementById("musicdb").innerHTML = html;
     });
     */
-
-    /*function escapeHTML( string ) {
-        var pre = document.createElement('pre');
-        var text = document.createTextNode( string );
-        pre.appendChild(text);
-        return pre.innerHTML;
-    }*/
 
     function escapeHTML(unsafe) {
     return unsafe
