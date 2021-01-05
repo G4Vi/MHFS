@@ -11,7 +11,7 @@ my $outdir;
 my @cmd = ('emcc');
 if($debug) {
     push @cmd, ("-O0", "-g4", '--source-map-base', './src/');
-    #push @cmd, ('-s', 'SAFE_HEAP=1');
+    push @cmd, ('-s', 'SAFE_HEAP=1');
     $outdir = 'bin';
 }
 else {
@@ -37,6 +37,7 @@ qq$EXPORTED_FUNCTIONS=["_network_drflac_open_mem", "_network_drflac_read_pcm_fra
 
 system(@cmd) == 0 or die("failed to build");
 
-if($debug) {
+if($debug) {    
     system('rsync', '-a', 'src', $outdir.'/') == 0 or die("failed to copy src to music_inc");
+    system("mv", "$outdir/drflac.wasm.map", "$outdir/src/drflac.wasm.map") == 0 or die("Failed to mv source map");
 }

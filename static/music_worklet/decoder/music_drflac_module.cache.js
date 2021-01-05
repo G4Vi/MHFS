@@ -122,7 +122,13 @@ const NetworkDrFlac = async function(theURL, deschannels, gsignal) {
         const def_end = start+that.CHUNKSIZE-1;
         const end = that.filesize ? Math.min(def_end, that.filesize-1) : def_end; 
         let xhr = await makeRequest('GET', theURL, start, end, mysignal);
-        if(!that.filesize) that.filesize = GetFileSize(xhr);
+        //if(!that.filesize) that.filesize = GetFileSize(xhr);
+        const newfilesize = GetFileSize(xhr);
+        if(newfilesize !== that.filesize) {
+            console.log('filesize updated from ' + that.filesize + ' to ' + newfilesize);
+            that.filesize = newfilesize;
+        }
+        // bug we don't update memptr when filesize can change
         if(!that.memptr) that.memptr = DrFlac.network_drflac_mem_create(that.filesize, that.CHUNKSIZE);
         let dataHeap = new Uint8Array(DrFlac.Module.HEAPU8.buffer, DrFlac.network_drflac_mem_bufptr(that.memptr)+start, xhr.response.byteLength);
         dataHeap.set(new Uint8Array(xhr.response));

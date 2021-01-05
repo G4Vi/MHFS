@@ -2613,6 +2613,9 @@ package MusicLibrary {
         say "HACK client time extended to " . $request->{'client'}{'time'};
         $request->{'process'} = HTTP::BS::Server::Process->new(\@cmd, $evp, {
         'SIGCHLD' => sub {
+            # BUG
+            # files isn't necessarily flushed to disk on SIGCHLD. filesize can be wrong
+
             # HACK
             $request->{'client'}{'time'} = clock_gettime(CLOCK_MONOTONIC); 
             SendTrack($request, $outfile);                                      

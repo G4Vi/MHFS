@@ -338,6 +338,14 @@ uint64_t network_drflac_read_pcm_frames_f32_mem(NetworkDrFlac *ndrflac, uint32_t
         free(data);
         return 0;
     }
+    // if we expected to read data, didn't yet didn't fail, we failed
+    if((frames_decoded == 0) && (desired_pcm_frames != 0))
+    {
+        printf("network_drflac_read_pcm_frames_f32_mem: failed read_pcm_frames_f32 (0)\n");
+        free(data);
+        error->code = NDRFLAC_GENERIC_ERROR;
+        return 0;
+    }
 
     #ifdef NETWORK_DR_FLAC_FORCE_REDBOOK
     // resample
