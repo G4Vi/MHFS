@@ -122,14 +122,17 @@ const NetworkDrFlac = async function(theURL, deschannels, gsignal) {
         const def_end = start+that.CHUNKSIZE-1;
         const end = that.filesize ? Math.min(def_end, that.filesize-1) : def_end; 
         let xhr = await makeRequest('GET', theURL, start, end, mysignal);
-        //if(!that.filesize) that.filesize = GetFileSize(xhr);
         const newfilesize = GetFileSize(xhr);
-        if(newfilesize !== that.filesize) {
-            console.log('filesize updated from ' + that.filesize + ' to ' + newfilesize);
-            that.filesize = newfilesize;
+		// base case, create a mem object
+		if(!that.memptr) {
+			that.memptr = DrFlac.network_drflac_mem_create(newfilesize, that.CHUNKSIZE);
+		}
+		// filesize changed, reinit mem's buf
+        else if(newfilesize !== that.filesize) {
+            console.log('resizing buf from ' + that.filesize + ' to ' + newfilesize);            
+			if(!DrFlac.network_drflac_mem_realloc_buf(that.memptr, newfilesize)) throw("Failed to realloc mem buf");
         }
-        // bug we don't update memptr when filesize can change
-        if(!that.memptr) that.memptr = DrFlac.network_drflac_mem_create(that.filesize, that.CHUNKSIZE);
+		that.filesize = newfilesize;
         let dataHeap = new Uint8Array(DrFlac.Module.HEAPU8.buffer, DrFlac.network_drflac_mem_bufptr(that.memptr)+start, xhr.response.byteLength);
         dataHeap.set(new Uint8Array(xhr.response));
         DrFlac.network_drflac_mem_add_block(that.memptr, start);  
@@ -288,6 +291,8 @@ Module().then(function(DrFlacMod){
     DrFlac.network_drflac_mem_add_block = DrFlacMod.cwrap('network_drflac_mem_add_block', null, ["number", "number"]);
 
     DrFlac.network_drflac_mem_bufptr = DrFlacMod.cwrap('network_drflac_mem_bufptr', "number", ["number"]);
+	
+	DrFlac.network_drflac_mem_realloc_buf = DrFlacMod.cwrap('network_drflac_mem_realloc_buf', "number", ["number", "number"]);
 
     console.log('NetworkDrFlac is ready!');
     DrFlac.ready = true;

@@ -53,6 +53,14 @@ void *network_drflac_mem_create(const unsigned bufsize, const unsigned blocksize
     return mem;
 }
 
+int network_drflac_mem_realloc_buf(NetworkDrFlacMem *pMem, const unsigned bufsize)
+{
+	void *newbuf = realloc(pMem->buf, bufsize);
+	if(newbuf == NULL) return 0;
+	pMem->buf = newbuf;
+    return 1;	
+}
+
 void network_drflac_mem_free(NetworkDrFlacMem *pMem)
 {
     for(memrange *block = pMem->block; block != NULL;)
