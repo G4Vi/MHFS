@@ -113,6 +113,11 @@ const NetworkDrFlac = async function(theURL, deschannels, gsignal) {
     let that = {};
     that.CHUNKSIZE = 262144;
     that.desiredchannels = deschannels;
+    that.ptr = DrFlac.network_drflac_open(that.CHUNKSIZE);
+    if(!that.ptr)
+    {
+        throw("failed network_drflac_open");
+    }
 
     that.downloadChunk = async function(start, mysignal) {
         if(start % that.CHUNKSIZE)
@@ -122,20 +127,13 @@ const NetworkDrFlac = async function(theURL, deschannels, gsignal) {
         const def_end = start+that.CHUNKSIZE-1;
         const end = that.filesize ? Math.min(def_end, that.filesize-1) : def_end; 
         let xhr = await makeRequest('GET', theURL, start, end, mysignal);
-        const newfilesize = GetFileSize(xhr);
-		// base case, create a mem object
-		if(!that.memptr) {
-			that.memptr = DrFlac.network_drflac_mem_create(newfilesize, that.CHUNKSIZE);
-		}
-		// filesize changed, reinit mem's buf
-        else if(newfilesize !== that.filesize) {
-            console.log('resizing buf from ' + that.filesize + ' to ' + newfilesize);            
-			if(!DrFlac.network_drflac_mem_realloc_buf(that.memptr, newfilesize)) throw("Failed to realloc mem buf");
-        }
-		that.filesize = newfilesize;
-        let dataHeap = new Uint8Array(DrFlac.Module.HEAPU8.buffer, DrFlac.network_drflac_mem_bufptr(that.memptr)+start, xhr.response.byteLength);
-        dataHeap.set(new Uint8Array(xhr.response));
-        DrFlac.network_drflac_mem_add_block(that.memptr, start);  
+        that.filesize = GetFileSize(xhr);
+        if(!DrFlac.network_drflac_add_block(that.ptr, start, that.filesize))
+        {
+            throw("failed DrFlac.network_drflac_add_block");
+        }		 
+        let dataHeap = new Uint8Array(DrFlac.Module.HEAPU8.buffer, DrFlac.network_drflac_bufptr(that.ptr)+start, xhr.response.byteLength);
+        dataHeap.set(new Uint8Array(xhr.response));         
         return xhr.response.byteLength;
     };
 
@@ -149,17 +147,13 @@ const NetworkDrFlac = async function(theURL, deschannels, gsignal) {
         if(that.ptr){
             DrFlac.network_drflac_close(that.ptr);
             that.ptr = null;
-        }        
-        if(that.memptr) {
-            DrFlac.network_drflac_mem_free(that.memptr);
-            that.memptr = null;
-        }            
+        }                    
     };
 
     that.read_pcm_frames_to_AudioBuffer_f32_mem = async function(start, count, mysignal, audiocontext) {
         const f32_size = 4;
         const pcm_float_frame_size = f32_size * that.channels;
-
+        
         while(1) {       
               
         // attempt to decode the samples
@@ -175,16 +169,7 @@ const NetworkDrFlac = async function(theURL, deschannels, gsignal) {
                 throw("network_drflac_read_pcm_frames_f32_mem failed");
             }
             // download more data
-            await that.downloadChunk(err.extradata, mysignal);
-
-            // reopen drflac
-            DrFlac.network_drflac_close(that.ptr);
-            let err_ptr = DrFlac.network_drflac_create_error();            
-            that.ptr = DrFlac.network_drflac_open_mem(that.filesize, that.memptr, err_ptr);
-            that.freeError(err_ptr);            
-            if(!that.ptr) {
-                throw("Failed network_drflac_open");
-            }
+            await that.downloadChunk(err.extradata, mysignal);            
             continue;
         }
         
@@ -228,16 +213,17 @@ const NetworkDrFlac = async function(theURL, deschannels, gsignal) {
         }
 
         let err_ptr = DrFlac.network_drflac_create_error();
-        that.ptr = DrFlac.network_drflac_open_mem(that.filesize, that.memptr, err_ptr);
+        DrFlac.network_drflac_read_pcm_frames_f32_mem(that.ptr, 0, 0, 0, err_ptr);  
         const err = that.freeError(err_ptr);
-        start = err.extradata;        
-        if(that.ptr) {            
+        if(err.code === NDRFLAC_SUCCESS)
+        {
             break;
         }
-        else if(err.code !== NDRFLAC_MEM_NEED_MORE){
+        if(err.code !== NDRFLAC_MEM_NEED_MORE){
             that.close();
-            throw("Failed network_drflac_open");
-        }        
+            throw("Failed opening drflac");
+        }
+        start = err.extradata;              
     }
        
 
@@ -268,13 +254,7 @@ Module().then(function(DrFlacMod){
 
     DrFlac.network_drflac_bitsPerSample = DrFlacMod.cwrap('network_drflac_bitsPerSample', "number", ["number"]);
 
-    DrFlac.network_drflac_channels = DrFlacMod.cwrap('network_drflac_channels', "number", ["number"]);   
-
-    DrFlac.network_drflac_close = DrFlacMod.cwrap('network_drflac_close', null, ["number"]);    
-
-    DrFlac.network_drflac_open_mem = DrFlacMod.cwrap('network_drflac_open_mem', "number", ["number", "number", "number"]);
-
-    DrFlac.network_drflac_read_pcm_frames_f32_mem = DrFlacMod.cwrap('network_drflac_read_pcm_frames_f32_mem', "number", ["number", "number", "number", "number", "number"]);
+    DrFlac.network_drflac_channels = DrFlacMod.cwrap('network_drflac_channels', "number", ["number"]);      
 
     DrFlac.network_drflac_create_error = DrFlacMod.cwrap('network_drflac_create_error', "number");
 
@@ -283,16 +263,16 @@ Module().then(function(DrFlacMod){
     DrFlac.network_drflac_error_code = DrFlacMod.cwrap('network_drflac_error_code', "number", ["number"]);
     
     DrFlac.network_drflac_extra_data = DrFlacMod.cwrap('network_drflac_extra_data', "number", ["number"]);
+    
+    DrFlac.network_drflac_open = DrFlacMod.cwrap('network_drflac_open', "number", ["number"]);
 
-    DrFlac.network_drflac_mem_create = DrFlacMod.cwrap('network_drflac_mem_create', "number", ["number", "number"]);
+    DrFlac.network_drflac_close = DrFlacMod.cwrap('network_drflac_close', null, ["number"]);
 
-    DrFlac.network_drflac_mem_free = DrFlacMod.cwrap('network_drflac_mem_free', null, ["number"]);
+    DrFlac.network_drflac_add_block = DrFlacMod.cwrap('network_drflac_add_block', "number", ["number", "number", "number"]);
 
-    DrFlac.network_drflac_mem_add_block = DrFlacMod.cwrap('network_drflac_mem_add_block', null, ["number", "number"]);
+    DrFlac.network_drflac_bufptr = DrFlacMod.cwrap('network_drflac_bufptr', "number", ["number"]);
 
-    DrFlac.network_drflac_mem_bufptr = DrFlacMod.cwrap('network_drflac_mem_bufptr', "number", ["number"]);
-	
-	DrFlac.network_drflac_mem_realloc_buf = DrFlacMod.cwrap('network_drflac_mem_realloc_buf', "number", ["number", "number"]);
+    DrFlac.network_drflac_read_pcm_frames_f32_mem = DrFlacMod.cwrap('network_drflac_read_pcm_frames_f32_mem', "number", ["number", "number", "number", "number", "number"]);
 
     console.log('NetworkDrFlac is ready!');
     DrFlac.ready = true;
