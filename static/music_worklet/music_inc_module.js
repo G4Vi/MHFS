@@ -206,8 +206,9 @@ const ProcessTimes = function(aqitem, time) {
     if(aqitem.isStart) {
         InitPPText();        
         aqitem.timers.push(
-        {'time': time, 'aqindex': aqitem.aqindex, 'func': function() {                                    
-            aqitem.pbtrack.starttime = time - (aqitem.frameindex / MHFSPLAYER.ac.sampleRate);
+        {'time': time, 'aqindex': aqitem.aqindex, 'func': function() {         
+            // frameindex is actually in decoder units                          
+            aqitem.pbtrack.starttime = time - (aqitem.frameindex / MHFSPLAYER.NWDRFLAC.sampleRate);
             seekbar.min = 0;
             seekbar.max = aqitem.track.duration;
             SetEndtimeText(aqitem.track.duration);
@@ -613,8 +614,9 @@ TRACKLOOP:while(1) {
                 unlock();
                 return;
             }
+        }
+        // Update the resampler info
 
-        }        
     }
     unlock();
 }

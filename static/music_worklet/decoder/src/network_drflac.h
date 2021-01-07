@@ -3,6 +3,7 @@
 typedef struct _NetworkDrFlacMem NetworkDrFlacMem;
 typedef float float32_t;
 
+
 typedef enum {
     NDRFLAC_SUCCESS = 0,
     NDRFLAC_GENERIC_ERROR = 1,
@@ -16,11 +17,18 @@ typedef struct {
 } NetworkDrFlac_Error;
 
 typedef struct {
+    bool initialized;
+    unsigned char album[256];
+    unsigned char trackno[8];
+} NetworkDrFlacMeta;
+
+typedef struct {
     unsigned fileoffset;
     unsigned filesize;
     drflac *pFlac;   
     NetworkDrFlac_Error *error;
-    NetworkDrFlacMem *pMem;   
+    NetworkDrFlacMem *pMem;
+    NetworkDrFlacMeta meta;   
 } NetworkDrFlac;
 
 #ifdef __EMSCRIPTEN__

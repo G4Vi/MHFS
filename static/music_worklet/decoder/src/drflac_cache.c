@@ -6,6 +6,7 @@
 #include "dr_flac.h"
 
 #ifdef NETWORK_DR_FLAC_FORCE_REDBOOK
+    #define MA_NO_WAV
     #define MINIAUDIO_IMPLEMENTATION
     #include "miniaudio.h"
 #endif
@@ -22,6 +23,15 @@ struct _NetworkDrFlacMem {
     unsigned blocksize;
     memrange *block;
 };
+
+/*
+struct _NetworkDrFlacResampleData {
+    ma_resampler_config config;
+    ma_resampler resampler;
+    unsigned char album[256];
+    unsigned char trackno[8];       
+};
+*/
 
 #define NDRFLAC_OK(xndrflac) ((xndrflac)->error->code == NDRFLAC_SUCCESS)
 
@@ -93,7 +103,54 @@ static drflac_bool32 on_seek_mem(void* pUserData, int offset, drflac_seek_origin
     return DRFLAC_TRUE;
 }
 
+static const unsigned char *vorbis_comment_get_kv_match(const unsigned char *commentstr,  const char *keyname)
+{
+    const unsigned keylen = strlen(keyname);
+    if(memcmp(commentstr, keyname, keylen) != 0) return NULL;
+    if(commentstr[keylen] != '=') return NULL;
+    return &commentstr[keylen+1];   
+}
 
+static void on_meta(void *pUserData, drflac_metadata *pMetadata)
+{
+    if(pMetadata->type != DRFLAC_METADATA_BLOCK_TYPE_VORBIS_COMMENT) return;
+    NetworkDrFlac *ndrflac = (NetworkDrFlac *)pUserData;  
+
+    const unsigned char *comments = (unsigned char *)pMetadata->data.vorbis_comment.pComments;
+    unsigned char *commentstr = malloc(128);
+    for(unsigned i = 0; i < pMetadata->data.vorbis_comment.commentCount; i++)
+    {
+        const unsigned commentsize = *(uint32_t*)comments;
+        comments += 4;
+        if(commentsize >= sizeof(commentstr))
+        {
+            commentstr = realloc(commentstr, commentsize+1);
+        }
+        memcpy(commentstr, comments, commentsize);
+        comments += commentsize;
+        commentstr[commentsize] = '\0';
+        printf("commentstr %s\n", commentstr);
+        do
+        {
+            const unsigned char *value = vorbis_comment_get_kv_match(commentstr, "ALBUM");
+            if(value != NULL)
+            {
+                snprintf((char*)(ndrflac->meta.album), sizeof(ndrflac->meta.album), "%s", value);
+                printf("album %s\n", ndrflac->meta.album);                
+                break;
+            }
+            value = vorbis_comment_get_kv_match(commentstr, "TRACKNUMBER");
+            if(value != NULL)
+            {
+                snprintf((char*)(ndrflac->meta.trackno), sizeof(ndrflac->meta.trackno), "%s", value);
+                printf("track no %s\n", ndrflac->meta.trackno);
+                break;
+            }
+        }
+        while(0);
+    }
+    free(commentstr);
+}
 
 static bool has_necessary_blocks(NetworkDrFlac *ndrflac, const size_t bytesToRead)
 {    
@@ -242,6 +299,9 @@ NetworkDrFlac *network_drflac_open(const unsigned blocksize)
     ndrflac->pFlac = NULL;    
     ndrflac->pMem = mem;
     ndrflac->filesize = 0;
+    ndrflac->meta.initialized = false;
+    ndrflac->meta.album[0] = '\0';
+    ndrflac->meta.trackno[0] = '\0';
     return ndrflac;
 }
 
@@ -292,8 +352,16 @@ uint64_t network_drflac_read_pcm_frames_f32_mem(NetworkDrFlac *ndrflac, uint32_t
     {
         ndrflac->fileoffset = 0;
 
-        // finally open the file
-        ndrflac->pFlac = drflac_open(&on_read_mem, &on_seek_mem, ndrflac, NULL);
+        // finally open the file 
+        if(!ndrflac->meta.initialized)
+        {
+            ndrflac->pFlac = drflac_open_with_metadata(&on_read_mem, &on_seek_mem, &on_meta, ndrflac, NULL);
+        }
+        else
+        {
+            ndrflac->pFlac = drflac_open(&on_read_mem, &on_seek_mem, ndrflac, NULL);
+        }
+        
         if((ndrflac->pFlac == NULL) || (!NDRFLAC_OK(ndrflac)))
         {
             if(!NDRFLAC_OK(ndrflac))
@@ -309,11 +377,18 @@ uint64_t network_drflac_read_pcm_frames_f32_mem(NetworkDrFlac *ndrflac, uint32_t
         }
         else
         {
-            printf("network_drflac: opened successfully\n");                      
+            printf("network_drflac: opened successfully\n");
+            ndrflac->meta.initialized = true;                      
         }
     }    
 
-    drflac *pFlac = ndrflac->pFlac;       
+    drflac *pFlac = ndrflac->pFlac; 
+    /*if(start_pcm_frame >= 5)
+    {
+        start_pcm_frame -= 5;
+        desired_pcm_frames += 5;
+    }      
+    */
 
     // seek to sample 
     printf("seek to %u\n", start_pcm_frame);
@@ -337,16 +412,7 @@ uint64_t network_drflac_read_pcm_frames_f32_mem(NetworkDrFlac *ndrflac, uint32_t
         return 0;
     }   
 
-    #ifdef NETWORK_DR_FLAC_FORCE_REDBOOK
-    // decode to pcm INCORRECT
-    const uint32_t og_desired_pcm_frames = desired_pcm_frames;
-    if(pFlac->sampleRate != 44100)
-    {
-        desired_pcm_frames += 5;
-    }
-    #endif
-
-
+    // decode to pcm
     float32_t *data = malloc(pFlac->channels*sizeof(float32_t)*desired_pcm_frames);
     uint32_t frames_decoded = drflac_read_pcm_frames_f32(pFlac, desired_pcm_frames, data);
     if(frames_decoded != desired_pcm_frames)
@@ -368,23 +434,32 @@ uint64_t network_drflac_read_pcm_frames_f32_mem(NetworkDrFlac *ndrflac, uint32_t
         goto network_drflac_read_pcm_frames_f32_mem_FAIL;
     }
 
-    void *dataToFree = data;
     #ifdef NETWORK_DR_FLAC_FORCE_REDBOOK
     // resample
     if(pFlac->sampleRate != 44100)
     {
         printf("Converting samplerate from %u to %u\n", pFlac->sampleRate, 44100);
-        
-        
-        ma_resampler_config config = ma_resampler_config_init(ma_format_f32, pFlac->channels, pFlac->sampleRate,  44100, ma_resample_algorithm_linear);
-        ma_resampler resampler;
-        ma_result result = ma_resampler_init(&config, &resampler);
-        uint32_t inlat = ma_resampler_get_input_latency(&resampler);
-        printf("Input latency %u\n", inlat);
-        uint32_t outlat = ma_resampler_get_output_latency(&resampler);
-        printf("output latency %u\n", outlat);
+
+        // create the resampler
+        static int initialized = 0;
+        static  ma_resampler_config config;
+        static  ma_resampler resampler;
+        if(!initialized)
+        {
+            initialized = 1;
+            config = ma_resampler_config_init(ma_format_f32, pFlac->channels, pFlac->sampleRate,  44100, ma_resample_algorithm_linear);
+            ma_resampler_init(&config, &resampler);
+            uint32_t inlat = ma_resampler_get_input_latency(&resampler);
+            printf("Input latency %u\n", inlat);
+            uint32_t outlat = ma_resampler_get_output_latency(&resampler);
+            printf("output latency %u\n", outlat);
+        }
+        // resample
         ma_uint64 frameCountIn  = frames_decoded;
         ma_uint64 frameCountOut = ma_resampler_get_expected_output_frame_count(&resampler, frameCountIn);
+        uint32_t fin = frameCountIn;
+        uint32_t fcount = frameCountOut;
+        printf("framecountin %u framecountout %u\n", fin, fcount);
         float32_t *pFramesOut = malloc(frameCountOut*pFlac->channels*sizeof(float32_t));
         ma_result result_process = ma_resampler_process_pcm_frames(&resampler, data, &frameCountIn, pFramesOut, &frameCountOut);
         free(data);
@@ -393,12 +468,8 @@ uint64_t network_drflac_read_pcm_frames_f32_mem(NetworkDrFlac *ndrflac, uint32_t
             printf("network_drflac_read_pcm_frames_f32_mem: failed read_pcm_frames_f32 resample\n");
             goto network_drflac_read_pcm_frames_f32_mem_FAIL;
         }
-        data = pFramesOut;
-        frames_decoded = frameCountOut;
-        
-        // INCORRECT        
-        data += 6;
-        frames_decoded -= 3;
+        data = pFramesOut;        
+        frames_decoded = frameCountOut;                
     }
     #endif
 
@@ -412,9 +483,9 @@ uint64_t network_drflac_read_pcm_frames_f32_mem(NetworkDrFlac *ndrflac, uint32_t
             outFloat[chanIndex+i] = sample;
         }
     }
-    printf("returning from start_pcm_frame: %u frames_decoded %u data %p\n", start_pcm_frame, frames_decoded, data);
-    free(dataToFree);
+    free(data);
 
+    printf("returning from start_pcm_frame: %u frames_decoded %u\n", start_pcm_frame, frames_decoded);   
     // return number of samples   
     return frames_decoded;
 
