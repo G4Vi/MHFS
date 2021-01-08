@@ -445,26 +445,51 @@ const PumpAudioQueue = async function() {
 }
 
 /*
+
+function IndexRingBuffer(size) {
+    let that = {};
+    that.subbufferSizeInBytes.size = size;
+    that.buffer = new SharedArrayBuffer(size);
+    const indexes = new SharedArrayBuffer(8);
+    writeindex =
+    readindex =
+
+    return that;
+}
+
+const audioui()
+{
+    // run timers
+    // delete aqmeta
+    Sleep(16);
+}
+
 const AudioLoop = async function() {
 while(1) {    
     let audiospace;
-    let GDECODING;
-    
-    // run timers
-    // delete aqmeta
-     
-    
+   
     // start filling the buffer if there's room or we aren't already filling it
     if(audiospace >= MHFSPLAYER.ac.sampleRate) {
-        if(!GDECODING) {
-            GDECODING = 1;
-            //start async decode       
-        }        
+        await abortable_read_pcm_frames
+        queueaudio               
     }
     
     //abortablesleep min AudioLoop audiospace or 20    
 }    
 };
+
+// DO IN WORKER 1
+
+WHILE(1) {
+    decode
+    share with worker2
+    sleep
+}
+
+// DO IN WORKER 2
+on_datacallback(pOutput, frameCount) {
+    read_pcm_frames(pOutput));
+}
 */
 
 const AQDecTime = function() {
