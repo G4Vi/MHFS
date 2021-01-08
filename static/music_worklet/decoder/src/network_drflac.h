@@ -14,7 +14,7 @@ typedef enum {
 typedef struct {
     NetworkDrFlac_Err_Vals code;
     uint32_t extradata;
-} NetworkDrFlac_Error;
+} NetworkDrFlac_LastData;
 
 typedef struct {
     bool initialized;
@@ -26,7 +26,7 @@ typedef struct {
     unsigned fileoffset;
     unsigned filesize;
     drflac *pFlac;   
-    NetworkDrFlac_Error *error;
+    NetworkDrFlac_LastData lastdata;
     NetworkDrFlacMem *pMem;
     NetworkDrFlacMeta meta;   
 } NetworkDrFlac;
@@ -38,10 +38,8 @@ typedef struct {
 #define LIBEXPORT
 #endif
 
-LIBEXPORT NetworkDrFlac_Error *network_drflac_create_error(void);
-LIBEXPORT void network_drflac_free_error(NetworkDrFlac_Error *ndrerr);
-LIBEXPORT uint32_t network_drflac_error_code(const NetworkDrFlac_Error *ndrerr);
-LIBEXPORT uint32_t network_drflac_extra_data(const NetworkDrFlac_Error *ndrerr);
+LIBEXPORT uint32_t network_drflac_lastdata_code(const NetworkDrFlac *ndrflac);
+LIBEXPORT uint32_t network_drflac_lastdata_extradata(const NetworkDrFlac *ndrflac);
 LIBEXPORT uint64_t network_drflac_totalPCMFrameCount(const NetworkDrFlac *ndrflac);
 LIBEXPORT uint32_t network_drflac_sampleRate(const NetworkDrFlac *ndrflac);
 LIBEXPORT uint8_t network_drflac_bitsPerSample(const NetworkDrFlac *ndrflac);
@@ -50,4 +48,4 @@ LIBEXPORT NetworkDrFlac *network_drflac_open(const unsigned blocksize);
 LIBEXPORT void network_drflac_close(NetworkDrFlac *ndrflac);
 LIBEXPORT int network_drflac_add_block(NetworkDrFlac *ndrflac, const uint32_t block_start, const unsigned filesize);
 LIBEXPORT void *network_drflac_bufptr(const NetworkDrFlac *ndrflac);
-LIBEXPORT uint64_t network_drflac_read_pcm_frames_f32_mem(NetworkDrFlac *ndrflac, uint32_t start_pcm_frame, uint32_t desired_pcm_frames, float32_t *outFloat, NetworkDrFlac_Error *error);
+LIBEXPORT uint64_t network_drflac_read_pcm_frames_f32_mem(NetworkDrFlac *ndrflac, uint32_t start_pcm_frame, uint32_t desired_pcm_frames, float32_t *outFloat);

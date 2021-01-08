@@ -208,7 +208,7 @@ const ProcessTimes = function(aqitem, time) {
         aqitem.timers.push(
         {'time': time, 'aqindex': aqitem.aqindex, 'func': function() {         
             // frameindex is actually in decoder units                          
-            aqitem.pbtrack.starttime = time - (aqitem.frameindex / MHFSPLAYER.NWDRFLAC.sampleRate);
+            aqitem.pbtrack.starttime = time - (aqitem.frameindex / aqitem.track.sampleRate);
             seekbar.min = 0;
             seekbar.max = aqitem.track.duration;
             SetEndtimeText(aqitem.track.duration);
@@ -443,6 +443,29 @@ const PumpAudioQueue = async function() {
         item.buffer = null;  
     }
 }
+
+/*
+const AudioLoop = async function() {
+while(1) {    
+    let audiospace;
+    let GDECODING;
+    
+    // run timers
+    // delete aqmeta
+     
+    
+    // start filling the buffer if there's room or we aren't already filling it
+    if(audiospace >= MHFSPLAYER.ac.sampleRate) {
+        if(!GDECODING) {
+            GDECODING = 1;
+            //start async decode       
+        }        
+    }
+    
+    //abortablesleep min AudioLoop audiospace or 20    
+}    
+};
+*/
 
 const AQDecTime = function() {
     let total = 0
