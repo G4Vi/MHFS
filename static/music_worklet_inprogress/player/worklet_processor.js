@@ -19,6 +19,7 @@ class MusicProcessor extends AudioWorkletProcessor {
         return true;
       }
       
+      const starttime = currentTime;
 
        // possibly adjust the readindex
       this._audioreader.processmessages();
@@ -28,7 +29,11 @@ class MusicProcessor extends AudioWorkletProcessor {
       let cnt = this._audioreader.read(outputs[0]); 
       if(cnt < 128) {
         console.error('XRUN');
-      }    
+      }
+      const endtime =   currentTime;
+      if((endtime - starttime) > 0.002) {
+        console.error('XRUN 2');
+      }
       return true
     }
   }

@@ -144,8 +144,9 @@ class RingBufferWriter {
         this._rb._AssertSameArrayCount(arrs);       
         
         const count = arrs[0].length;
-        if(count > this._rb.getspace()) {
-            throw("Tried to write too much data");            
+        const space = this._rb.getspace();
+        if(count > space) {
+            throw("Tried to write too much data, count " + count + " space " + space);            
         }
 
         let writeindex = this._rb._writeindex();

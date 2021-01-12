@@ -37,7 +37,7 @@ const MHFSPlayer = async function(opt) {
     that.GainNode = that.ac.createGain();
     that.GainNode.connect(that.ac.destination);
     // create ring buffers
-    that.ARBLen  = that.ac.sampleRate * 20;
+    that.ARBLen  = that.ac.sampleRate * 2;
     if (!self.SharedArrayBuffer) {
         console.error('SharedArrayBuffer is not supported in browser');
     }
@@ -50,7 +50,8 @@ const MHFSPlayer = async function(opt) {
     MusicNode.port.postMessage({'message' : 'init', 'audiobuffer' : that._ab.to()});     
 
     // TEMP
-    that.NetworkDrFlac = NetworkDrFlac;
+    that.NetworkDrFlac = NetworkDrFlac;    
+
     that.Tracks_HEAD;
     that.Tracks_TAIL;
     that.Tracks_QueueCurrent;
@@ -59,6 +60,59 @@ const MHFSPlayer = async function(opt) {
     that.NWDRFLAC;
     that.AudioQueue = [];
     that.FAQ_MUTEX = new Mutex();
+
+    that.OpenNetworkDrFlac = async function(theURL, deschannels, gsignal) {
+        do {
+            if(!that.NWDRFLAC) break;
+            if(that.NWDRFLAC.url !== theURL) {
+                await that.NWDRFLAC.close();
+                that.NWDRFLAC = null;
+                break;
+            } 
+            return that.NWDRFLAC;
+        } while(0);        
+        
+        if(gsignal.aborted) {
+            throw("abort after closing NWDRFLAC");
+        }
+        const nwdrflac = await NetworkDrFlac(theURL, deschannels, gsignal);
+        if(gsignal.aborted) {
+            console.log('');
+            await nwdrflac.close();
+            throw("abbort after open NWDRFLAC success");
+        }
+        that.NWDRFLAC = nwdrflac;         
+    };
+
+    that.ReadPcmFramesToAudioBuffer = async function(dectime, todec, mysignal, audiocontext) {
+        let buffer;
+        for(let tries = 0; tries < 2; tries++) {
+            try {
+                buffer = await that.NWDRFLAC.read_pcm_frames_to_AudioBuffer(dectime, todec, mysignal, that.ac);
+                if(mysignal.aborted) {
+                    throw('aborted decodeaudiodata success');                    
+                }
+                return buffer;                                          
+            }
+            catch(error) {
+                console.error(error);
+                if(mysignal.aborted) {
+                    throw('aborted read_pcm_frames decodeaudiodata catch');                    
+                }                   
+                
+                if(tries === 2) {
+                    break;
+                }        
+
+                // probably a network error, sleep before retry
+                if(!(await abortablesleep_status(2000, mysignal)))
+                {
+                    throw('aborted sleep');  
+                }               
+            }
+        }
+        throw('read_pcm_frames decodeaudiodata failed');
+    };
 
     // END TEMP
 
