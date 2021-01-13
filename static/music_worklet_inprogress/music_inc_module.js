@@ -79,53 +79,19 @@ function _QueueTrack(trackname, after, before) {
        MHFSPLAYER.Tracks_HEAD = track;        
     }
 
-    // update text
-    /*let tocheck = (MHFSPLAYER.AudioQueue[0]) ? MHFSPLAYER.AudioQueue[0].track : MHFSPLAYER.Tracks_QueueCurrent;
-    // if there's no current track, we are setting it. the prev and next track could have just changed
-    if(!tocheck) {
-        SetPrevText(track.prev ?  track.prev.trackname : '');
-        SetPlayText(track.trackname);
-        SetNextText(track.next ? track.next.trackname : '')
-    }
-    else if (tocheck.next === track) {
-        SetNextText(track.trackname);
-    }
-    // probably impossible
-    else if(tocheck.prev === track) {
-        SetPrevText(track.trackname);
-    }*/
 
     
-    onQueueUpdate((MHFSPLAYER.AudioQueue[0] ? MHFSPLAYER.AudioQueue[0].track : MHFSPLAYER.Tracks_QueueCurrent)|| track);
+    //onQueueUpdate((MHFSPLAYER.AudioQueue[0] ? MHFSPLAYER.AudioQueue[0].track : MHFSPLAYER.Tracks_QueueCurrent)|| track);
     
     // if nothing is being queued, start the queue
     if(!MHFSPLAYER.Tracks_QueueCurrent){
         MHFSPLAYER.Tracks_QueueCurrent = track;
         fillAudioQueue(); 
     }
-
-    /*
-    // if nothing is being queued, start the queue
-    let needsText = 1;
-    if(!MHFSPLAYER.Tracks_QueueCurrent) {
-        needsText = MHFSPLAYER.AudioQueue[0] ? 1 : 0;
-        MHFSPLAYER.Tracks_QueueCurrent = track;
-        fillAudioQueue();        
+    else {
+        onQueueUpdate(MHFSPLAYER.AudioQueue[0] ? MHFSPLAYER.AudioQueue[0].track : MHFSPLAYER.Tracks_QueueCurrent);
     }
 
-    if(needsText) {
-        // Update text otherwise
-        let tocheck = (MHFSPLAYER.AudioQueue[0]) ? MHFSPLAYER.AudioQueue[0].track : MHFSPLAYER.Tracks_QueueCurrent;
-        if(tocheck) {
-            if(tocheck.prev === track) {
-                SetPrevText(track.trackname);
-            }
-            else if(tocheck.next === track) {
-                SetNextText(track.trackname);
-            }
-        }            
-    }    
-    */
     return track;
 }
 
@@ -227,6 +193,7 @@ let UpdateTrackTimerID;
 const UpdateTrack = function() {
     clearTimeout(UpdateTrackTimerID);
 
+    // determine if a queue update needs to happen
     let needsStart = 0;
     let toDelete = 0;
     for(let i = 0; i < MHFSPLAYER.AudioQueue.length; i++) {
@@ -238,29 +205,36 @@ const UpdateTrack = function() {
             needsStart = 1;
         }
         if(ended) {
+            needsStart = 0; //invalid previous starts as something later ended
             toDelete++;
         }
     }
-    if(toDelete) {
-        MHFSPLAYER.AudioQueue.splice(0, toDelete);
-    }
+    
+    // perform the queue update
     if(needsStart || toDelete) {
+        let track;
+        if(toDelete) {
+            track = MHFSPLAYER.AudioQueue[toDelete-1].track.next;
+            MHFSPLAYER.AudioQueue.splice(0, toDelete);     
+        }        
         if(!needsStart) {                  
             SetCurtimeText(0);
             SetSeekbarValue(0);
         }
-        const aqitem = MHFSPLAYER.AudioQueue[0];
+        
+        track = MHFSPLAYER.AudioQueue[0] ? MHFSPLAYER.AudioQueue[0].track : track;           
+            
         seekbar.min = 0;
-        seekbar.max = aqitem ? aqitem.track.duration : 0;
-        SetEndtimeText(aqitem ? aqitem.track.duration : 0);
-        SetPlayText(aqitem ? aqitem.track.trackname : '');
-        const prevtrack = aqitem ? aqitem.track.prev : MHFSPLAYER.Tracks_TAIL;
-        SetPrevText(prevtrack ? prevtrack.trackname : '');            
-        SetNextText((aqitem && aqitem.track.next) ? aqitem.track.next.trackname : '');            
+        const duration =  (track && track.duration) ? track.duration : 0;
+        seekbar.max = duration;
+        SetEndtimeText(duration);
+        SetPlayText(track ? track.trackname : '');
+        SetPrevText((track && track.prev) ? track.prev.trackname : '');            
+        SetNextText((track && track.next) ? track.next.trackname : '');            
     }
 
     // always run at least once a minute
-    setTimeout(UpdateTrack, 60000);
+    UpdateTrackTimerID = setTimeout(UpdateTrack, 60000);
 }
 
 const PumpAudioQueue = async function() {
@@ -366,7 +340,7 @@ async function fillAudioQueue(time) {
     
     // starting a fresh queue, render the text
     InitPPText();
-    if(!MHFSPLAYER.AudioQueue[0] && MHFSPLAYER.Tracks_QueueCurrent) {
+    /*if(!MHFSPLAYER.AudioQueue[0] && MHFSPLAYER.Tracks_QueueCurrent) {
         let track = MHFSPLAYER.Tracks_QueueCurrent;
         let prevtext = track.prev ? track.prev.trackname : '';
         SetPrevText(prevtext);
@@ -376,7 +350,7 @@ async function fillAudioQueue(time) {
         SetCurtimeText(time || 0);
         if(!time) SetSeekbarValue(time || 0);
         SetEndtimeText(track.duration || 0);        
-    }
+    }*/
 
     // Stop the previous FAQ before starting
     MHFSPLAYER.FACAbortController.abort();
@@ -393,6 +367,18 @@ async function fillAudioQueue(time) {
     // while there's a track to queue
 TRACKLOOP:for(; MHFSPLAYER.Tracks_QueueCurrent; MHFSPLAYER.Tracks_QueueCurrent = document.getElementById("repeattrack").checked ?  MHFSPLAYER.Tracks_QueueCurrent : MHFSPLAYER.Tracks_QueueCurrent.next) {
         const track = MHFSPLAYER.Tracks_QueueCurrent;
+        // render the text if nothing is queued
+        if(!MHFSPLAYER.AudioQueue[0]) {
+            let track = MHFSPLAYER.Tracks_QueueCurrent;
+            let prevtext = track.prev ? track.prev.trackname : '';
+            SetPrevText(prevtext);
+            SetPlayText(track.trackname + ' {LOADING}');
+            let nexttext =  track.next ? track.next.trackname : '';
+            SetNextText(nexttext);
+            SetCurtimeText(time || 0);
+            if(!time) SetSeekbarValue(time || 0);
+            SetEndtimeText(track.duration || 0);        
+        }
 
         // open the track in the decoder
         try {
@@ -454,7 +440,10 @@ TRACKLOOP:for(; MHFSPLAYER.Tracks_QueueCurrent; MHFSPLAYER.Tracks_QueueCurrent =
                 'frameindex' : dectime,
                 'isEnd' : isEnd
             };
-            pbtrack.buffers.push(struct_buffer);            
+            pbtrack.buffers.push(struct_buffer);
+            if(isEnd) {
+                pbtrack.decoded = 1;
+            }                
             
             dectime += todec;
             // yield in-case it's time to queue
@@ -463,6 +452,12 @@ TRACKLOOP:for(; MHFSPLAYER.Tracks_QueueCurrent; MHFSPLAYER.Tracks_QueueCurrent =
                 break TRACKLOOP;
             }
         }
+        
+        // we failed decoding the track if we get here, remove from queue
+        if(!pbtrack.decoded) {
+            MHFSPLAYER.AudioQueue.length = MHFSPLAYER.AudioQueue.length-1;            
+        }
+        
         // Update the resampler info
 
     }

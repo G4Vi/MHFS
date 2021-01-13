@@ -16,24 +16,24 @@ class MusicProcessor extends AudioWorkletProcessor {
 
     process (inputs, outputs, parameters) {
       if(!this._initialized) {
+        //this._lasttime = currentTime;   
         return true;
       }
       
-      const starttime = currentTime;
+      /*
+      const newtime = currentTime;
+      const delta = newtime - this._lasttime;
+      if(delta > 0.00291) {
+          console.error("ACTUAL XRUN " + delta);
+      }
+      this._lasttime = newtime;
+      */
 
        // possibly adjust the readindex
       this._audioreader.processmessages();
-
       
       // fill the buffer with audio
-      let cnt = this._audioreader.read(outputs[0]); 
-      if(cnt < 128) {
-        console.error('XRUN');
-      }
-      const endtime =   currentTime;
-      if((endtime - starttime) > 0.002) {
-        console.error('XRUN 2');
-      }
+      this._audioreader.read(outputs[0]);            
       return true
     }
   }

@@ -32,7 +32,7 @@ const MHFSPlayer = async function(opt) {
         return mycontext;
     };
     // create AC
-    that.ac = that._createaudiocontext({'sampleRate' : opt.sampleRate}); 
+    that.ac = that._createaudiocontext({'sampleRate' : opt.sampleRatelatencyHint, 'latencyHint' : 0.1}); 
     // connect GainNode  
     that.GainNode = that.ac.createGain();
     that.GainNode.connect(that.ac.destination);
