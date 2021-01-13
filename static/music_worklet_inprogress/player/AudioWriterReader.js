@@ -175,10 +175,35 @@ class RingBufferWriter {
         // commit that more data is available to read
         this._setwriteindex(writeindex);       
     }
+
+    /*
+    write_from_rb_reader(srcrb, count) {
+        const srccount = srcrb.getcount();
+        if(srccount <= count) throw("Not enough data to read");
+        const destcount = this._getcount();
+        if(destcount <= count) throw("not enough room to write");
+        if(this._rb._subbuffercount !== src._rb._subbuffercount) throw("different subbuffer count between dest and src");
+        
+        // copy the first half
+        let destwi = this._rb._writeindex();
+        const writeleft = this._rb._size - destwi;
+        const canwrite = Math.min(count, writeleft);
+        src.read(this._rb._buffer, canwrite, destwi);       
+        count -= canwrite;
+        destwi = (destwi+canwrite) % this._rb._size;
+    
+        // copy the second half if needed
+        if(count > 0) {            
+            destwi = 0;
+            src.read(this._rb._buffer, count, destwi);
+            destwi += count;
+        }              
+       
+        // commit that more data is available to read
+        this._setwriteindex(destwi); 
+    }
+    */
 }
-
-
-
 
 class Float32AudioRingBuffer {       
     

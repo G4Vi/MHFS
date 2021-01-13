@@ -175,12 +175,9 @@ const ProcessTimes = function(aqitem, struct_buffer, time) {
     if(!aqitem.starttime || (MHFSPLAYER.ac.currentTime > aqitem.endTime)) {
         aqitem.starttime = time - (struct_buffer.frameindex / aqitem.track.sampleRate);                
         aqitem._starttime = time;
+        aqitem.needsstart = 1;
     }
-    const endTime = time + (struct_buffer.preciseLength/MHFSPLAYER.ac.sampleRate);
-    aqitem.endTime = endTime;
-    if(struct_buffer.isEnd){
-        aqitem._endtime = endTime;
-    }
+    aqitem.endTime = time + (struct_buffer.buffer.length/MHFSPLAYER.ac.sampleRate);    
 }
 
 const StopAudio = function() {
@@ -198,16 +195,20 @@ const UpdateTrack = function() {
     let toDelete = 0;
     for(let i = 0; i < MHFSPLAYER.AudioQueue.length; i++) {
         const aqitem = MHFSPLAYER.AudioQueue[i];
-        const started =  aqitem._starttime && (aqitem._starttime <= MHFSPLAYER.ac.currentTime);
-        const ended = aqitem._endtime && (aqitem._endtime <= MHFSPLAYER.ac.currentTime);
-        if(started) {
-            aqitem._starttime = null;
-            needsStart = 1;
+        // mark track as started 
+        if(aqitem.needsstart && (aqitem._starttime <= MHFSPLAYER.ac.currentTime)) {
+            aqitem.needsstart = 0;
+            needsStart = 1;            
         }
-        if(ended) {
-            needsStart = 0; //invalid previous starts as something later ended
-            toDelete++;
-        }
+
+        // mark ended track
+        if(aqitem.queued) {
+            // if there's no endtime or has passed
+            if((!aqitem.endTime) || (aqitem.endTime <= MHFSPLAYER.ac.currentTime)) {
+                needsStart = 0; //invalidate previous starts as something later ended
+                toDelete++;
+            }
+        }        
     }
     
     // perform the queue update
@@ -253,7 +254,7 @@ const PumpAudioQueue = async function() {
             let bufferedTime = MHFSPLAYER._ab.gettime();
             const mindelta = 0.1; // 100ms
             const bufferdelta = (mindelta - bufferedTime);
-            const neededspace = (bufferdelta > 0) ? bufferdelta + item.buffers[0].preciseLength : item.buffers[0].preciseLength;
+            const neededspace = (bufferdelta > 0) ? bufferdelta + item.buffers[0].buffer.length : item.buffers[0].buffer.length;
             if(neededspace > space) {
                 sleeptime = Math.min(sleeptime, (neededspace-space)/MHFSPLAYER.ac.sampleRate);
                 break;
@@ -274,11 +275,12 @@ const PumpAudioQueue = async function() {
             let buffer = item.buffers.shift();
             let data = [];
             for(let i = 0; i < buffer.buffer.numberOfChannels; i++) {
+                // this sucks we are creating a new float32 array
                 data[i] = buffer.buffer.getChannelData(i);
             }        
             MHFSPLAYER._ab.write(data);             
             ProcessTimes(item, buffer, bufferedTime + MHFSPLAYER.ac.currentTime);
-            item.queued = buffer.isEnd;
+            item.queued = item.donedecode && (item.buffers.length === 0);
         } while(0);
 
         const mysignal = MHFSPLAYER.FACAbortController.signal;
@@ -328,7 +330,7 @@ const AQDecTime = function() {
     
     for(let i = 0; i < MHFSPLAYER.AudioQueue.length; i++) {
         for(let j = 0; j < MHFSPLAYER.AudioQueue[i].buffers.length; j++) {
-            dectime += MHFSPLAYER.AudioQueue[i].buffers[j].preciseLength;
+            dectime += MHFSPLAYER.AudioQueue[i].buffers[j].buffer.length;
         }        
     }    
 
@@ -339,18 +341,7 @@ async function fillAudioQueue(time) {
     MHFSPLAYER.ac.resume();  
     
     // starting a fresh queue, render the text
-    InitPPText();
-    /*if(!MHFSPLAYER.AudioQueue[0] && MHFSPLAYER.Tracks_QueueCurrent) {
-        let track = MHFSPLAYER.Tracks_QueueCurrent;
-        let prevtext = track.prev ? track.prev.trackname : '';
-        SetPrevText(prevtext);
-        SetPlayText(track.trackname + ' {LOADING}');
-        let nexttext =  track.next ? track.next.trackname : '';
-        SetNextText(nexttext);
-        SetCurtimeText(time || 0);
-        if(!time) SetSeekbarValue(time || 0);
-        SetEndtimeText(track.duration || 0);        
-    }*/
+    InitPPText();    
 
     // Stop the previous FAQ before starting
     MHFSPLAYER.FACAbortController.abort();
@@ -382,7 +373,7 @@ TRACKLOOP:for(; MHFSPLAYER.Tracks_QueueCurrent; MHFSPLAYER.Tracks_QueueCurrent =
 
         // open the track in the decoder
         try {
-            await MHFSPLAYER.OpenNetworkDrFlac(track.url, DesiredChannels, mysignal);
+            await MHFSPLAYER.OpenNetworkDrFlac(track.url, mysignal);
         }
         catch(error) {
             console.error(error);
@@ -405,6 +396,14 @@ TRACKLOOP:for(; MHFSPLAYER.Tracks_QueueCurrent; MHFSPLAYER.Tracks_QueueCurrent =
         time = 0;
         const maxsamples = (AQMaxDecodedTime * MHFSPLAYER.ac.sampleRate);            
         SAMPLELOOP: while(dectime < MHFSPLAYER.NWDRFLAC.totalPCMFrameCount) {
+            // yield so buffers can be queued
+            if(pbtrack.buffers.length > 0) {
+                if(!(await abortablesleep_status(0, mysignal)))
+                {
+                    break TRACKLOOP;                    
+                }
+            }            
+            
             const todec = Math.min(MHFSPLAYER.NWDRFLAC.sampleRate, MHFSPLAYER.NWDRFLAC.totalPCMFrameCount - dectime);
 
             // wait for there to be space            
@@ -417,9 +416,9 @@ TRACKLOOP:for(; MHFSPLAYER.Tracks_QueueCurrent; MHFSPLAYER.Tracks_QueueCurrent =
             }
             
             // decode
-            let buffer;
+            let audiobuffer;
             try {
-                buffer = await MHFSPLAYER.ReadPcmFramesToAudioBuffer(dectime, todec, mysignal, MHFSPLAYER.ac);
+                audiobuffer = await MHFSPLAYER.ReadPcmFramesToAudioBuffer(dectime, todec, mysignal);
             }
             catch(error) {
                 console.error(error);
@@ -433,33 +432,16 @@ TRACKLOOP:for(; MHFSPLAYER.Tracks_QueueCurrent; MHFSPLAYER.Tracks_QueueCurrent =
             }                       
 
             // add the buffer to the queue item
-            const isEnd = ((dectime+todec) === MHFSPLAYER.NWDRFLAC.totalPCMFrameCount);
             let struct_buffer = {
-                'buffer' : buffer,
-                'preciseLength' : buffer.getChannelData(0).length,
+                'buffer' : audiobuffer,
                 'frameindex' : dectime,
-                'isEnd' : isEnd
             };
-            pbtrack.buffers.push(struct_buffer);
-            if(isEnd) {
-                pbtrack.decoded = 1;
-            }                
+            pbtrack.buffers.push(struct_buffer);                           
             
-            dectime += todec;
-            // yield in-case it's time to queue
-            if(!(await abortablesleep_status(0, mysignal)))
-            {
-                break TRACKLOOP;
-            }
+            dectime += todec;            
         }
-        
-        // we failed decoding the track if we get here, remove from queue
-        if(!pbtrack.decoded) {
-            MHFSPLAYER.AudioQueue.length = MHFSPLAYER.AudioQueue.length-1;            
-        }
-        
-        // Update the resampler info
-
+        pbtrack.donedecode = 1;
+        pbtrack.queued = (pbtrack.buffers.length === 0);
     }
     unlock();
 }

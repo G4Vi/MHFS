@@ -60,8 +60,8 @@ const MHFSPlayer = async function(opt) {
     that.NWDRFLAC;
     that.AudioQueue = [];
     that.FAQ_MUTEX = new Mutex();
-
-    that.OpenNetworkDrFlac = async function(theURL, deschannels, gsignal) {
+    //that.dataconverter = 
+    that.OpenNetworkDrFlac = async function(theURL, gsignal) {
         do {
             if(!that.NWDRFLAC) break;
             if(that.NWDRFLAC.url !== theURL) {
@@ -75,16 +75,20 @@ const MHFSPlayer = async function(opt) {
         if(gsignal.aborted) {
             throw("abort after closing NWDRFLAC");
         }
-        const nwdrflac = await NetworkDrFlac(theURL, deschannels, gsignal);
+        // use ma_data_converter if channels or samplerate is different   
+        const nwdrflac = await NetworkDrFlac(theURL, that.channels, gsignal);
         if(gsignal.aborted) {
             console.log('');
             await nwdrflac.close();
             throw("abbort after open NWDRFLAC success");
         }
-        that.NWDRFLAC = nwdrflac;         
+        that.NWDRFLAC = nwdrflac;
+        // seek
+              
     };
 
-    that.ReadPcmFramesToAudioBuffer = async function(dectime, todec, mysignal, audiocontext) {
+    // read frames
+    that.ReadPcmFramesToAudioBuffer = async function(dectime, todec, mysignal) {
         let buffer;
         for(let tries = 0; tries < 2; tries++) {
             try {
@@ -129,7 +133,7 @@ const MHFSPlayer = async function(opt) {
     };
 
     that.isplaying = function() {
-        return (that.AudioQueue[0] && that.AudioQueue[0].starttime && ((that.ac.currentTime-that.AudioQueue[0].starttime) >= 0) && (that.ac.currentTime <= that.AudioQueue[0].endTime));
+        return (that.AudioQueue[0] && that.AudioQueue[0]._starttime && (that.ac.currentTime >= that.AudioQueue[0]._starttime) && (that.ac.currentTime <= that.AudioQueue[0].endTime));
     };
 
     that.tracktime = function() {
