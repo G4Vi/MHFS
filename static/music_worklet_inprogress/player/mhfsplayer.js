@@ -48,6 +48,56 @@ const abortablesleep_status = async function (ms, signal) {
     return true;
 }
 
+const TrackQueue = function(starttrack, time) {
+    let that = {};
+
+    // store the tail so we don't have to search for it
+    that.tail = starttrack;
+    for(; that.tail.next; that.tail = that.tail.next);
+
+    const waitForTrack = function() {
+        const _waitfortrack = new Promise((resolve) => {
+            that.ontrackadded = resolve;
+        });
+        return _waitfortrack;
+    };
+
+    that._FAQ = async function(track, time) {
+        if(!track) {
+            track = await waitForTrack(); 
+        }       
+    };
+
+    that.push = function(track) {
+        that.tail.next = track;
+        that.tail = track;
+        track.prev = that.tail;
+        // resume FAQ
+        if(that.ontrackadded) {
+            that.ontrackadded(track);
+            that.ontrackadded = null;
+        }                
+    };
+
+    that.stop() = function (){
+
+    };
+
+    that.onrepeattrackturnedon = function() {
+        // determine the currently queuing track
+        // stop decodes after it
+        // delete after it
+    };
+
+    that.onrepeattrackturnedoff = function() {
+        // stop decodes of not AQ[0]
+        // delete after AQ[0]
+    };
+
+    that._FAQ(starttrack, time);
+    return that;
+};
+
 const MHFSPlayer = async function(opt) {
     let that = {};
     that.sampleRate = opt.sampleRate;
@@ -58,7 +108,7 @@ const MHFSPlayer = async function(opt) {
         return mycontext;
     };
     // create AC
-    that.ac = that._createaudiocontext({'sampleRate' : opt.sampleRatelatencyHint, 'latencyHint' : 0.1}); 
+    that.ac = that._createaudiocontext({'sampleRate' : opt.sampleRate, 'latencyHint' : 0.1}); 
     // connect GainNode  
     that.GainNode = that.ac.createGain();
     that.GainNode.connect(that.ac.destination);
@@ -89,7 +139,7 @@ const MHFSPlayer = async function(opt) {
     
     
     //that.dataconverter = 
-    that.OpenNetworkDrFlac = async function(theURL, starttime, gsignal) {
+    that.OpenNetworkDrFlac = async function(theURL, gsignal) {
         
         // get a valid nwdrflac for the track
         let nwdrflac;
@@ -112,13 +162,7 @@ const MHFSPlayer = async function(opt) {
                 await nwdrflac.close();
                 throw("abort after open NWDRFLAC success");
             }           
-        } while(0);        
-        
-        
-       await nwdrflac.seek(Math.floor(starttime * nwdrflac.sampleRate));
-       if(gsignal.aborted) {
-           throw("abort after NWDRFLAC seek");
-       }                    
+        } while(0);                           
         
         that.NWDRFLAC = nwdrflac;              
     };
