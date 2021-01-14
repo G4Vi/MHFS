@@ -22,6 +22,32 @@ class Mutex {
     }
 }
 
+const abortablesleep = (ms, signal) => new Promise(function(resolve) {
+    const onTimerDone = function() {
+        resolve();
+        signal.removeEventListener('abort', stoptimer);
+    };
+    let timer = setTimeout(function() {
+        //console.log('sleep done ' + ms);
+        onTimerDone();
+    }, ms);
+
+    const stoptimer = function() {
+        console.log('aborted sleep');            
+        onTimerDone();
+        clearTimeout(timer);            
+    };
+    signal.addEventListener('abort', stoptimer);
+});
+
+const abortablesleep_status = async function (ms, signal) {
+    await abortablesleep(ms, signal);
+    if(signal.aborted) {
+        return false;
+    }
+    return true;
+}
+
 const MHFSPlayer = async function(opt) {
     let that = {};
     that.sampleRate = opt.sampleRate;
@@ -60,39 +86,49 @@ const MHFSPlayer = async function(opt) {
     that.NWDRFLAC;
     that.AudioQueue = [];
     that.FAQ_MUTEX = new Mutex();
+    
+    
     //that.dataconverter = 
-    that.OpenNetworkDrFlac = async function(theURL, gsignal) {
+    that.OpenNetworkDrFlac = async function(theURL, starttime, gsignal) {
+        
+        // get a valid nwdrflac for the track
+        let nwdrflac;
         do {
-            if(!that.NWDRFLAC) break;
-            if(that.NWDRFLAC.url !== theURL) {
+            if(that.NWDRFLAC) {
+                if(that.NWDRFLAC.url === theURL) {
+                    nwdrflac = that.NWDRFLAC;
+                    that.NWDRFLAC = null;
+                    break;
+                }
                 await that.NWDRFLAC.close();
                 that.NWDRFLAC = null;
-                break;
-            } 
-            return that.NWDRFLAC;
+                if(gsignal.aborted) {
+                    throw("abort after closing NWDRFLAC");
+                }                
+            }
+            nwdrflac = await NetworkDrFlac(theURL, that.channels, gsignal);
+            if(gsignal.aborted) {
+                console.log('');
+                await nwdrflac.close();
+                throw("abort after open NWDRFLAC success");
+            }           
         } while(0);        
         
-        if(gsignal.aborted) {
-            throw("abort after closing NWDRFLAC");
-        }
-        // use ma_data_converter if channels or samplerate is different   
-        const nwdrflac = await NetworkDrFlac(theURL, that.channels, gsignal);
-        if(gsignal.aborted) {
-            console.log('');
-            await nwdrflac.close();
-            throw("abbort after open NWDRFLAC success");
-        }
-        that.NWDRFLAC = nwdrflac;
-        // seek
-              
+        
+       await nwdrflac.seek(Math.floor(starttime * nwdrflac.sampleRate));
+       if(gsignal.aborted) {
+           throw("abort after NWDRFLAC seek");
+       }                    
+        
+        that.NWDRFLAC = nwdrflac;              
     };
 
     // read frames
-    that.ReadPcmFramesToAudioBuffer = async function(dectime, todec, mysignal) {
+    that.ReadPcmFramesToAudioBuffer = async function(todec, mysignal) {
         let buffer;
         for(let tries = 0; tries < 2; tries++) {
             try {
-                buffer = await that.NWDRFLAC.read_pcm_frames_to_AudioBuffer(dectime, todec, mysignal, that.ac);
+                buffer = await that.NWDRFLAC.read_pcm_frames_to_AudioBuffer(todec, mysignal);
                 if(mysignal.aborted) {
                     throw('aborted decodeaudiodata success');                    
                 }

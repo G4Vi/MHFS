@@ -28,7 +28,8 @@ typedef struct {
     drflac *pFlac;   
     NetworkDrFlac_LastData lastdata;
     NetworkDrFlacMem *pMem;
-    NetworkDrFlacMeta meta;   
+    NetworkDrFlacMeta meta;
+    uint32_t currentFrame;    
 } NetworkDrFlac;
 
 #ifdef __EMSCRIPTEN__
@@ -48,4 +49,6 @@ LIBEXPORT NetworkDrFlac *network_drflac_open(const unsigned blocksize);
 LIBEXPORT void network_drflac_close(NetworkDrFlac *ndrflac);
 LIBEXPORT int network_drflac_add_block(NetworkDrFlac *ndrflac, const uint32_t block_start, const unsigned filesize);
 LIBEXPORT void *network_drflac_bufptr(const NetworkDrFlac *ndrflac);
-LIBEXPORT uint64_t network_drflac_read_pcm_frames_f32_mem(NetworkDrFlac *ndrflac, uint32_t start_pcm_frame, uint32_t desired_pcm_frames, float32_t *outFloat);
+LIBEXPORT int network_drflac_seek_to_pcm_frame(NetworkDrFlac *ndrflac, uint32_t pcmFrameIndex);
+LIBEXPORT uint64_t network_drflac_read_pcm_frames_f32(NetworkDrFlac *ndrflac, uint32_t desired_pcm_frames, float32_t *outFloat);
+LIBEXPORT uint64_t network_drflac_currentFrame(NetworkDrFlac *ndrflac);
