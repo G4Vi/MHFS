@@ -100,7 +100,7 @@ const NDRFLAC_SUCCESS = 0;
 const NDRFLAC_GENERIC_ERROR = 1;
 const NDRFLAC_MEM_NEED_MORE = 2;
 
-const NetworkDrFlac = async function(theURL, deschannels, gsignal) {    
+const NetworkDrFlac = async function(theURL, gsignal) {    
     // make sure drflac is ready. Inlined to avoid await when it's already ready
     while(typeof DrFlac === 'undefined') {
         console.log('music_drflac, no drflac sleeping 5ms');
@@ -112,12 +112,8 @@ const NetworkDrFlac = async function(theURL, deschannels, gsignal) {
     }
     let that = {};
     that.CHUNKSIZE = 262144;
-    that.desiredchannels = deschannels;
     that.ptr = DrFlac.network_drflac_open(that.CHUNKSIZE);
-    if(!that.ptr)
-    {
-        throw("failed network_drflac_open");
-    }
+    if(!that.ptr) throw("failed network_drflac_open");    
     
     that.downloadChunk = async function(start, mysignal) {
         if(start % that.CHUNKSIZE)
@@ -148,7 +144,7 @@ const NetworkDrFlac = async function(theURL, deschannels, gsignal) {
         if(!DrFlac.network_drflac_seek_to_pcm_frame(that.ptr, pcmFrameIndex)) throw("Failed to seek to " + pcmFrameIndex);                
     };
 
-    that.read_pcm_frames_to_AudioBuffer_f32 = async function(count, mysignal) {
+    that.read_pcm_frames_to_f32_ptr = async function(count, mysignal) {
         const f32_size = 4;
         const pcm_float_frame_size = f32_size * that.channels;
         
@@ -162,46 +158,20 @@ const NetworkDrFlac = async function(theURL, deschannels, gsignal) {
         if(samples === 0)
         {
             const code = DrFlac.network_drflac_lastdata_code(that.ptr);
+            DrFlac.Module._free(destdata);
+            destdata = 0;
             if(code !== NDRFLAC_SUCCESS) {
-                DrFlac.Module._free(destdata); 
                 if(code !== NDRFLAC_MEM_NEED_MORE) {
                     throw("network_drflac_read_pcm_frames_f32 failed");                    
                 }
                 // download more data. extradata has the offset needed to download
                 await that.downloadChunk(DrFlac.network_drflac_lastdata_extradata(that.ptr), mysignal);            
                 continue;                
-            }
-            return 0;
+            }            
         }        
-        
-        // that.samplerate? this is wrong
-        const audiobuffer = new AudioBuffer({'length' : samples, 'numberOfChannels' : that.desiredchannels, 'sampleRate' : that.sampleRate});
-        const chansize = samples * f32_size;
-        // if the audio is mono, duplicate to all channels
-        if(that.channels === 1) {
-            let buf = new Float32Array(DrFlac.Module.HEAPU8.buffer, destdata+(chansize), samples);
-            for( let i = 0; i < that.desiredchannels; i++) {
-                audiobuffer.getChannelData(i).set(buf); 
-            }
+        return {'frames' : samples, 'buffer' : destdata};
         }
-        // if the number of channels match just copy
-        else if(that.desiredchannels === that.channels) {
-            for( let i = 0; i < that.channels; i++) {
-                let buf = new Float32Array(DrFlac.Module.HEAPU8.buffer, destdata+(chansize*i), samples);
-                audiobuffer.getChannelData(i).set(buf);                    
-            }
-        }
-        else {
-            throw("Not sure what to do when deschannels " + that.desiredchannels + " track channels " + that.channels);
-        }        
-
-        DrFlac.Module._free(destdata);
-        return audiobuffer;
-        };       
-    };
-
-    that.read_pcm_frames_to_AudioBuffer = async function(count, mysignal) {
-        return that.read_pcm_frames_to_AudioBuffer_f32(count, mysignal);
+       
     };
     
     that.currentFrame = function() {
@@ -234,12 +204,7 @@ const NetworkDrFlac = async function(theURL, deschannels, gsignal) {
     that.sampleRate = DrFlac.network_drflac_sampleRate(that.ptr);
     that.bitsPerSample = DrFlac.network_drflac_bitsPerSample(that.ptr);
     that.channels = DrFlac.network_drflac_channels(that.ptr);
-    that.url = theURL;
-
-    if((that.channels !== 1) && (that.channels !== that.desiredchannels)) {
-        that.close();
-        throw("Failed network_drflac_open, unhandled number of channels")
-    }
+    that.url = theURL;    
 
     return that;
 };
@@ -248,15 +213,47 @@ export default NetworkDrFlac;
 const MHFSDecoder = function(outputSampleRate, outputChannelCount) {
 	const that = {};
 	that.ptr = DrFlac.mhfs_decoder_create(outputSampleRate, outputChannelCount);
-	if(! that.ptr) throw("Failed to create decoder");
+    if(! that.ptr) throw("Failed to create decoder");
+    
+    that.outputSampleRate = outputSampleRate;
+    that.outputChannelCount = outputChannelCount;
+
+    that.flush = async function() {
+        DrFlac.mhfs_decoder_flush(that.ptr);
+    };
 	
-	that.close = function(){
-		
-		
+	that.close = async function(){
+		if(that.nwdrflac) {
+            await that.nwdrflac.close();
+            that.nwdrflac = null;
+        }
+        if(that.ptr) {
+            DrFlac.mhfs_decoder_close(that.ptr);
+            that.ptr = null;
+        }		
 	};
     
     that.openURL = async function(url, signal) {
-		that.nwdrflac = NetworkDrFlac(url, -1, signal);
+        do {         
+            if(that.nwdrflac) {
+                if(that.nwdrflac.url === url) {                 
+                    break;
+                }
+                await that.nwdrflac.close();
+                that.nwdrflac = null;
+                if(signal.aborted) {
+                    throw("abort after closing NWDRFLAC");
+                }                                
+            }
+            that.nwdrflac = await NetworkDrFlac(url, signal);
+        } while(0);
+
+        if(signal.aborted) {
+            console.log('');
+            await that.nwdrflac.close();
+            that.nwdrflac = null;
+            throw("abort after open NWDRFLAC success");
+        }       
     };
 	
 	that.seek = async function(pcmFrameIndex) {
@@ -264,8 +261,60 @@ const MHFSDecoder = function(outputSampleRate, outputChannelCount) {
         await that.nwdrflac.seek(pcmFrameIndex);
     };
 
-    that.read_pcm_frames_f32_interleaved = async function(todec, mysignal) {
-        return ;
+    that._free = function(ptr) {
+        DrFlac.Module._free(ptr);
+    };
+
+    that.read_pcm_frames_f32_interleaved = async function(todec, destdata, mysignal) {
+              
+        while(1) {              
+            // attempt to decode the samples
+            const decoded = DrFlac.mhfs_decoder_read_pcm_frames_f32_deinterleaved(that.ptr, that.nwdrflac.ptr, todec, destdata);
+            if(decoded === 0) {
+                const code = DrFlac.network_drflac_lastdata_code(that.nwdrflac.ptr);
+                if(code !== NDRFLAC_SUCCESS) {
+                    if(code !== NDRFLAC_MEM_NEED_MORE) {
+                        throw("network_drflac_read_pcm_frames_f32 failed");                    
+                    }
+                    // download more data. extradata has the offset needed to download
+                    await that.nwdrflac.downloadChunk(DrFlac.network_drflac_lastdata_extradata(that.nwdrflac.ptr), mysignal);            
+                    continue;                
+                }                
+            }
+            return decoded;            
+        }        
+    };
+
+    that.read_pcm_frames_f32_interleaved_AudioBuffer = async function(todec, mysignal) {
+        const f32_size = 4;
+        const pcm_float_frame_size = f32_size * that.outputChannelCount;
+        let theerror;
+        let returnval;
+        const destdata = DrFlac.Module._malloc(todec*pcm_float_frame_size);
+        try {
+            const frames = await that.read_pcm_frames_f32_interleaved(todec, destdata, mysignal);
+            if(frames) {
+                const audiobuffer = new AudioBuffer({'length' : frames, 'numberOfChannels' : that.outputChannelCount, 'sampleRate' : that.outputSampleRate});                
+                for( let i = 0; i < that.outputChannelCount; i++) {
+                    const buf = that.getChannelData(destdata, frames, i);
+                    audiobuffer.copyToChannel(buf, i);
+                }
+                returnval = audiobuffer;
+            }            
+        }
+        catch(error) {
+            theerror = error;
+        }
+        finally {
+            DrFlac.Module._free(destdata);
+            if(theerror) throw(theerror);
+            return returnval;
+        }        
+    };
+
+    that.getChannelData = function(ptr, frames, channel) {
+        const chansize = frames * 4;
+        return new Float32Array(DrFlac.Module.HEAPU8.buffer, ptr+(chansize*channel), frames);
     };
 	
 	return that;
@@ -303,6 +352,12 @@ Module().then(function(DrFlacMod){
     DrFlac.network_drflac_currentFrame =  DrFlacMod.cwrap('network_drflac_currentFrame', "number", ["number"]);
     
     DrFlac.mhfs_decoder_create = DrFlacMod.cwrap('mhfs_decoder_create', "number", ["number", "number"]);
+
+    DrFlac.mhfs_decoder_read_pcm_frames_f32_deinterleaved = DrFlacMod.cwrap('mhfs_decoder_read_pcm_frames_f32_deinterleaved', "number", ["number", "number", "number", "number"]);
+
+    DrFlac.mhfs_decoder_close = DrFlacMod.cwrap('mhfs_decoder_close', null, ["number"]);
+
+    DrFlac.mhfs_decoder_flush = DrFlacMod.cwrap('mhfs_decoder_flush', null, ["number"]);
 
     console.log('NetworkDrFlac is ready!');
     DrFlac.ready = true;

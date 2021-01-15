@@ -30,7 +30,7 @@ function GraphicsLoop() {
 
 function geturl(trackname) {
     let url = '../../music_dl?name=' + encodeURIComponent(trackname);
-    url  += '&max_sample_rate=' + DesiredSampleRate;
+    //url  += '&max_sample_rate=' + DesiredSampleRate;
     url  += '&fmt=flac';
     return url;
 }
@@ -319,7 +319,8 @@ async function fillAudioQueue(time) {
         return;
     }
 
-    //const decoder = MHFSPLAYER.OpenDecoder(MHFSPLAYER.sampleRate, MHFSPLAYER.channels);    
+    if(!MHFSPLAYER.decoder) MHFSPLAYER.decoder = MHFSPLAYER.MHFSDecoder(MHFSPLAYER.sampleRate, MHFSPLAYER.channels);
+    const decoder = MHFSPLAYER.decoder;     
     
     time = time || 0;
     // while there's a track to queue
@@ -341,7 +342,8 @@ TRACKLOOP:for(; MHFSPLAYER.Tracks_QueueCurrent; MHFSPLAYER.Tracks_QueueCurrent =
 
         // open the track in the decoder
         try {
-            await MHFSPLAYER.OpenNetworkDrFlac(track.url, mysignal);
+            await decoder.openURL(track.url, mysignal);
+            MHFSPLAYER.NWDRFLAC = decoder.nwdrflac;
         }
         catch(error) {
             time = 0;
@@ -357,7 +359,7 @@ TRACKLOOP:for(; MHFSPLAYER.Tracks_QueueCurrent; MHFSPLAYER.Tracks_QueueCurrent =
         const start_output_time = time;
         time = 0;
         try{
-            await MHFSPLAYER.NWDRFLAC.seek(start_dec_frame);        
+            await decoder.seek(start_dec_frame);        
         }
         catch(error) {
             console.error(error);
@@ -400,11 +402,8 @@ TRACKLOOP:for(; MHFSPLAYER.Tracks_QueueCurrent; MHFSPLAYER.Tracks_QueueCurrent =
             // decode
             let audiobuffer;
             try {
-                audiobuffer = await MHFSPLAYER.ReadPcmFramesToAudioBuffer(todec, mysignal);
-                // no more audio left, breakout
-                if(!audiobuffer) {
-                     break SAMPLELOOP;                    
-                }
+                audiobuffer = await decoder.read_pcm_frames_f32_interleaved_AudioBuffer(todec, mysignal);
+                if(!audiobuffer) break SAMPLELOOP;                
             }
             catch(error) {
                 console.error(error);
@@ -430,6 +429,7 @@ TRACKLOOP:for(; MHFSPLAYER.Tracks_QueueCurrent; MHFSPLAYER.Tracks_QueueCurrent =
         pbtrack.donedecode = 1;
         pbtrack.queued = (pbtrack.buffers.length === 0);
     }
+    decoder.flush();
     unlock();
 }
 

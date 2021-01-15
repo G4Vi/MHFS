@@ -5,12 +5,6 @@
 #define DR_FLAC_IMPLEMENTATION
 #include "dr_flac.h"
 
-#ifdef NETWORK_DR_FLAC_FORCE_REDBOOK
-    #define MA_NO_WAV
-    #define MINIAUDIO_IMPLEMENTATION
-    #include "miniaudio.h"
-#endif
-
 #include "network_drflac.h"
 
 typedef struct memrange {
@@ -333,7 +327,7 @@ void *network_drflac_bufptr(const NetworkDrFlac *ndrflac)
 
 
 // network_drflac_read_pcm_frames_f32 will catch the error if we dont here
-int network_drflac_seek_to_pcm_frame(NetworkDrFlac *ndrflac, uint32_t pcmFrameIndex)
+int network_drflac_seek_to_pcm_frame(NetworkDrFlac *ndrflac, const uint32_t pcmFrameIndex)
 {
     if(ndrflac->pFlac != NULL)
     {
@@ -343,14 +337,19 @@ int network_drflac_seek_to_pcm_frame(NetworkDrFlac *ndrflac, uint32_t pcmFrameIn
     return 1;    
 }
 
-uint64_t network_drflac_currentFrame(NetworkDrFlac *ndrflac)
+uint64_t network_drflac_currentFrame(const NetworkDrFlac *ndrflac)
 {    
     return ndrflac->currentFrame;
 }
 
+static NetworkDrFlac_Err_Vals network_drflac_open_drflac(NetworkDrFlac *ndrflac)
+{
+    network_drflac_read_pcm_frames_f32(ndrflac, 0, NULL);
+    return ndrflac->lastdata.code;
+}
 
 /* returns of samples */
-uint64_t network_drflac_read_pcm_frames_f32(NetworkDrFlac *ndrflac, uint32_t desired_pcm_frames, float32_t *outFloat)
+uint64_t network_drflac_read_pcm_frames_f32(NetworkDrFlac *ndrflac, const uint32_t desired_pcm_frames, float32_t *outFloat)
 {   
     ndrflac->lastdata.code = NDRFLAC_SUCCESS;
 
@@ -411,9 +410,8 @@ uint64_t network_drflac_read_pcm_frames_f32(NetworkDrFlac *ndrflac, uint32_t des
         return 0;
     }   
 
-    // decode to pcm
-    float32_t *data = malloc(pFlac->channels*sizeof(float32_t)*desired_pcm_frames);
-    uint32_t frames_decoded = drflac_read_pcm_frames_f32(pFlac, desired_pcm_frames, data);   
+    // decode to pcm    
+    const uint32_t frames_decoded = drflac_read_pcm_frames_f32(pFlac, desired_pcm_frames, outFloat);   
     if(frames_decoded != desired_pcm_frames)
     {
         printf("network_drflac_read_pcm_frames_f32_mem: expected %u decoded %u\n", desired_pcm_frames, frames_decoded);
@@ -421,7 +419,6 @@ uint64_t network_drflac_read_pcm_frames_f32(NetworkDrFlac *ndrflac, uint32_t des
     if(!NDRFLAC_OK(ndrflac))
     {
         printf("network_drflac_read_pcm_frames_f32_mem: failed read_pcm_frames_f32\n");
-        free(data);
         goto network_drflac_read_pcm_frames_f32_mem_FAIL;
     }
     
@@ -429,61 +426,9 @@ uint64_t network_drflac_read_pcm_frames_f32(NetworkDrFlac *ndrflac, uint32_t des
     if(frames_decoded == 0)
     {
         printf("network_drflac_read_pcm_frames_f32_mem: (0)\n");
-        free(data);
         return 0;        
     }
-    ndrflac->currentFrame += frames_decoded;
-
-    #ifdef NETWORK_DR_FLAC_FORCE_REDBOOK
-    // resample
-    if(pFlac->sampleRate != 44100)
-    {
-        printf("Converting samplerate from %u to %u\n", pFlac->sampleRate, 44100);
-
-        // create the resampler
-        static int initialized = 0;
-        static  ma_resampler_config config;
-        static  ma_resampler resampler;
-        if(!initialized)
-        {
-            initialized = 1;
-            config = ma_resampler_config_init(ma_format_f32, pFlac->channels, pFlac->sampleRate,  44100, ma_resample_algorithm_linear);
-            ma_resampler_init(&config, &resampler);
-            uint32_t inlat = ma_resampler_get_input_latency(&resampler);
-            printf("Input latency %u\n", inlat);
-            uint32_t outlat = ma_resampler_get_output_latency(&resampler);
-            printf("output latency %u\n", outlat);
-        }
-        // resample
-        ma_uint64 frameCountIn  = frames_decoded;
-        ma_uint64 frameCountOut = ma_resampler_get_expected_output_frame_count(&resampler, frameCountIn);
-        uint32_t fin = frameCountIn;
-        uint32_t fcount = frameCountOut;
-        printf("framecountin %u framecountout %u\n", fin, fcount);
-        float32_t *pFramesOut = malloc(frameCountOut*pFlac->channels*sizeof(float32_t));
-        ma_result result_process = ma_resampler_process_pcm_frames(&resampler, data, &frameCountIn, pFramesOut, &frameCountOut);
-        free(data);
-        if (result_process != MA_SUCCESS)
-        {
-            printf("network_drflac_read_pcm_frames_f32_mem: failed read_pcm_frames_f32 resample\n");
-            goto network_drflac_read_pcm_frames_f32_mem_FAIL;
-        }
-        data = pFramesOut;        
-        frames_decoded = frameCountOut;                
-    }
-    #endif
-
-    // deinterleave
-    for(unsigned i = 0; i < frames_decoded; i++)
-    {
-        for(unsigned j = 0; j < pFlac->channels; j++)
-        {            
-            unsigned chanIndex = j*frames_decoded;
-            float32_t sample = data[(i*pFlac->channels) + j];
-            outFloat[chanIndex+i] = sample;
-        }
-    }
-    free(data);
+    ndrflac->currentFrame += frames_decoded;    
 
     printf("returning from ndrflac->currentFrame: %u frames_decoded %u\n", ndrflac->currentFrame, frames_decoded);   
     // return number of samples   
@@ -500,5 +445,7 @@ network_drflac_read_pcm_frames_f32_mem_FAIL:
 
 #undef NDRFLAC_OK
 
-#define MHFSDECODER_IMPLEMENATION
+#define MINIAUDIO_IMPLEMENTATION
+#include "miniaudio.h"
+#define MHFSDECODER_IMPLEMENTATION
 #include "mhfs_decoder.h"
