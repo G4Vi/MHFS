@@ -317,7 +317,9 @@ async function fillAudioQueue(time) {
         console.log('abort after mutex acquire');
         unlock();
         return;
-    }    
+    }
+
+    //const decoder = MHFSPLAYER.OpenDecoder(MHFSPLAYER.sampleRate, MHFSPLAYER.channels);    
     
     time = time || 0;
     // while there's a track to queue

@@ -1,4 +1,4 @@
-import {default as NetworkDrFlac} from '../decoder/music_drflac_module.cache.js'
+import {default as NetworkDrFlac, MHFSDecoder} from '../decoder/music_drflac_module.cache.js'
 import { Float32AudioRingBufferWriter } from './AudioWriterReader.js'
 
 class Mutex {
@@ -197,6 +197,9 @@ const MHFSPlayer = async function(opt) {
         }
         throw('read_pcm_frames decodeaudiodata failed');
     };
+	
+	that.MHFSDecoder = MHFSDecoder;
+	
 
     // END TEMP
 

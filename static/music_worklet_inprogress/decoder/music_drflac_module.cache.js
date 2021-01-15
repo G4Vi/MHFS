@@ -243,10 +243,35 @@ const NetworkDrFlac = async function(theURL, deschannels, gsignal) {
 
     return that;
 };
-
-
-
 export default NetworkDrFlac;
+
+const MHFSDecoder = function(outputSampleRate, outputChannelCount) {
+	const that = {};
+	that.ptr = DrFlac.mhfs_decoder_create(outputSampleRate, outputChannelCount);
+	if(! that.ptr) throw("Failed to create decoder");
+	
+	that.close = function(){
+		
+		
+	};
+    
+    that.openURL = async function(url, signal) {
+		that.nwdrflac = NetworkDrFlac(url, -1, signal);
+    };
+	
+	that.seek = async function(pcmFrameIndex) {
+        if(!that.nwdrflac) throw("nothing to seek on");
+        await that.nwdrflac.seek(pcmFrameIndex);
+    };
+
+    that.read_pcm_frames_f32_interleaved = async function(todec, mysignal) {
+        return ;
+    };
+	
+	return that;
+};
+export { MHFSDecoder };
+
 
 Module().then(function(DrFlacMod){
     DrFlac.Module = DrFlacMod;
