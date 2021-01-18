@@ -74,16 +74,13 @@ function _QueueTrack(trackname, after) {
         // if were' not queued after anything we are the head
         MHFSPLAYER.Tracks_HEAD = track;
     }
-
-    //onQueueUpdate((MHFSPLAYER.AudioQueue[0] ? MHFSPLAYER.AudioQueue[0].track : MHFSPLAYER.Tracks_QueueCurrent)|| track);
-    
+   
     // if nothing is being queued, start the queue
-    if(!MHFSPLAYER.Tracks_QueueCurrent){
-        MHFSPLAYER.Tracks_QueueCurrent = track;
-        fillAudioQueue(); 
+    if(MHFSPLAYER.QState === MHFSPLAYER.STATES.NEED_FAQ){
+        fillAudioQueue(track); 
     }
     else {
-        onQueueUpdate(MHFSPLAYER.AudioQueue[0] ? MHFSPLAYER.AudioQueue[0].track : MHFSPLAYER.Tracks_QueueCurrent);
+        onQueueUpdate(MHFSPLAYER.AudioQueue[0] ? MHFSPLAYER.AudioQueue[0].track : null);
     }
 
     return track;
@@ -93,14 +90,10 @@ function _PlayTrack(trackname) {
     let queuePos;
     if(MHFSPLAYER.AudioQueue[0]) {
         queuePos = MHFSPLAYER.AudioQueue[0].track;
-    }
-    else if(MHFSPLAYER.Tracks_QueueCurrent) {
-        queuePos = MHFSPLAYER.Tracks_QueueCurrent;
-    }   
+    }       
 
     // stop all audio
-    StopAudio();
-    MHFSPLAYER.Tracks_QueueCurrent = null;
+    StopAudio();    
     return _QueueTrack(trackname, queuePos);   
 }
 
@@ -159,16 +152,7 @@ const abortablesleep_status = async function (ms, signal) {
     return true;
 }
 
-const ProcessTimes = function(aqitem, struct_buffer, time) {
-    
-    /*
-    // if there's no starttime or endtime has beeen exceeded we're doing a fresh start
-    if(!aqitem.starttime || (MHFSPLAYER.ac.currentTime > aqitem.endTime)) {
-        aqitem.starttime = time - (struct_buffer.frameindex / aqitem.track.sampleRate);                
-        aqitem._starttime = time;
-        aqitem.needsstart = 1;
-    }
-    */
+const ProcessTimes = function(aqitem, duration, time) {    
     if(aqitem.endTime && (MHFSPLAYER.ac.currentTime > aqitem.endTime)) {
         aqitem.skiptime += (aqitem.endTime - aqitem._starttime);
         aqitem.starttime = null;
@@ -179,14 +163,15 @@ const ProcessTimes = function(aqitem, struct_buffer, time) {
         aqitem.needsstart = 1;  
     }
 
-    aqitem.endTime = time + (struct_buffer.buffer.length/MHFSPLAYER.ac.sampleRate);    
+    aqitem.endTime = time + (duration/MHFSPLAYER.ac.sampleRate);    
 }
 
 const StopAudio = function() {
     MHFSPLAYER.AudioQueue = [];
+    AudioRingBufferWriter._writer._setwriteindex(0);
+    AudioRingBufferReader._reader._setreadindex(0);
     MHFSPLAYER._ab.reset(); 
 };
-
 
 let UpdateTrackTimerID;
 const UpdateTrack = function() {
@@ -240,6 +225,118 @@ const UpdateTrack = function() {
     UpdateTrackTimerID = setTimeout(UpdateTrack, 60000);
 }
 
+
+/*
+let AudioTime = 0;
+const ProcessFrames = function(aqitem, newlength, frametime) {
+    if(aqitem.endTime && (AudioTime > aqitem.endTime)) {
+        aqitem.skiptime += (aqitem.endTime - aqitem._starttime);
+        aqitem.starttime = null;
+    }
+    if(!aqitem.starttime) {
+        aqitem.starttime = time - aqitem.skiptime;
+        aqitem._starttime = time;
+        aqitem.needsstart = 1;  
+    }
+
+    aqitem.endTime = time + (struct_buffer.buffer.length/MHFSPLAYER.ac.sampleRate);
+};
+
+const DataCallback = function(pOutput, frameCount) {    
+    queuetime = AudioTime + TotalFrames
+    AudioTime += frameCount;
+    let outputOffset = 0;
+
+    // Add a 100 ms delay if we fell to far behind
+    if((queuetime - AudioTime) < 4410) {
+        const toskip = Math.min(frameCount, 4410);
+        outputOffset += toskip;
+        frameCount -= toskip;
+        queuetime += toskip;
+    }        
+    
+    for(aqindex = 0; MHFSPLAYER.AudioQueue[aqindex]; aqindex++) {
+        // no more data to write, done
+        if(frameCount === 0) return;
+        
+        const item = MHFSPLAYER.AudioQueue[aqindex];
+        // skip past queued items
+        if(item.queued) continue;
+        const toread = Math.min(item.sampleCount, frameCount);
+        // no more data to read, done
+        if(toread === 0) return;
+        // add in more audio
+        AudioRingBuffer.read(pOutput, toread, outputOffset);
+        outputOffset += toread;        
+        frameCount -= toread;
+        item.sampleCount -= toread;
+        ProcessFrames(item, toread, queuetime);
+        item.queued = item.donedecode && (item.sampleCount === 0);
+        queuetime += toread;
+        // item not done, done
+        if(!item.queued) return;
+    }    
+};
+*/
+
+let AudioRingBufferWriter = MHFSPLAYER.Float32AudioRingBufferWriter.create(MHFSPLAYER.sampleRate * 20, MHFSPLAYER.channels, MHFSPLAYER.sampleRate);
+let AudioRingBufferReader = MHFSPLAYER.Float32AudioRingBufferReader.from(AudioRingBufferWriter);
+
+const DataCallback = function(pOutput, frameCount) {    
+    const atime = MHFSPLAYER.ac.currentTime;
+    let qtime = MHFSPLAYER._ab._writer._rb._capacity-frameCount;    
+    
+    let outputOffset = 0;
+
+    // Add a 100 ms delay if we fell to far behind
+    if(qtime < 4410) {
+        const toskip = Math.min(frameCount, 4410);
+        outputOffset += toskip;
+        frameCount -= toskip;
+        qtime += toskip;
+    }        
+    
+    for(let aqindex = 0; MHFSPLAYER.AudioQueue[aqindex]; aqindex++) {
+        // no more data to write, done
+        if(frameCount === 0) return;
+        
+        const item = MHFSPLAYER.AudioQueue[aqindex];
+        // skip past queued items
+        if(item.queued) continue;
+        const toread = Math.min(item.sampleCount, frameCount);
+        // no more data to read, done
+        if(toread === 0) return;
+        // add in more audio
+        AudioRingBufferReader.read(pOutput, toread, outputOffset);
+        outputOffset += toread;        
+        frameCount -= toread;
+        item.sampleCount -= toread;
+        ProcessTimes(item, toread, atime+(qtime/MHFSPLAYER.sampleRate));
+        item.queued = item.donedecode && (item.sampleCount === 0);
+        qtime += toread;
+        // item not done, done
+        if(!item.queued) return;
+    }    
+};
+
+const PumpAudioQueueB = async function() {
+    while(1) {
+        const space = MHFSPLAYER._ab.getspace();
+        if(space > 0) {
+            // TEMP
+            let arrs = [];
+            for(let i = 0; i < MHFSPLAYER.channels; i++) {
+                arrs[i] = new Float32Array(space);
+            }
+            DataCallback(arrs, space);
+            MHFSPLAYER._ab.write(arrs);        
+        }
+        const mysignal = MHFSPLAYER.FACAbortController.signal;
+        await abortablesleep(250, mysignal);
+    }   
+};
+
+
 const PumpAudioQueue = async function() {
     while(1) {      
     
@@ -250,13 +347,14 @@ const PumpAudioQueue = async function() {
         do {
             // verify we have decoded audio and enough room for it
             if(!MHFSPLAYER.AudioQueue[aqindex]) break;
-            if(MHFSPLAYER.AudioQueue[aqindex].buffers.length === 0) break;
+            if(MHFSPLAYER.AudioQueue[aqindex].sampleCount === 0) break;
             const space = MHFSPLAYER._ab.getspace();
             const item = MHFSPLAYER.AudioQueue[aqindex];            
             let bufferedTime = MHFSPLAYER._ab.gettime();
             const mindelta = 0.1; // 100ms
             const bufferdelta = (mindelta - bufferedTime);
-            const neededspace = (bufferdelta > 0) ? bufferdelta + item.buffers[0].buffer.length : item.buffers[0].buffer.length;
+            const toread = Math.min(item.sampleCount, MHFSPLAYER.ac.sampleRate);
+            const neededspace = (bufferdelta > 0) ? bufferdelta + toread : toread;
             if(neededspace > space) {
                 sleeptime = Math.min(sleeptime, (neededspace-space)/MHFSPLAYER.ac.sampleRate);
                 break;
@@ -273,16 +371,16 @@ const PumpAudioQueue = async function() {
                 console.log('wrote ' + len + ' zeros bufferedTime ' + bufferedTime);
                 bufferedTime = mindelta;
             }            
-            // remove a buffer and queue it
-            let buffer = item.buffers.shift();
-            let data = [];
-            for(let i = 0; i < buffer.buffer.numberOfChannels; i++) {
-                // this sucks we are creating a new float32 array
-                data[i] = buffer.buffer.getChannelData(i);
-            }        
-            MHFSPLAYER._ab.write(data);             
-            ProcessTimes(item, buffer, bufferedTime + MHFSPLAYER.ac.currentTime);
-            item.queued = item.donedecode && (item.buffers.length === 0);
+            
+            let data = []; 
+            for(let i = 0; i < MHFSPLAYER.channels; i++) {
+                data[i] = new Float32Array(toread);
+            }
+            AudioRingBufferReader.read(data, toread, 0);        
+            MHFSPLAYER._ab.write(data);
+            item.sampleCount -= toread;             
+            ProcessTimes(item, toread, bufferedTime + MHFSPLAYER.ac.currentTime);
+            item.queued = item.donedecode && (item.sampleCount === 0);
         } while(0);
 
         const mysignal = MHFSPLAYER.FACAbortController.signal;
@@ -301,8 +399,68 @@ const AQDecTime = function() {
 
     return dectime; 
 }
+/*
+const QState = {
+    'NO_TRACK'   : 1,
+    'TRACK_OPEN' : 2,
+    'TRACK_SEEK': 3,
+    'YIELD      : 4,
+    'YEILD_FULL : 5,  
+    'TRACK_READ' : 6
+};
 
-async function fillAudioQueue(time) {
+let QueueInfo;
+/*
+track,
+seektime,
+decoder,
+pbtrack
+on_decode_complete,
+abortcontroller
+
+
+const DECODER;
+const DoQueue = function(qi) {
+    if(qi !== QueueInfo) {
+        return;
+    }
+
+    const qi = QueueInfo;
+    if(qi.state === QState.NO_TRACK) {
+        if(!qi.track) return;
+        qi.state = QState.TRACK_OPEN;
+    }
+    const track = qi.track;
+    if(qi.state === QState.TRACK_OPEN) {
+        DECODER.openURL(track.url, mysignal).then((resolve) => {
+            qi.state = QState.TRACK_SEEK;
+            DoQueue(qi);
+        });
+        else
+        qi.state = QState.NEW_TRACK
+        return;
+    }
+    if(qi.state === QState.TRACK_SEEK){
+        
+    }
+};
+
+const SetQueue = function(track, seektime) {
+    if(QueueInfo) {
+        QueueInfo.on_async_complete = function(){};
+        QueueInfo.abortcontroller.abort();        
+    }
+    QueueInfo = {
+        'track' : track,
+        'seektime' : seektime,
+        'abortcontroller' : new AbortController()
+    };    
+};
+*/
+
+
+async function fillAudioQueue(track, time) {
+    MHFSPLAYER.QState = MHFSPLAYER.STATES.FAQ_RUNNING;
     MHFSPLAYER.ac.resume();  
     
     // starting a fresh queue, render the text
@@ -316,20 +474,19 @@ async function fillAudioQueue(time) {
     if(mysignal.aborted) {
         console.log('abort after mutex acquire');
         unlock();
+        MHFSPLAYER.QState = MHFSPLAYER.STATES.NEED_FAQ;
         return;
     }
 
     if(!MHFSPLAYER.decoder) MHFSPLAYER.decoder = MHFSPLAYER.MHFSDecoder(MHFSPLAYER.sampleRate, MHFSPLAYER.channels);
-    const decoder = MHFSPLAYER.decoder;     
+    const decoder = MHFSPLAYER.decoder;    
     
     time = time || 0;
     // while there's a track to queue
-TRACKLOOP:for(; MHFSPLAYER.Tracks_QueueCurrent; MHFSPLAYER.Tracks_QueueCurrent = document.getElementById("repeattrack").checked ?  MHFSPLAYER.Tracks_QueueCurrent : MHFSPLAYER.Tracks_QueueCurrent.next) {
+TRACKLOOP:for(; track; track = document.getElementById("repeattrack").checked ?  track : track.next) {
         
-        const track = MHFSPLAYER.Tracks_QueueCurrent;
         // render the text if nothing is queued
         if(!MHFSPLAYER.AudioQueue[0]) {
-            let track = MHFSPLAYER.Tracks_QueueCurrent;
             let prevtext = track.prev ? track.prev.trackname : '';
             SetPrevText(prevtext);
             SetPlayText(track.trackname + ' {LOADING}');
@@ -373,9 +530,9 @@ TRACKLOOP:for(; MHFSPLAYER.Tracks_QueueCurrent; MHFSPLAYER.Tracks_QueueCurrent =
 
         // decode the track
         let pbtrack = {
-            'track' : track,
-            'buffers'  : [],            
-            'skiptime' : start_output_time
+            'track' : track,          
+            'skiptime' : start_output_time,
+            'sampleCount' : 0
         };
         MHFSPLAYER.AudioQueue.push(pbtrack);        
      
@@ -383,7 +540,7 @@ TRACKLOOP:for(; MHFSPLAYER.Tracks_QueueCurrent; MHFSPLAYER.Tracks_QueueCurrent =
         const maxsamples = (AQMaxDecodedTime * MHFSPLAYER.ac.sampleRate);            
         SAMPLELOOP: while(1) {
             // yield so buffers can be queued
-            if(pbtrack.buffers.length > 0) {
+            if(pbtrack.sampleCount > 0) {
                 if(!(await abortablesleep_status(0, mysignal)))
                 {
                     break TRACKLOOP;                    
@@ -391,9 +548,15 @@ TRACKLOOP:for(; MHFSPLAYER.Tracks_QueueCurrent; MHFSPLAYER.Tracks_QueueCurrent =
             }           
 
             // wait for there to be space                         
-            while((AQDecTime()+todec) > maxsamples) {
+            /*while((AQDecTime()+todec) > maxsamples) {
                 const tosleep = ((AQDecTime() + todec - maxsamples)/ MHFSPLAYER.ac.sampleRate) * 1000; 
                 if(!(await abortablesleep_status(tosleep, mysignal)))
+                {
+                    break TRACKLOOP;                    
+                }
+            }*/
+            while(AudioRingBufferWriter.getspace() < MHFSPLAYER.ac.sampleRate) {
+                if(!(await abortablesleep_status(250, mysignal)))
                 {
                     break TRACKLOOP;                    
                 }
@@ -415,11 +578,12 @@ TRACKLOOP:for(; MHFSPLAYER.Tracks_QueueCurrent; MHFSPLAYER.Tracks_QueueCurrent =
                 break SAMPLELOOP;
             }                       
 
-            // add the buffer to the queue item
-            let struct_buffer = {
-                'buffer' : audiobuffer
-            };
-            pbtrack.buffers.push(struct_buffer);                           
+            pbtrack.sampleCount += audiobuffer.length;
+            let arrs = [];
+            for(let i = 0; i < MHFSPLAYER.channels; i++) {
+                arrs[i] = audiobuffer.getChannelData(i);
+            }
+            AudioRingBufferWriter.write(arrs);                         
             
             // break out at end
             if(audiobuffer.length < todec) {
@@ -427,10 +591,11 @@ TRACKLOOP:for(; MHFSPLAYER.Tracks_QueueCurrent; MHFSPLAYER.Tracks_QueueCurrent =
             }                      
         }
         pbtrack.donedecode = 1;
-        pbtrack.queued = (pbtrack.buffers.length === 0);
+        pbtrack.queued = (pbtrack.sampleCount === 0);
     }
     decoder.flush();
     unlock();
+    MHFSPLAYER.QState = MHFSPLAYER.STATES.NEED_FAQ;
 }
 
 var prevbtn    = document.getElementById("prevbtn");
@@ -447,26 +612,31 @@ var dbarea     = document.getElementById('musicdb');
 // BEGIN UI handlers
 
 rptrackbtn.addEventListener('change', function(e) {
+    // we need either the last decoded but not queued track or the last track if everything is queued
     let ti;
-    for(ti = 0; MHFSPLAYER.AudioQueue[ti] && MHFSPLAYER.AudioQueue[ti].queued; ti++);
-    // everything is queued
-    if(!MHFSPLAYER.AudioQueue[ti]) {
-        if(ti > 0) {
-            MHFSPLAYER.Tracks_QueueCurrent = MHFSPLAYER.AudioQueue[ti-1].track;
-            fillAudioQueue();
-        }       
-        return;
-    }    
-    
-    // not done decoding
-    if(!MHFSPLAYER.AudioQueue[ti].donedecode) return;
+    for(ti = 0; ;ti++) {
+        if(!MHFSPLAYER.AudioQueue[ti]) {
+            if(ti === 0) return;
+            ti--;
+            break;
+        }
+        if(!MHFSPLAYER.AudioQueue[ti].donedecode) return;
+        if(!MHFSPLAYER.AudioQueue[ti].queued) break;
+    }   
 
-    // the current track is done decoding, but not queued. make this our last track
+    // make ti our last track
     MHFSPLAYER.AudioQueue.length = ti+1;
+    // cancel cached decoded audio
+    let neededdecode = 0;
+    for(let i = 0; i < MHFSPLAYER.AudioQueue.length; i++) {
+        neededdecode += MHFSPLAYER.AudioQueue[i].sampleCount;
+    }
+    const wi = (AudioRingBufferWriter._writer._rb._readindex() + neededdecode) % AudioRingBufferWriter._writer._rb._size;
+    AudioRingBufferWriter._writer._setwriteindex(wi);
 
     // queue the repeat or new track (stopping the current decoding)
-    MHFSPLAYER.Tracks_QueueCurrent = e.target.checked ? MHFSPLAYER.AudioQueue[ti].track : MHFSPLAYER.AudioQueue[ti].track.next;
-    fillAudioQueue();
+    const track = e.target.checked ? MHFSPLAYER.AudioQueue[ti].track : MHFSPLAYER.AudioQueue[ti].track.next;
+    fillAudioQueue(track);
 });
  
  ppbtn.addEventListener('click', function (e) {
@@ -493,11 +663,11 @@ rptrackbtn.addEventListener('change', function(e) {
     }     
     SBAR_UPDATING = 0;
     if(!MHFSPLAYER.AudioQueue[0]) return;
-    MHFSPLAYER.Tracks_QueueCurrent = MHFSPLAYER.AudioQueue[0].track;
+    const track = MHFSPLAYER.AudioQueue[0].track;
     StopAudio();
-    let stime = Number(e.target.value);
+    const stime = Number(e.target.value);
     console.log('SEEK ' + stime);
-    fillAudioQueue(stime);           
+    fillAudioQueue(track, stime);           
  });
  
  prevbtn.addEventListener('click', function (e) {
@@ -505,11 +675,7 @@ rptrackbtn.addEventListener('change', function(e) {
     if(MHFSPLAYER.AudioQueue[0]) {
         if(!MHFSPLAYER.AudioQueue[0].track.prev) return;
         prevtrack = MHFSPLAYER.AudioQueue[0].track.prev;
-    }
-    else if(MHFSPLAYER.Tracks_QueueCurrent) {
-        if(!MHFSPLAYER.Tracks_QueueCurrent.prev) return;
-        prevtrack = MHFSPLAYER.Tracks_QueueCurrent.prev;
-    }
+    }    
     else if(MHFSPLAYER.Tracks_TAIL) {
         prevtrack = MHFSPLAYER.Tracks_TAIL;
     }
@@ -517,9 +683,8 @@ rptrackbtn.addEventListener('change', function(e) {
         return;
     }
 
-    MHFSPLAYER.Tracks_QueueCurrent = prevtrack;
     StopAudio();
-    fillAudioQueue();    
+    fillAudioQueue(prevtrack);    
  });
  
  nextbtn.addEventListener('click', function (e) {        
@@ -527,18 +692,13 @@ rptrackbtn.addEventListener('change', function(e) {
     if(MHFSPLAYER.AudioQueue[0]) {
         if(!MHFSPLAYER.AudioQueue[0].track.next) return;
         nexttrack = MHFSPLAYER.AudioQueue[0].track.next;
-    }
-    else if(MHFSPLAYER.Tracks_QueueCurrent) {
-        if(!MHFSPLAYER.Tracks_QueueCurrent.next) return;
-        nexttrack = MHFSPLAYER.Tracks_QueueCurrent.next;
-    }
+    }    
     else {
         return;
     }
 
-    MHFSPLAYER.Tracks_QueueCurrent = nexttrack;
     StopAudio();
-    fillAudioQueue(); 
+    fillAudioQueue(nexttrack); 
  });
  
  const volslider = document.getElementById("volslider");

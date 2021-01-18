@@ -85,21 +85,20 @@ class RingBufferReader {
         Atomics.store(this._rb._sharedvarsuint32, 1, newval);
     }
 
-    read(destarrs, max) {
+    read(destarrs, max, destoffset) {
         this._rb._AssertSameArrayCount(destarrs);
-        
+        destoffset = destoffset || 0;
+        const destmax = destarrs[0].length - destoffset;
+        max = max || destmax;
 
-        let tocopy = Math.min(destarrs[0].length, this._rb.getcount());
-        if(typeof max !== 'undefined') {
-            tocopy = Math.min(max, tocopy);
-        }
+        const tocopy = Math.min(destmax, this._rb.getcount(), max);
         if(tocopy === 0) return 0;
         
         let readindex = this._rb._readindex();
         const nextReadIndex = readindex + tocopy;        
         if(nextReadIndex < this._rb._buffer[0].length) {
             for(let i = 0; i < destarrs.length; i++) {                
-                destarrs[i].set(this._rb._buffer[i].subarray(readindex, nextReadIndex));
+                destarrs[i].set(this._rb._buffer[i].subarray(readindex, nextReadIndex), destoffset);
             }            
             readindex += tocopy;       
         }
@@ -109,8 +108,8 @@ class RingBufferReader {
             for(let i = 0; i < destarrs.length; i++) { 
                 const firstHalf = this._rb._buffer[i].subarray(readindex);
                 const secondHalf = this._rb._buffer[i].subarray(0, overflow);       
-                destarrs[i].set(firstHalf);
-                destarrs[i].set(secondHalf, firstHalf.length);
+                destarrs[i].set(firstHalf, destoffset);
+                destarrs[i].set(secondHalf, firstHalf.length+destoffset);
                 newreadindex = secondHalf.length;
             }            
             readindex = newreadindex;       

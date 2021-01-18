@@ -1,5 +1,5 @@
 import {default as NetworkDrFlac, MHFSDecoder} from '../decoder/music_drflac_module.cache.js'
-import { Float32AudioRingBufferWriter } from './AudioWriterReader.js'
+import { Float32AudioRingBufferWriter, Float32AudioRingBufferReader } from './AudioWriterReader.js'
 
 class Mutex {
     constructor() {
@@ -126,11 +126,16 @@ const MHFSPlayer = async function(opt) {
     MusicNode.port.postMessage({'message' : 'init', 'audiobuffer' : that._ab.to()});     
 
     // TEMP
-    that.NetworkDrFlac = NetworkDrFlac;    
+    that.NetworkDrFlac = NetworkDrFlac; 
+    
+    that.STATES = {
+        'NEED_FAQ' : 0,
+        'FAQ_RUNNING'     : 1
+    };
 
+    that.QState = that.STATES.NEED_FAQ;
     that.Tracks_HEAD;
     that.Tracks_TAIL;
-    that.Tracks_QueueCurrent;
     
     that.FACAbortController = new AbortController();
     that.NWDRFLAC;
@@ -198,7 +203,9 @@ const MHFSPlayer = async function(opt) {
         throw('read_pcm_frames decodeaudiodata failed');
     };
 	
-	that.MHFSDecoder = MHFSDecoder;
+    that.MHFSDecoder = MHFSDecoder;
+    that.Float32AudioRingBufferWriter = Float32AudioRingBufferWriter;
+    that.Float32AudioRingBufferReader = Float32AudioRingBufferReader; 
 	
 
     // END TEMP
