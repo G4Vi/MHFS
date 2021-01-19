@@ -139,10 +139,11 @@ class RingBufferWriter {
         Atomics.store(this._rb._sharedvarsuint32, 0, newval);
     }
 
-    write(arrs) {
+    write(arrs, max) {
         this._rb._AssertSameArrayCount(arrs);       
-        
-        const count = arrs[0].length;
+        max = max || arrs[0].length;
+
+        const count = Math.min(max, arrs[0].length);
         const space = this._rb.getspace();
         if(count > space) {
             throw("Tried to write too much data, count " + count + " space " + space);            
@@ -153,7 +154,7 @@ class RingBufferWriter {
         if((writeindex+count) < this._rb._size) {
             // copy the data for each array
             for(let i = 0; i < arrs.length; i++) {
-                this._rb._buffer[i].set(arrs[i], writeindex);
+                this._rb._buffer[i].set(arrs[i].subarray(0, count), writeindex);
             }            
             writeindex += count;
         }
@@ -162,7 +163,7 @@ class RingBufferWriter {
             let newwriteindex;
             for(let i = 0; i < arrs.length; i++) {
                 const firstHalf = arrs[i].subarray(0, splitIndex);
-                const secondHalf = arrs[i].subarray(splitIndex);
+                const secondHalf = arrs[i].subarray(splitIndex, count);
                 this._rb._buffer[i].set(firstHalf, writeindex);
                 this._rb._buffer[i].set(secondHalf);
                 newwriteindex = secondHalf.length;
@@ -261,8 +262,8 @@ class Float32AudioRingBufferReader extends Float32AudioRingBuffer  {
     }    
     
     // (READER ONLY)
-    read(destarrs, max) {
-        return this._reader.read(destarrs, max);       
+    read(destarrs, max, destoffset) {
+        return this._reader.read(destarrs, max, destoffset);       
     }
 
     // (READER ONLY) on the reader process messages from the writer
@@ -297,8 +298,8 @@ class Float32AudioRingBufferWriter extends Float32AudioRingBuffer{
     }
 
     // (WRITER ONLY)
-    write(arrs) {
-        return this._writer.write(arrs);
+    write(arrs, max) {
+        return this._writer.write(arrs, max);
     }
 
     // (WRITER) ONLY)send message from the writer
