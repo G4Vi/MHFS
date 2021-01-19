@@ -77,7 +77,7 @@ function _QueueTrack(trackname, after) {
    
     // if nothing is being queued, start the queue
     if(MHFSPLAYER.QState === MHFSPLAYER.STATES.NEED_FAQ){
-        fillAudioQueue(track); 
+        StartQueue(track); 
     }
     else {
         onQueueUpdate(MHFSPLAYER.AudioQueue[0] ? MHFSPLAYER.AudioQueue[0].track : null);
@@ -86,13 +86,36 @@ function _QueueTrack(trackname, after) {
     return track;
 }
 
-function _PlayTrack(trackname) {
+/*
+function TQueue() {
+    let that = {};
+    that._items = [];
+    that._isrunning = 0;
+    
+    that.push = async function(item) {
+        that._items.push(item);
+        if(!that._isrunning) {
+            that._isrunning = 1;
+            while(let item = that._items.shift()) {
+                await item;                
+            }
+            that._isrunning = 0;
+        }        
+    };
+    
+    
+    return that;
+};
+*/
+
+async function _PlayTrack(trackname) {
     let queuePos;
     if(MHFSPLAYER.AudioQueue[0]) {
         queuePos = MHFSPLAYER.AudioQueue[0].track;
     }       
 
     // stop all audio
+    await StopQueue();
     StopAudio();    
     return _QueueTrack(trackname, queuePos);   
 }
@@ -104,10 +127,9 @@ function QueueTrack(trackname, after) {
     return res;
 }
 
-function PlayTrack(trackname) {
-    let res = _PlayTrack(trackname);
+async function PlayTrack(trackname) {
+    let res = await _PlayTrack(trackname);
     BuildPTrack();
-    return res;
 }
 
 function QueueTracks(tracks, after) {
@@ -118,10 +140,10 @@ function QueueTracks(tracks, after) {
     return after;
 }
 
-function PlayTracks(tracks) {
+async function PlayTracks(tracks) {
     let trackname = tracks.shift();
     if(!trackname) return;
-    let after = _PlayTrack(trackname);
+    let after = await _PlayTrack(trackname);
     if(!tracks.length) return;  
     QueueTracks(tracks, after);
 }
@@ -459,7 +481,22 @@ const SetQueue = function(track, seektime) {
 */
 
 
+let FAQPromise;
+const StartQueue = function(track, time) {
+    FAQPromise = fillAudioQueue(track, time);    
+};
+
+const StopQueue = async function() {
+    MHFSPLAYER.FACAbortController.abort();
+    await FAQPromise;    
+}
+
+
 async function fillAudioQueue(track, time) {
+    if(MHFSPLAYER.QState !== MHFSPLAYER.STATES.NEED_FAQ) {
+        console.error("Can't FAQ in invalid state");
+        return;        
+    }
     MHFSPLAYER.QState = MHFSPLAYER.STATES.FAQ_RUNNING;
     MHFSPLAYER.ac.resume();  
     
@@ -467,8 +504,7 @@ async function fillAudioQueue(track, time) {
     InitPPText();    
 
     // Stop the previous FAQ before starting
-    MHFSPLAYER.FACAbortController.abort();
-    MHFSPLAYER.FACAbortController = new AbortController();
+    MHFSPLAYER.FACAbortController = new AbortController();  
     const mysignal = MHFSPLAYER.FACAbortController.signal;
     const unlock = await MHFSPLAYER.FAQ_MUTEX.lock();    
     if(mysignal.aborted) {
@@ -626,17 +662,27 @@ rptrackbtn.addEventListener('change', function(e) {
 
     // make ti our last track
     MHFSPLAYER.AudioQueue.length = ti+1;
-    // cancel cached decoded audio
-    let neededdecode = 0;
-    for(let i = 0; i < MHFSPLAYER.AudioQueue.length; i++) {
-        neededdecode += MHFSPLAYER.AudioQueue[i].sampleCount;
-    }
-    const wi = (AudioRingBufferWriter._writer._rb._readindex() + neededdecode) % AudioRingBufferWriter._writer._rb._size;
-    AudioRingBufferWriter._writer._setwriteindex(wi);
-
-    // queue the repeat or new track (stopping the current decoding)
-    const track = e.target.checked ? MHFSPLAYER.AudioQueue[ti].track : MHFSPLAYER.AudioQueue[ti].track.next;
-    fillAudioQueue(track);
+    
+    // race condtions
+    (async function() {
+        await StopQueue();
+        
+        
+        // cancel cached decoded audio
+        let neededdecode = 0;
+        for(let i = 0; i < MHFSPLAYER.AudioQueue.length; i++) {
+            neededdecode += MHFSPLAYER.AudioQueue[i].sampleCount;
+        }
+        const wi = (AudioRingBufferWriter._writer._rb._readindex() + neededdecode) % AudioRingBufferWriter._writer._rb._size;
+        AudioRingBufferWriter._writer._setwriteindex(wi);
+        
+        // queue the repeat or new track (stopping the current decoding)
+        const track = e.target.checked ? MHFSPLAYER.AudioQueue[ti].track : MHFSPLAYER.AudioQueue[ti].track.next;
+        StartQueue(track);
+    })();
+    
+    
+    
 });
  
  ppbtn.addEventListener('click', function (e) {
@@ -664,10 +710,14 @@ rptrackbtn.addEventListener('change', function(e) {
     SBAR_UPDATING = 0;
     if(!MHFSPLAYER.AudioQueue[0]) return;
     const track = MHFSPLAYER.AudioQueue[0].track;
-    StopAudio();
-    const stime = Number(e.target.value);
-    console.log('SEEK ' + stime);
-    fillAudioQueue(track, stime);           
+    (async function() {
+        await StopQueue();
+        StopAudio();
+        const stime = Number(e.target.value);
+        console.log('SEEK ' + stime);
+        StartQueue(track, stime); 
+    })();
+              
  });
  
  prevbtn.addEventListener('click', function (e) {
@@ -682,9 +732,14 @@ rptrackbtn.addEventListener('change', function(e) {
     else {
         return;
     }
+    
+    (async function() {
+        await StopQueue();
+        StopAudio();
+        StartQueue(prevtrack);        
+    })();
 
-    StopAudio();
-    fillAudioQueue(prevtrack);    
+        
  });
  
  nextbtn.addEventListener('click', function (e) {        
@@ -696,9 +751,14 @@ rptrackbtn.addEventListener('change', function(e) {
     else {
         return;
     }
+    
+    (async function() {
+        await StopQueue();
+        StopAudio();
+        StartQueue(nexttrack);        
+    })();
 
-    StopAudio();
-    fillAudioQueue(nexttrack); 
+     
  });
  
  const volslider = document.getElementById("volslider");
