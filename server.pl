@@ -945,7 +945,7 @@ package HTTP::BS::Server::Client::Request {
         $self->{'outheaders'}{'Connection'} //= 'keep-alive';
         
         # SharedArrayBuffer
-        if($fullpath && (index($fullpath, 'static/music_worklet/index.html') != -1)) {
+        if($fullpath && (index($fullpath, 'static/music_worklet') != -1) && (index($fullpath, 'index.html') != -1)) {
             $self->{'outheaders'}{'Cross-Origin-Opener-Policy'} =  'same-origin';
             $self->{'outheaders'}{'Cross-Origin-Embedder-Policy'} = 'require-corp';
         }
@@ -4363,7 +4363,7 @@ sub player_video {
     $buf .= '</script>';
     $buf .= "</body>";
     $buf .= "</html>";  
-    $request->SendLocalBuf(encode_utf8($buf), "text/html"); 
+    $request->SendLocalBuf(encode_utf8($buf), "text/html; charset=utf-8"); 
 }
 
 sub video_library_html {
