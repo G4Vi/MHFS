@@ -2139,10 +2139,12 @@ package MusicLibrary {
     sub BuildLibrary {
         my ($path) = @_;        
         my $statinfo = stat($path);
-        return undef if(! $statinfo);       
+        return undef if(! $statinfo);         
+        my $basepath = basename($path);
+        my $utf8name = decode('UTF-8', $basepath);         
         if(!S_ISDIR($statinfo->mode)){
         return undef if($path !~ /\.(flac|mp3|m4a|wav|ogg|webm)$/); 
-            return [basename($path), $statinfo->size];          
+            return [$basepath, $statinfo->size, undef, $utf8name];          
         } 
         else {
             my $dir;
@@ -2162,7 +2164,7 @@ package MusicLibrary {
                 }                   
             }
             return undef if( $size eq 0);
-            return [basename($path), $size, \@tree];
+            return [$basepath, $size, \@tree, $utf8name];
        }        
     }
 
@@ -2249,8 +2251,8 @@ package MusicLibrary {
         my ($files, $where) = @_;
         $where //= '';
         my $buf = '';
-        my $name_unencoded = decode('UTF-8', $files->[0]);
-        #my $name = encode_entities($name_unencoded);
+        #my $name_unencoded = decode('UTF-8', $files->[0]);
+        my $name_unencoded = $files->[3];
         my $name = ${escape_html_noquote($name_unencoded)};        
         if($files->[2]) {
             my $dir = $files->[0]; 
@@ -2300,7 +2302,8 @@ package MusicLibrary {
                 next;
             }
             my $node = $nodestack[@nodestack - 1];
-            my $newnode = {'name' => decode('UTF-8', $file->[0])};
+            #my $newnode = {'name' => decode('UTF-8', $file->[0])};
+            my $newnode = {'name' =>$file->[3]};
             if($file->[2]) {
                 $newnode->{'files'} = [];
                 push @nodestack, $newnode;
@@ -2637,9 +2640,7 @@ package MusicLibrary {
             my $lib;
             my $folder = quotemeta $source->{'folder'};
             if($source->{'type'} eq 'local') {
-                say "MusicLibrary: building music " . clock_gettime(CLOCK_MONOTONIC);
-                #$self->BuildLibrary2($source->{'folder'});
-                #$self->BuildLibrary2($source->{'folder'});                
+                say "MusicLibrary: building music " . clock_gettime(CLOCK_MONOTONIC);             
                 $lib = BuildLibrary($source->{'folder'});
                 say "MusicLibrary: done building music " . clock_gettime(CLOCK_MONOTONIC);
             }
@@ -2681,19 +2682,25 @@ package MusicLibrary {
     }
 
     sub FindInLibrary {
-        my ($lib, $name) = @_;
+        my ($source, $name) = @_;
         my @namearr = split('/', $name);
+        my $finalstring = $source->{'folder'};
+        my $lib = $source->{'lib'};
         FindInLibrary_Outer: foreach my $component (@namearr) {
             foreach my $libcomponent (@{$lib->[2]}) {
-                if($libcomponent->[0] eq $component) {
+                if($libcomponent->[3] eq $component) {
+                     $finalstring .= "/".$libcomponent->[0]; 
                     $lib = $libcomponent;
                     next FindInLibrary_Outer;
                 }
             }
             return undef;
-        }
-        return $lib;
-    }
+        }        
+        return {
+            'node' => $lib,
+            'path' => $finalstring
+        };            
+    }    
     
     # Define source types here
     my %sendFiles = (
@@ -2720,17 +2727,17 @@ package MusicLibrary {
     );
 
     sub SendFromLibrary {
-        my ($self, $request) = @_;
+        my ($self, $request) = @_;        
+        my $utf8name = decode('UTF-8', $request->{'qs'}{'name'});
         foreach my $source (@{$self->{'sources'}}) {
-            my $node = FindInLibrary($source->{'lib'}, $request->{'qs'}{'name'});
-            next if ! $node;
-
-            my $tfile = $source->{'folder'} . '/' . $request->{'qs'}{'name'};
+            my $node = FindInLibrary($source, $utf8name);
+            next if ! $node;           
+           
             my $nameloc;
-            if($request->{'qs'}{'name'} =~ /(.+\/).+$/) {
+            if($utf8name =~ /(.+\/).+$/) {
                 $nameloc  = $1;
             }
-            if($source->{'SendFile'}->($request, $tfile, $node, $source, $nameloc)) {
+            if($source->{'SendFile'}->($request, $node->{'path'}, $node->{'node'}, $source, $nameloc)) {
                 return 1;
             } 
         }
@@ -2741,13 +2748,14 @@ package MusicLibrary {
 
     sub SendResources {        
         my ($self, $request) = @_;
+        my $utf8name = decode('UTF-8', $request->{'qs'}{'name'});
         foreach my $source (@{$self->{'sources'}}) {
-            my $node = FindInLibrary($source->{'lib'}, $request->{'qs'}{'name'});
+            my $node = FindInLibrary($source, $utf8name);
             next if ! $node;
-            my $tfile = $source->{'folder'} . '/' . $request->{'qs'}{'name'};
-            my $comments = Mytest::get_vorbis_comments($tfile);
+            my $comments = Mytest::get_vorbis_comments($node->{'path'});
             my $commenthash = {};
             foreach my $comment (@{$comments}) {
+                $comment = decode('UTF-8', $comment);
                 my ($key, $value) = split('=', $comment);
                 $commenthash->{$key} = $value;
             }
