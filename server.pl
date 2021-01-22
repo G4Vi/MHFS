@@ -2141,7 +2141,44 @@ package MusicLibrary {
         my $statinfo = stat($path);
         return undef if(! $statinfo);         
         my $basepath = basename($path);
-        my $utf8name = decode('UTF-8', $basepath);         
+        #my $utf8name = decode('UTF-8', $basepath); 
+        my $utf8name;
+        #eval {
+        #    # Fast path, is strict UTF-8
+        #    $utf8name =  decode('UTF-8', $basepath, Encode::FB_CROAK);
+        #    1;
+        #} or do {
+        #    # Slow path. Replace surrogate pairs and coerce to strict UTF-8
+        #    say "Slow path $basepath";
+        #    my $loose = decode("utf8", $basepath);
+        #    my $surrogatepairtochar = sub {
+        #        my ($hi, $low) = @_;
+        #        my $codepoint = 0x10000 + (ord($hi) - 0xD800) * 0x400 + (ord($low) - 0xDC00);
+        #        return pack('W*', $codepoint);
+        #    };
+        #    $loose =~ s/([\x{D800}-\x{DBFF}])([\x{DC00}-\x{DFFF}])/$surrogatepairtochar->($1, $2)/ueg; #uncode, expression replacement, global
+        #    #Dump($loose);
+        #    Encode::_utf8_off($loose);
+        #    $utf8name = decode('UTF-8', $loose);
+        #};
+
+        # Slow path. Replace surrogate pairs and coerce to strict UTF-8
+        #say "Slow path $basepath";
+        my $loose = decode("utf8", $basepath);
+        my $surrogatepairtochar = sub {
+            my ($hi, $low) = @_;
+            my $codepoint = 0x10000 + (ord($hi) - 0xD800) * 0x400 + (ord($low) - 0xDC00);
+            return pack('W*', $codepoint);
+        };
+        $loose =~ s/([\x{D800}-\x{DBFF}])([\x{DC00}-\x{DFFF}])/$surrogatepairtochar->($1, $2)/ueg; #uncode, expression replacement, global
+        #Dump($loose);
+        Encode::_utf8_off($loose);
+        $utf8name = decode('UTF-8', $loose);
+        
+        #if($path =~ /Trucks.+07/) {
+        #    say "time to die";
+        #    die;
+        #}              
         if(!S_ISDIR($statinfo->mode)){
         return undef if($path !~ /\.(flac|mp3|m4a|wav|ogg|webm)$/); 
             return [$basepath, $statinfo->size, undef, $utf8name];          
