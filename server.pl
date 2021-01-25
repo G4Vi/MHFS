@@ -2168,9 +2168,18 @@ package MusicLibrary {
         my $surrogatepairtochar = sub {
             my ($hi, $low) = @_;
             my $codepoint = 0x10000 + (ord($hi) - 0xD800) * 0x400 + (ord($low) - 0xDC00);
-            return pack('W*', $codepoint);
+            #return pack('W*', $codepoint);
+            return pack('U', $codepoint);
+            #my $bs = codepoint_to_bytes($codepoint);
+            #Encode::_utf8_on($bs);
+            #return $bs;
         };
-        $loose =~ s/([\x{D800}-\x{DBFF}])([\x{DC00}-\x{DFFF}])/$surrogatepairtochar->($1, $2)/ueg; #uncode, expression replacement, global
+        #my $hi = "\x{D83C}";
+        #my $low = "\x{DF84}";
+        #Dump($hi);
+        #Dump($surrogatepairtochar->($hi, $low));
+        #die;
+        $loose =~ s/([\x{D800}-\x{DBFF}])([\x{DC00}-\x{DFFF}])/$surrogatepairtochar->($1, $2)/ueg; #unicode, expression replacement, global
         #Dump($loose);
         Encode::_utf8_off($loose);
         $utf8name = decode('UTF-8', $loose);
