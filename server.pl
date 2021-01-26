@@ -2141,48 +2141,30 @@ package MusicLibrary {
         my $statinfo = stat($path);
         return undef if(! $statinfo);         
         my $basepath = basename($path);
-        #my $utf8name = decode('UTF-8', $basepath); 
+        
+        # determine the UTF-8 name of the file
         my $utf8name;
-        #eval {
-        #    # Fast path, is strict UTF-8
-        #    $utf8name =  decode('UTF-8', $basepath, Encode::FB_CROAK);
-        #    1;
-        #} or do {
-        #    # Slow path. Replace surrogate pairs and coerce to strict UTF-8
-        #    say "Slow path $basepath";
-        #    my $loose = decode("utf8", $basepath);
-        #    my $surrogatepairtochar = sub {
-        #        my ($hi, $low) = @_;
-        #        my $codepoint = 0x10000 + (ord($hi) - 0xD800) * 0x400 + (ord($low) - 0xDC00);
-        #        return pack('W*', $codepoint);
-        #    };
-        #    $loose =~ s/([\x{D800}-\x{DBFF}])([\x{DC00}-\x{DFFF}])/$surrogatepairtochar->($1, $2)/ueg; #uncode, expression replacement, global
-        #    #Dump($loose);
-        #    Encode::_utf8_off($loose);
-        #    $utf8name = decode('UTF-8', $loose);
-        #};
-
-        # Slow path. Replace surrogate pairs and coerce to strict UTF-8
-        #say "Slow path $basepath";
-        my $loose = decode("utf8", $basepath);
-        my $surrogatepairtochar = sub {
-            my ($hi, $low) = @_;
-            my $codepoint = 0x10000 + (ord($hi) - 0xD800) * 0x400 + (ord($low) - 0xDC00);
-            #return pack('W*', $codepoint);
-            return pack('U', $codepoint);
-            #my $bs = codepoint_to_bytes($codepoint);
-            #Encode::_utf8_on($bs);
-            #return $bs;
+        {
+        local $@;
+        eval {
+            # Fast path, is strict UTF-8
+            $utf8name = decode('UTF-8', $basepath, Encode::FB_CROAK | Encode::LEAVE_SRC);
+            1;
         };
-        #my $hi = "\x{D83C}";
-        #my $low = "\x{DF84}";
-        #Dump($hi);
-        #Dump($surrogatepairtochar->($hi, $low));
-        #die;
-        $loose =~ s/([\x{D800}-\x{DBFF}])([\x{DC00}-\x{DFFF}])/$surrogatepairtochar->($1, $2)/ueg; #unicode, expression replacement, global
-        #Dump($loose);
-        Encode::_utf8_off($loose);
-        $utf8name = decode('UTF-8', $loose);
+        }
+        if(! $utf8name) {
+            say "Slow path $basepath";
+            my $loose = decode("utf8", $basepath);
+            my $surrogatepairtochar = sub {
+                my ($hi, $low) = @_;
+                my $codepoint = 0x10000 + (ord($hi) - 0xD800) * 0x400 + (ord($low) - 0xDC00);
+                return pack('U', $codepoint);
+            };
+            $loose =~ s/([\x{D800}-\x{DBFF}])([\x{DC00}-\x{DFFF}])/$surrogatepairtochar->($1, $2)/ueg; #uncode, expression replacement, global
+            #Dump($loose);
+            Encode::_utf8_off($loose);
+            $utf8name = decode('UTF-8', $loose);
+        }        
         
         #if($path =~ /Trucks.+07/) {
         #    say "time to die";
