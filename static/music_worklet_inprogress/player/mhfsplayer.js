@@ -613,8 +613,8 @@ const MHFSPlayer = async function(opt) {
     that.playtracks = async function(tracknames) {
         const unlock = await that.USERMUTEX.lock();
         const firsttrack = tracknames.shift();
-        await that._playtrack(firsttrack);
-        that._queuetracks(tracknames);        
+        const after = await that._playtrack(firsttrack);
+        that._queuetracks(tracknames, after);        
         unlock();
     };    
 

@@ -960,7 +960,11 @@ package HTTP::BS::Server::Client::Request {
     }
 
     sub _SendResponse {
-        my ($self, $fileitem) = @_;
+        my ($self, $fileitem) = @_;        
+        if(utf8::is_utf8($fileitem->{'buf'})) {
+            warn "_SendResponse: UTF8 flag is set, turning off";
+            Encode::_utf8_off($fileitem->{'buf'});
+        }
         $self->{'response'} = $fileitem;
         $self->{'client'}->SetEvents(POLLOUT | $EventLoop::Poll::ALWAYSMASK );        
     }
@@ -1173,13 +1177,17 @@ package HTTP::BS::Server::Client::Request {
     }
 
     sub SendLocalBuf {
-        my ($self, $buf, $mime, $options) = @_;        
-        my $bytesize = $options->{'bytesize'};
-        {
-            use bytes;
-            $bytesize //= length($buf);
-            say "bytesize $bytesize";
+        my ($self, $buf, $mime, $options) = @_;
+
+        # TODO implement support for range requests, less copying, refactor and split up BuildHeaders, no length field in the fileitem
+        
+        # we want to sent in increments of bytes not characters
+        if(utf8::is_utf8($buf)) {
+            warn "SendLocalBuf: UTF8 flag is set, turning off";
+            Encode::_utf8_off($buf);
         }
+
+        my $bytesize = length($buf);
         my $headtext;   
         my %fileitem;        
         ($fileitem{'length'}, $headtext) = $self->_BuildHeaders($bytesize, $mime, $options->{'filename'});    
@@ -1427,15 +1435,13 @@ package HTTP::BS::Server::Client {
         my ($buf, $bytesToSend);
         if(defined $dataitem->{'buf'}) {
             $buf = $dataitem->{'buf'};
-            $dataitem->{'buf'} = undef; 
-            use bytes;
+            $dataitem->{'buf'} = undef;
             $bytesToSend = length $buf;        
         }        
         my $sentthiscall = 0;
         do {
             # Try to send the buf if set
-            if(defined $buf) {                
-                use bytes;            
+            if(defined $buf) {            
                 my $remdata = TrySendItem($csock, $buf, $bytesToSend);
                 $sentthiscall += $bytesToSend - length($remdata);      
                 
@@ -1827,6 +1833,8 @@ package HTTP::BS::Server::Process {
         pipe(my $inreader, my $inwriter)   or die("pipe failed $!");
         pipe(my $outreader, my $outwriter) or die("pipe failed $!");
         pipe(my $errreader, my $errwriter) or die("pipe failed $!");
+        # the childs stderr will be UTF-8 text
+        binmode($errreader, ':encoding(UTF-8)');
         my $pid = fork();
         if($pid == 0) {
             close($inwriter);
@@ -1840,8 +1848,7 @@ package HTTP::BS::Server::Process {
         }
         close($inreader);
         close($outwriter);
-        close($errwriter);             
-       
+        close($errwriter);       
         $self{'pid'} = $pid;
         say 'PID '. $pid . ' NEW CHILD';
         _setup_handlers(\%self, $inwriter, $outreader, $errreader, $prochandlers, $handlesettings);               
@@ -2134,13 +2141,15 @@ package MusicLibrary {
     use HTML::Template;
     use lib File::Spec->catdir($FindBin::Bin, 'Mytest', 'blib', 'lib');
     use lib File::Spec->catdir($FindBin::Bin, 'Mytest', 'blib', 'arch');
-    use Mytest;    
+    use Mytest;
 
+    # read the directory tree from desk and store
+    # this assumes filenames are UTF-8ish, the octlets will be the actual filename, but the printable filename is created by decoding it as UTF-8
     sub BuildLibrary {
         my ($path) = @_;        
         my $statinfo = stat($path);
         return undef if(! $statinfo);         
-        my $basepath = basename($path);
+        my $basepath = basename($path);       
         
         # determine the UTF-8 name of the file
         my $utf8name;
@@ -2153,7 +2162,7 @@ package MusicLibrary {
         };
         }
         if(! $utf8name) {
-            say "Slow path $basepath";
+            say "MusicLibrary: BuildLibrary slow path decode - " . decode('UTF-8', $basepath);         
             my $loose = decode("utf8", $basepath);
             my $surrogatepairtochar = sub {
                 my ($hi, $low) = @_;
@@ -2161,9 +2170,9 @@ package MusicLibrary {
                 return pack('U', $codepoint);
             };
             $loose =~ s/([\x{D800}-\x{DBFF}])([\x{DC00}-\x{DFFF}])/$surrogatepairtochar->($1, $2)/ueg; #uncode, expression replacement, global
-            #Dump($loose);
             Encode::_utf8_off($loose);
             $utf8name = decode('UTF-8', $loose);
+            say "MusicLibrary: BuildLibrary slow path decode changed to : $utf8name";
         }        
         
         #if($path =~ /Trucks.+07/) {
@@ -2243,17 +2252,6 @@ package MusicLibrary {
         #file mode
         #owner uid and gid
 
-    }
-
-    sub GetPrompt {
-        my ($out, $dir) = @_;
-        #$dir = quotemeta $dir;
-        my ($temp, $buf);
-        while(read $out, $temp, 1) {
-            $buf .= $temp;
-            return $buf if($buf =~ /$dir\$$/);
-        }
-        return undef;
     }
 
     sub BuildRemoteLibrary {
@@ -2797,24 +2795,26 @@ package MusicLibrary {
 
     sub UpdateLibrariesAsync {
         my ($self, $evp, $onUpdateEnd) = @_;
-        HTTP::BS::Server::Process->new_output_child($evp, sub {
+        HTTP::BS::Server::Process->new_output_child($evp, sub {            
             # done in child
             my ($datachannel) = @_;
             $self->BuildLibraries();
-            print STDERR "Building libraries\n";
+            print STDERR "MusicLibrary: UpdateLibrariesAsync: Building libraries\n";
             my @mlibs;
             foreach my $source (@{$self->{'sources'}}) {
                 push @mlibs, $source->{'lib'};                
             }
-            print STDERR "freezing\n";
+            print STDERR "MusicLibrary: UpdateLibrariesAsync:freezing\n";
             my %updatedlibrary = ('libs' => \@mlibs, 'html_gapless' => $self->{'html_gapless'}, 'html' => $self->{'html'}, 'musicdbhtml' => $self->{'musicdbhtml'}, 'musicdbjson' => $self->{'musicdbjson'});
             my $pipedata = freeze(\%updatedlibrary);
-            print STDERR "outputting on pipe\n";  
+            print STDERR "MusicLibrary: UpdateLibrariesAsync: outputting on pipe\n";  
             print $datachannel $pipedata;
             exit 0;
         }, sub {
-            my ($out, $err) = @_;                    
-            say "From child err: $err";
+            my ($out, $err) = @_;
+            say "BEGIN_FROM_CHILD---------";
+            print $err;
+            say "END_FROM_CHILD-----------";
             my $unthawed = thaw($out);
             if($unthawed && $unthawed->{'libs'} && $unthawed->{'html_gapless'} && $unthawed->{'html'}){
                 my $temp = $unthawed->{'libs'};
@@ -3310,6 +3310,10 @@ use HTML::Entities;
 use Encode;
 use Symbol 'gensym';
 binmode(STDOUT, ":utf8");
+binmode(STDERR, ":utf8");
+
+#print "Trucks Passing Trucks - - x m a s \x{2744} 2 \x{5343} 17 - - - x m a s \x{2744} 2 \x{5343} 19 - - 01 t h i s \x{1f384} x m a s.flac\n";
+#die;
 HTTP::BS::Server::Util->import();
 
 $SIG{PIPE} = sub {
@@ -3440,6 +3444,12 @@ my @routes = (
     ],
     [
         '/torrent', \&torrent
+    ],
+    [
+        '/debug', sub {
+            my ($request) = @_;
+            $request->SendLocalBuf("Trucks Passing Trucks - - x m a s \x{2744} 2 \x{5343} 17 - - - x m a s \x{2744} 2 \x{5343} 19 - - 01 t h i s \x{1f384} x m a s.flac", 'text/html; charset=utf-8');
+        }
     ],    
     # otherwise attempt to send a file from droot
     sub {
@@ -4229,7 +4239,6 @@ sub torrent {
                         $torrent{'name'} =~ s/\\x(.{2})/chr(hex($1))/eg;
                         my $decoded_as = $torrent{'name'};                     
                         $torrent{'name'} = ${escape_html($torrent{'name'})};
-                        #$torrent{'name'} = encode_entities($torrent{'name'});
                         if($qs->{'logunicode'}) {
                             say 'unicode escaped: ' . $escaped_unicode;
                             say 'decoded as: ' . $decoded_as;
