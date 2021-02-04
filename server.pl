@@ -48,8 +48,9 @@ package EventLoop::Poll::Linux::Timer {
 
     sub settime_linux {
         my ($self, $start, $interval) = @_;
-        my $new_value = packitimerspec({'it_interval' => $interval, 'it_value' => $start});
-        #Dump($new_value);       
+        # assume start 0 is supposed to run immediately not try to cancel a timer
+        $start = ($start > 0.000000001) ? $start : 0.000000001;
+        my $new_value = packitimerspec({'it_interval' => $interval, 'it_value' => $start});       
         say "timerfd_settime " . SYS_timerfd_settime();
         my $settime_success = syscall(SYS_timerfd_settime(), $self->{'timerfd'}, 0, $new_value,0);
         ($settime_success == 0) or die("timerfd_settime failed: $!");
@@ -253,11 +254,9 @@ package EventLoop::Poll {
             };
             
             my $add_timer_ = \&add_timer;
-            *add_timer = sub {
-                # a start 0 is just supposed to yield
-                $_[1] = 0.000000001 if($_[1] == 0);
-                if($add_timer_->(@_) == 0) {
-                    my ($self, $start) = @_;                    
+            *add_timer = sub {                
+                my ($self, $start, $interval, $cb) = @_;
+                if($add_timer_->($self, $start, $interval, $cb) == 0) {                   
                     say "add_timer, updating linux timer to $start";                
                     $self->{'evp_timer'}->settime_linux($start, 0);
                 }
@@ -868,19 +867,25 @@ package HTTP::BS::Server::Client::Request {
         $self->{'client'}{'server'}{'route_default'}($self);        
     }
 
+    sub _ReqDataLength {
+        my ($self, $datalength) = @_;
+        $datalength //= 99999999999;
+        my $end =  $self->{'header'}{'_RangeEnd'} // ($datalength-1);  
+        return $end+1;
+    }
+
     sub _BuildHeaders {
         my ($self, $datalength, $mime, $filename, $fullpath) = @_;
         my $start =  $self->{'header'}{'_RangeStart'};                 
-        my $end =  $self->{'header'}{'_RangeEnd'}; 
-        my $retlength;
+        my $end =  $self->{'header'}{'_RangeEnd'};
         my $headtext;             
         my $code;
         my $is_partial = ( defined $start);
         $start //= 0;
-        if(! defined $datalength) {
-            $retlength = 99999999999;
+        # determine if we know the size of the content
+        if((! defined $datalength) || ($datalength == 99999999999)) {
             $datalength = '*';
-            if($is_partial && (!$end)) {
+            if($is_partial && (!defined($end))) {
                 if($start == 0) {
                     $is_partial = 0;
                 }
@@ -894,8 +899,17 @@ package HTTP::BS::Server::Client::Request {
         }
         else {
             # set the end if not set
-            $end ||= $datalength - 1;
+            $end //= $datalength - 1;
             say "datalength: $datalength";    
+        }        
+        if(defined($end) && !$self->{'outheaders'}{'Transfer-Encoding'}) {
+            say "end: $end";
+            my $contentlength = $end - $start + 1;
+            $self->{'outheaders'}{'Content-Length'} = "$contentlength";                        
+        }
+        else {
+            #$self->{'outheaders'}{'Connection'} = 'close';
+            $self->{'outheaders'}{'Transfer-Encoding'} = 'chunked';            
         }
 
         my %lookup = (
@@ -911,8 +925,10 @@ package HTTP::BS::Server::Client::Request {
             if(!$is_partial) {
                 $code = 200;
             }
-            elsif($end <= $start){
+            # todo, check if end if >= size
+            elsif($end < $start){
                 say "range messed up";
+                $self->{'outheaders'}{'Content-Length'} = 0;
                 $code = 403;
             }
             else {
@@ -920,18 +936,7 @@ package HTTP::BS::Server::Client::Request {
                 $self->{'outheaders'}{'Content-Range'} = "bytes $start-$end/$datalength";
             }
         }
-        $headtext = $lookup{$code} || $lookup{403};      
-
-        if($end) {
-            say "end: $end"; 
-            $retlength = $end+1;
-            my $contentlength = $end - $start + 1;
-            $headtext .= "Content-Length: $contentlength\r\n";            
-        }
-        else {
-            # chunked here?
-            $self->{'outheaders'}{'Connection'} = 'close';            
-        }
+        $headtext = $lookup{$code} || $lookup{403};
         $headtext .=   "Content-Type: $mime\r\n";
         $headtext .=   'Content-Disposition: inline; filename="' . $filename . "\"\r\n" if ($filename);
         if($datalength ne '*') {
@@ -956,7 +961,7 @@ package HTTP::BS::Server::Client::Request {
         }       
         
         $headtext .= "\r\n";        
-        return ($retlength, \$headtext);
+        return \$headtext;
     }
 
     sub _SendResponse {
@@ -965,6 +970,12 @@ package HTTP::BS::Server::Client::Request {
             warn "_SendResponse: UTF8 flag is set, turning off";
             Encode::_utf8_off($fileitem->{'buf'});
         }
+        if($self->{'outheaders'}{'Transfer-Encoding'} && ($self->{'outheaders'}{'Transfer-Encoding'} eq 'chunked')) {
+            say "chunked response";
+            $fileitem->{'is_chunked'} = 1;
+        }
+
+
         $self->{'response'} = $fileitem;
         $self->{'client'}->SetEvents(POLLOUT | $EventLoop::Poll::ALWAYSMASK );        
     }
@@ -1049,7 +1060,6 @@ package HTTP::BS::Server::Client::Request {
     sub SendLocalFile {
         my ($self, $requestfile) = @_;
         my $start =  $self->{'header'}{'_RangeStart'};                 
-        my $end =  $self->{'header'}{'_RangeEnd'}; 
         my $client = $self->{'client'};
         
         my %fileitem = ('requestfile' => $requestfile);          
@@ -1064,42 +1074,29 @@ package HTTP::BS::Server::Client::Request {
         }
         # Get the file size if possible
         my $filelength = LOCK_GET_LOCKDATA($requestfile);
-        if(defined $filelength) {
-            # 99999999999 means we don't know yet
-            if($filelength == 99999999999) {
-                $filelength = undef;
-                if(defined($start) && !$end) {
-                    #TODO is this better than not allowing range requests
-                    #say "setting end";
-                    #$self->{'header'}{'_RangeEnd'} = (stat($FH)->size - 1);
-                }
-            }
-        }    
-        else {
-            $filelength = stat($fileitem{'fh'})->size;
-        }        
-         
-        # build the header based on whether we are sending a full response or range request
-        my $headtext;    
-        my $mime = getMIME($requestfile);        
-         
-        ($fileitem{'length'}, $headtext) = $self->_BuildHeaders($filelength, $mime, basename($requestfile), $requestfile);        
+        $filelength //= stat($fileitem{'fh'})->size;
+        $fileitem{'length'} = $self->_ReqDataLength($filelength);
         say "fileitem length: " . $fileitem{'length'};
-        
+
+        #$self->{'outheaders'}{'Transfer-Encoding'} = 'chunked'; 
+         
+        # build the header based on whether we are sending a full response or range request    
+        my $mime = getMIME($requestfile);
+        my $headtext = $self->_BuildHeaders($filelength, $mime, basename($requestfile), $requestfile);       
         $fileitem{'buf'} = $$headtext;
+
+        # send it
         $self->_SendResponse(\%fileitem);        
     }
 
     sub SendPipe {
         my ($self, $FH, $filename, $filelength, $mime) = @_;
         $mime //= getMIME($filename);
-        my $start = $self->{'header'}{'_RangeStart'};
-        my $end = $self->{'header'}{'_RangeEnd'};
         binmode($FH);
         my %fileitem;
-        $fileitem{'fh'} = $FH;  
-        my $headtext;
-        ($fileitem{'length'}, $headtext) = $self->_BuildHeaders($filelength, $mime, $filename);
+        $fileitem{'fh'} = $FH;
+        $fileitem{'length'} = $self->_ReqDataLength($filelength);        
+        my $headtext = $self->_BuildHeaders($filelength, $mime, $filename);
         $fileitem{'buf'} = $$headtext;
         $self->_SendResponse(\%fileitem);
     }
@@ -1179,7 +1176,7 @@ package HTTP::BS::Server::Client::Request {
     sub SendLocalBuf {
         my ($self, $buf, $mime, $options) = @_;
 
-        # TODO implement support for range requests, less copying, refactor and split up BuildHeaders, no length field in the fileitem
+        # TODO implement support for range requests, less copying, refactor and split up BuildHeaders
         
         # we want to sent in increments of bytes not characters
         if(utf8::is_utf8($buf)) {
@@ -1188,18 +1185,25 @@ package HTTP::BS::Server::Client::Request {
         }
 
         my $bytesize = length($buf);
-        my $headtext;   
-        my %fileitem;        
-        ($fileitem{'length'}, $headtext) = $self->_BuildHeaders($bytesize, $mime, $options->{'filename'});    
-        $fileitem{'buf'} = $$headtext . $buf;
+
+        my $start =  $self->{'header'}{'_RangeStart'} // 0;
+        my $end   =  $self->{'header'}{'_RangeEnd'}  // $bytesize-1;        
+        $buf      =  substr($buf, $start, ($end-$start) + 1);
+        
+        my %fileitem; 
+
+        #$self->{'outheaders'}{'Transfer-Encoding'} = 'chunked';  
+
+        my $headtext = $self->_BuildHeaders($bytesize, $mime, $options->{'filename'});    
+        $fileitem{'buf'}      = $$headtext;
+        $fileitem{'localbuf'} = $buf;
         $self->_SendResponse(\%fileitem);
     }
     
     sub SendCallback {
-        my ($self, $callback, $options) = @_;
-        my $headtext;   
+        my ($self, $callback, $options) = @_; 
         my %fileitem;        
-        ($fileitem{'length'}, $headtext) = $self->_BuildHeaders($options->{'size'}, $options->{'mime'}, $options->{'filename'});    
+        my $headtext = $self->_BuildHeaders($options->{'size'}, $options->{'mime'}, $options->{'filename'});    
         $fileitem{'buf'} = $$headtext;
         $fileitem{'cb'} = $callback;
         $self->_SendResponse(\%fileitem);        
@@ -1461,11 +1465,15 @@ package HTTP::BS::Server::Client {
                     return '';
                 }
                 #we sent the full buf                             
-                $buf = undef;                
+                $buf = undef;                                
             }
-            
-            #try to grab a buf from the file         
-            if(defined $dataitem->{'fh'}) {            
+
+            if(defined $dataitem->{'localbuf'}) {
+                $buf = $dataitem->{'localbuf'};
+                $dataitem->{'localbuf'} = undef;
+            }
+            elsif(defined $dataitem->{'fh'}) {     
+                #try to grab a buf from the file         
                 my $FH = $dataitem->{'fh'};                
                 my $req_length = $dataitem->{'length'}; # if the file is still locked/we haven't checked for it yet it will be 99999999999                
                 my $filepos = tell($FH);
@@ -1499,14 +1507,28 @@ package HTTP::BS::Server::Client {
                             _TSRReturnPrint($sentthiscall);                       
                             return '';
                         }
-                    }                                        
-                }
+                    }                                                                              
+                }                
             }
             elsif(defined $dataitem->{'cb'}) {
                 $buf = $dataitem->{'cb'}->($dataitem);
                 $bytesToSend = length $buf;                
             }
-                  
+
+            # chunked encoding
+            if($dataitem->{'is_chunked'}) {
+                if(! $buf) {
+                    say "chunk done";
+                    $buf = '';
+                    $dataitem->{'is_chunked'} = undef;
+                    $dataitem->{'fh'} = undef;
+                    $dataitem->{'cb'} = undef;
+                }                 
+                
+                #say "chunk with size: " . length($buf);
+                my $sizeline = sprintf "%X\r\n", length($buf);
+                $buf = $sizeline.$buf."\r\n"; 
+            }                  
         } while(defined $buf);        
         $client->{'request'}{'response'} = undef;   
             
@@ -2664,7 +2686,6 @@ package MusicLibrary {
        
         foreach my $source (@{$self->{'sources'}}) {
             my $lib;
-            my $folder = quotemeta $source->{'folder'};
             if($source->{'type'} eq 'local') {
                 say "MusicLibrary: building music " . clock_gettime(CLOCK_MONOTONIC);             
                 $lib = BuildLibrary($source->{'folder'});
@@ -3594,7 +3615,7 @@ sub get_video {
                 return undef;
             }
             # test if its ready to send
-            while(1) {
+            while(1) {                
                  my $filename = $video{'out_filepath'};
                  if(! -e $filename) {
                      last;
