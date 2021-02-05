@@ -14,3 +14,4 @@ static/drflac.wasm
 static/drflac.js
 static/music_worklet/decoder/bin
 static/music_worklet_inprogress/decoder/bin
+server.pl.old

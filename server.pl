@@ -838,7 +838,7 @@ package HTTP::BS::Server::Client::Request {
         # when $ipos is 0 we recieved the end of the headers: \r\n\r\n
         if((defined $self->{'header'}{'Range'}) &&  ($self->{'header'}{'Range'} =~ /^bytes=([0-9]+)\-([0-9]*)$/)) {            
             $self->{'header'}{'_RangeStart'} = $1;
-            $self->{'header'}{'_RangeEnd'} = $2;      
+            $self->{'header'}{'_RangeEnd'} = ($2 ne  '') ? $2 : undef;      
         }
         substr($self->{'client'}{'inbuf'}, 0, 2, '');
         $self->{'on_read_ready'} = undef;
@@ -870,8 +870,90 @@ package HTTP::BS::Server::Client::Request {
     sub _ReqDataLength {
         my ($self, $datalength) = @_;
         $datalength //= 99999999999;
-        my $end =  $self->{'header'}{'_RangeEnd'} // ($datalength-1);  
+        my $end =  $self->{'header'}{'_RangeEnd'} // ($datalength-1);     
         return $end+1;
+    }
+    
+    sub _SendDataItem {
+        my ($self, $dataitem, $opt) = @_;
+        my $size = $opt->{'size'} ? (($opt->{'size'} == 99999999999) ? undef : $opt->{'size'}) : undef;
+        my $start =  $self->{'header'}{'_RangeStart'};
+        my $end =  $self->{'header'}{'_RangeEnd'};        
+        my $isrange = defined $start;
+        my $code = 200;
+        
+        if($isrange && ($start == 0) && (! defined $end)) {
+            say "Hack processing range request as 200";            
+        }        
+        elsif($isrange) {
+            if(! defined $end) {
+                if( ! defined($size)) {
+                    Dump($start);                                        
+                    say "_SendDataItem, no end set for range response";
+                    $self->Send403();
+                    return;
+                }
+                say 'Implicitly setting end';
+                $end = $size - 1;
+            }
+            if($end < $start) {
+                say "_SendDataItem, end < start";
+                $self->Send403();
+                return;                
+            }
+            $code = 206;
+            $self->{'outheaders'}{'Content-Range'} = "bytes $start-$end/" . ($size // '*');
+            $size =  $end-$start + 1;             
+        }
+
+        # if the CL isn't known we need to sent chunked        
+        if(! defined $size) {
+            $self->{'outheaders'}{'Transfer-Encoding'} = 'chunked';
+            $self->{'outheaders'}{'Accept-Ranges'} = 'none';            
+        }
+        else {
+            $self->{'outheaders'}{'Content-Length'} = "$size";   
+        }        
+        
+        my $mime     = $opt->{'mime'};
+        my $filename = $opt->{'filename'};
+        my $fullpath = $opt->{'fullpath'};
+        my %lookup = (
+            200 => "HTTP/1.1 200 OK\r\n",
+            206 => "HTTP/1.1 206 Partial Content\r\n",
+            301 => "HTTP/1.1 301 Moved Permanently\r\n",
+            307 => "HTTP/1.1 307 Temporary Redirect\r\n",
+            403 => "HTTP/1.1 403 Forbidden\r\n",
+            404 => "HTTP/1.1 404 File Not Found\r\n",
+            416 => "HTTP/1.1 416 Range Not Satisfiable\r\n",
+        );
+        
+        my $headtext = $lookup{$code};
+        if(!$headtext) {
+            say "_SendDataItem, bad code $code";
+            $self->Send403();
+            return;            
+        }
+        $headtext .=   "Content-Type: $mime\r\n";
+        $headtext .=   'Content-Disposition: inline; filename="' . $filename . "\"\r\n" if ($filename);
+        $self->{'outheaders'}{'Accept-Ranges'} //= 'bytes';       
+        $self->{'outheaders'}{'Connection'} //= $self->{'header'}{'Connection'};
+        $self->{'outheaders'}{'Connection'} //= 'keep-alive';
+        
+        # SharedArrayBuffer
+        if($fullpath && (index($fullpath, 'static/music_worklet') != -1) && (index($fullpath, 'index.html') != -1)) {
+            $self->{'outheaders'}{'Cross-Origin-Opener-Policy'} =  'same-origin';
+            $self->{'outheaders'}{'Cross-Origin-Embedder-Policy'} = 'require-corp';
+        }
+
+        # serialize the outgoing headers
+        foreach my $header (keys %{$self->{'outheaders'}}) {
+            $headtext .= "$header: " . $self->{'outheaders'}{$header} . "\r\n";
+        }       
+        
+        $headtext .= "\r\n";
+        $dataitem->{'buf'} = $headtext;        
+        $self->_SendResponse($dataitem);      
     }
 
     sub _BuildHeaders {
@@ -1082,11 +1164,16 @@ package HTTP::BS::Server::Client::Request {
          
         # build the header based on whether we are sending a full response or range request    
         my $mime = getMIME($requestfile);
-        my $headtext = $self->_BuildHeaders($filelength, $mime, basename($requestfile), $requestfile);       
-        $fileitem{'buf'} = $$headtext;
-
-        # send it
-        $self->_SendResponse(\%fileitem);        
+        $self->_SendDataItem(\%fileitem, {
+           'size'     => $filelength, 
+           'mime'     => $mime,
+           'filename' => basename($requestfile),
+           'fullname' => $requestfile            
+        });
+        
+        #my $headtext = $self->_BuildHeaders($filelength, $mime, basename($requestfile), $requestfile);       
+        #$fileitem{'buf'} = $$headtext;
+        #$self->_SendResponse(\%fileitem);        
     }
 
     sub SendPipe {
@@ -1095,10 +1182,17 @@ package HTTP::BS::Server::Client::Request {
         binmode($FH);
         my %fileitem;
         $fileitem{'fh'} = $FH;
-        $fileitem{'length'} = $self->_ReqDataLength($filelength);        
-        my $headtext = $self->_BuildHeaders($filelength, $mime, $filename);
-        $fileitem{'buf'} = $$headtext;
-        $self->_SendResponse(\%fileitem);
+        $fileitem{'length'} = $self->_ReqDataLength($filelength);
+
+        $self->_SendDataItem(\%fileitem, {
+           'size'     => $filelength, 
+           'mime'     => $mime,
+           'filename' => $filename         
+        });        
+        
+        #my $headtext = $self->_BuildHeaders($filelength, $mime, $filename);
+        #$fileitem{'buf'} = $$headtext;
+        #$self->_SendResponse(\%fileitem);
     }
 
     # to do get rid of shell escape, launch ssh without blocking
@@ -1111,15 +1205,9 @@ package HTTP::BS::Server::Client::Request {
         my @cmd;
         if(defined $self->{'header'}{'_RangeStart'}) {
             my $start = $self->{'header'}{'_RangeStart'};
-            my $end = $self->{'header'}{'_RangeEnd'};
+            my $end = $self->{'header'}{'_RangeEnd'} // ($size - 1);
             my $bytestoskip =  $start;
-            my $count;
-            if($end) {
-                $count = $end - $start + 1;
-            }
-            else {
-                $count = $size - $start;
-            }
+            my $count = $end - $start + 1;
             @cmd = (@sshcmd, 'dd', 'skip='.$bytestoskip, 'count='.$count, 'bs=1', 'if='.$fullescapedname);
         }
         else{
@@ -1176,7 +1264,7 @@ package HTTP::BS::Server::Client::Request {
     sub SendLocalBuf {
         my ($self, $buf, $mime, $options) = @_;
 
-        # TODO implement support for range requests, less copying, refactor and split up BuildHeaders
+        # TODO less copying
         
         # we want to sent in increments of bytes not characters
         if(utf8::is_utf8($buf)) {
@@ -1190,23 +1278,36 @@ package HTTP::BS::Server::Client::Request {
         my $end   =  $self->{'header'}{'_RangeEnd'}  // $bytesize-1;        
         $buf      =  substr($buf, $start, ($end-$start) + 1);
         
-        my %fileitem; 
-
-        #$self->{'outheaders'}{'Transfer-Encoding'} = 'chunked';  
-
-        my $headtext = $self->_BuildHeaders($bytesize, $mime, $options->{'filename'});    
-        $fileitem{'buf'}      = $$headtext;
+        my %fileitem;
         $fileitem{'localbuf'} = $buf;
-        $self->_SendResponse(\%fileitem);
+        $self->_SendDataItem(\%fileitem, {
+           'size'     => $bytesize,
+           'mime'     => $mime,
+           'filename' => $options->{'filename'}            
+        });
+        
+        
+        #my $headtext = $self->_BuildHeaders($bytesize, $mime, $options->{'filename'});    
+        #$fileitem{'buf'}      = $$headtext;
+        #$fileitem{'localbuf'} = $buf;
+        #$self->_SendResponse(\%fileitem);
     }
     
     sub SendCallback {
         my ($self, $callback, $options) = @_; 
-        my %fileitem;        
-        my $headtext = $self->_BuildHeaders($options->{'size'}, $options->{'mime'}, $options->{'filename'});    
-        $fileitem{'buf'} = $$headtext;
+        my %fileitem;
         $fileitem{'cb'} = $callback;
-        $self->_SendResponse(\%fileitem);        
+
+        $self->_SendDataItem(\%fileitem, {
+           'size'     => $options->{'size'},
+           'mime'     => $options->{'mime'},
+           'filename' => $options->{'filename'}            
+        });        
+
+                
+        #my $headtext = $self->_BuildHeaders($options->{'size'}, $options->{'mime'}, $options->{'filename'});    
+        #$fileitem{'buf'} = $$headtext;        
+        #$self->_SendResponse(\%fileitem);        
     }
     
     sub SendAsTar {
@@ -1446,14 +1547,17 @@ package HTTP::BS::Server::Client {
         do {
             # Try to send the buf if set
             if(defined $buf) {            
-                my $remdata = TrySendItem($csock, $buf, $bytesToSend);
-                $sentthiscall += $bytesToSend - length($remdata);      
+                my $remdata = TrySendItem($csock, $buf, $bytesToSend);                     
                 
                 # critical conn error
                 if(! defined($remdata)) {
                     _TSRReturnPrint($sentthiscall);
                     return undef;
                 }
+                
+                # update the number of bytes sent
+                $sentthiscall += $bytesToSend - length($remdata); 
+                
                 # only update the time if we actually sent some data
                 if($remdata ne $buf) {
                     $client->{'time'} = clock_gettime(CLOCK_MONOTONIC);
@@ -2463,14 +2567,9 @@ package MusicLibrary {
             
             my $pv = Mytest::new($tosend);
             my $outbuf = '';
-            my $startbyte = $request->{'header'}{'_RangeStart'};
-            my $endbyte = $request->{'header'}{'_RangeEnd'};
             my $wavsize = (44+ $TRACKINFO{$tosend}{'TOTALSAMPLES'} * ($TRACKINFO{$tosend}{'BITSPERSAMPLE'}/8) * $TRACKINFO{$tosend}{'NUMCHANNELS'});
-            $startbyte ||= 0;
-            if(! $endbyte) {
-                say "setting endbyte";
-                $endbyte = $wavsize-1;            
-            }
+            my $startbyte = $request->{'header'}{'_RangeStart'} || 0;
+            my $endbyte = $request->{'header'}{'_RangeEnd'} // $wavsize-1;
             say "start byte" . $startbyte;
             say "end byte " . $endbyte;           
             say "Mytest::get_wav " . $startbyte . ' ' . $endbyte;          
@@ -3438,8 +3537,6 @@ my @routes = (
             my ($request) = @_;
             my $droot = $SETTINGS->{'DOCUMENTROOT'};
             say $droot . "/static/stream.html";
-            my $startpos =  $request->{'header'}{'_RangeStart'};                 
-            my $endpos =  $request->{'header'}{'_RangeEnd'}; 
             $request->SendLocalFile("$droot/static/stream.html");
         }
     ],
