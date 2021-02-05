@@ -394,6 +394,7 @@ package HTTP::BS::Server {
         say "-------------------------------------------------";
         say "NEW CONN " . $peerhost . ':' . $peerport;        
         my $MAX_TIME_WITHOUT_SEND = 30; #600;
+        #my $MAX_TIME_WITHOUT_SEND = 5;
         my $cref = HTTP::BS::Server::Client->new($csock, $server);
                
         #$server->{'evp'}->set($csock, $cref, POLLIN | $EventLoop::Poll::ALWAYSMASK);    
@@ -429,6 +430,7 @@ package HTTP::BS::Server::Util {
     use Exporter 'import';
     use File::Find;
     use File::Basename;
+    use POSIX ();
     use Cwd qw(abs_path getcwd);
     our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'shell_stdout', 'shell_escape', 'ssh_stdout', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME');
     # single threaded locks
@@ -441,6 +443,14 @@ package HTTP::BS::Server::Util {
         }
         return $bytes;
     }
+
+    #sub LOCK_GET_FILESIZE {
+    #    my ($filename) = @_; 
+    #    my $lockedfilesize = LOCK_GET_LOCKDATA($filename);
+    #    if(defined $lockedfilesize) {
+    #        
+    #    }
+    #}
 
     sub LOCK_WRITE {    
         my ($filename, $lockdata) = @_;
@@ -522,7 +532,8 @@ package HTTP::BS::Server::Util {
         my $pid = fork();
         if($pid == 0) {
             $func->(@_);
-            exit 0;
+            #exit 0;
+            POSIX::_exit(0);
         }
         else {
             say "PID $pid ASYNC";
@@ -870,8 +881,10 @@ package HTTP::BS::Server::Client::Request {
     sub _ReqDataLength {
         my ($self, $datalength) = @_;
         $datalength //= 99999999999;
-        my $end =  $self->{'header'}{'_RangeEnd'} // ($datalength-1);     
-        return $end+1;
+        my $end =  $self->{'header'}{'_RangeEnd'} // ($datalength-1);
+        my $dl = $end+1;
+        say "_ReqDataLength returning: $dl";   
+        return $dl;
     }
     
     sub _SendDataItem {
@@ -880,39 +893,41 @@ package HTTP::BS::Server::Client::Request {
         my $start =  $self->{'header'}{'_RangeStart'};
         my $end =  $self->{'header'}{'_RangeEnd'};        
         my $isrange = defined $start;
-        my $code = 200;
-        
-        if($isrange && ($start == 0) && (! defined $end)) {
-            say "Hack processing range request as 200";            
-        }        
-        elsif($isrange) {
-            if(! defined $end) {
-                if( ! defined($size)) {
-                    Dump($start);                                        
-                    say "_SendDataItem, no end set for range response";
-                    $self->Send403();
-                    return;
-                }
-                say 'Implicitly setting end';
-                $end = $size - 1;
+        my $code;
+        my $contentlength;      
+        if($isrange) {
+            if(defined $end) {
+                $contentlength = $end - $start + 1;
             }
+            elsif(defined $size) {
+                say 'Implicitly setting end to size';
+                $end = $size - 1;
+                $contentlength = $end - $start + 1;
+            }
+            else {
+                say 'Implicitly setting end to 999999999999 to signify unknown end';
+                $end = 999999999999;
+            }            
+            
             if($end < $start) {
                 say "_SendDataItem, end < start";
                 $self->Send403();
                 return;                
             }
             $code = 206;
-            $self->{'outheaders'}{'Content-Range'} = "bytes $start-$end/" . ($size // '*');
-            $size =  $end-$start + 1;             
+            $self->{'outheaders'}{'Content-Range'} = "bytes $start-$end/" . ($size // '*');          
+        }
+        else {
+            $code = 200;
+            $contentlength = $size;
         }
 
         # if the CL isn't known we need to sent chunked        
-        if(! defined $size) {
-            $self->{'outheaders'}{'Transfer-Encoding'} = 'chunked';
-            $self->{'outheaders'}{'Accept-Ranges'} = 'none';            
+        if(! defined $contentlength) {
+            $self->{'outheaders'}{'Transfer-Encoding'} = 'chunked';         
         }
         else {
-            $self->{'outheaders'}{'Content-Length'} = "$size";   
+            $self->{'outheaders'}{'Content-Length'} = "$contentlength";   
         }        
         
         my $mime     = $opt->{'mime'};
@@ -1137,6 +1152,16 @@ package HTTP::BS::Server::Client::Request {
         $buf .= $msg;
         my %fileitem = ('buf' => $buf);
         $self->_SendResponse(\%fileitem);
+    }
+
+    sub Send416 {
+        my ($self, $cursize) = @_;
+        my $buf = "HTTP/1.1 416 Range Not Satisfiable\r\n";
+        $buf .= "Content-Range: */$cursize\r\n";
+        $buf .= "Content-Length: 0\r\n";
+        $buf .= "\r\n";
+        my %fileitem = ('buf' => $buf);
+        $self->_SendResponse(\%fileitem);
     }    
 
     sub SendLocalFile {
@@ -1144,23 +1169,80 @@ package HTTP::BS::Server::Client::Request {
         my $start =  $self->{'header'}{'_RangeStart'};                 
         my $client = $self->{'client'};
         
-        my %fileitem = ('requestfile' => $requestfile);          
-        if(! open(my $FH, "<", $requestfile)) {
+        my %fileitem = ('requestfile' => $requestfile);
+        my $FH;          
+        if(! open($FH, "<", $requestfile)) {
             $self->Send404;
             return;
         }
-        else {
-            binmode($FH);
-            seek($FH, $start // 0, 0);   
-            $fileitem{'fh'} = $FH;            
+        
+        binmode($FH);
+        my $st = stat($FH);
+        if(! $st) {
+            $self->Send404();
+            return;
         }
-        # Get the file size if possible
-        my $filelength = LOCK_GET_LOCKDATA($requestfile);
-        $filelength //= stat($fileitem{'fh'})->size;
-        $fileitem{'length'} = $self->_ReqDataLength($filelength);
-        say "fileitem length: " . $fileitem{'length'};
+        my $currentsize = $st->size;
+        # seek if a start is specified
+        if(defined $start) {
+            if($start >= $currentsize) {
+                $self->Send416($currentsize);
+                return;
+            }
+            seek($FH, $start, 0); 
+        }            
+        $fileitem{'fh'} = $FH;
 
-        #$self->{'outheaders'}{'Transfer-Encoding'} = 'chunked'; 
+        my $locksize = LOCK_GET_LOCKDATA($requestfile); 
+        my $filesize_unknown = defined($locksize) && ($locksize) ==  "99999999999";       
+        my $toread_unknown = $filesize_unknown && !defined($self->{'header'}{'_RangeEnd'});
+
+
+        my $ts;
+        my $get_file_size_locked = sub {
+            if(! defined $ts) {
+                my $locksz = LOCK_GET_LOCKDATA($requestfile);
+                if(defined $locksz) { 
+                    #say "get_current_length locksize: $locksz";
+                    return ($locksz || 0);
+                }                
+                my $ist = stat($FH);
+                $ts = $ist ? $ist->size : 0;
+                say "no longer locked: $ts";
+            }
+            return $ts;            
+        };
+        
+        # determine how to retrieve the current end size and current total filesize
+        if($toread_unknown) {
+            $fileitem{'get_current_length'} = $get_file_size_locked; 
+        }
+        elsif(defined $self->{'header'}{'_RangeEnd'}) {            
+            $fileitem{'get_current_length'} = sub {
+                return $self->{'header'}{'_RangeEnd'}+1;
+            };
+        }
+        else {
+            $fileitem{'get_current_length'} = sub {
+                return $locksize // $currentsize;
+            };
+        }
+        my $filelength;
+        if(!$filesize_unknown) {
+            $filelength = $locksize // $currentsize;
+        }
+        else {
+            say "size unknown";
+        }
+
+
+        
+        # Get the file size if possible
+        #my $filelength = LOCK_GET_LOCKDATA($requestfile);        
+        #$filelength //= $currentsize;
+        ## set how far we're going to read        
+        #$fileitem{'length'} = $self->_ReqDataLength($filelength);
+               
          
         # build the header based on whether we are sending a full response or range request    
         my $mime = getMIME($requestfile);
@@ -1168,7 +1250,7 @@ package HTTP::BS::Server::Client::Request {
            'size'     => $filelength, 
            'mime'     => $mime,
            'filename' => basename($requestfile),
-           'fullname' => $requestfile            
+           'fullname'    => $requestfile,          
         });
         
         #my $headtext = $self->_BuildHeaders($filelength, $mime, basename($requestfile), $requestfile);       
@@ -1176,13 +1258,20 @@ package HTTP::BS::Server::Client::Request {
         #$self->_SendResponse(\%fileitem);        
     }
 
+    # currently only supports fixed filelength
     sub SendPipe {
         my ($self, $FH, $filename, $filelength, $mime) = @_;
+        if(! defined $filelength) {
+            $self->Send404();
+        }
+
         $mime //= getMIME($filename);
         binmode($FH);
         my %fileitem;
         $fileitem{'fh'} = $FH;
-        $fileitem{'length'} = $self->_ReqDataLength($filelength);
+        $fileitem{'get_current_length'} = sub {
+            return $filelength;
+        };
 
         $self->_SendDataItem(\%fileitem, {
            'size'     => $filelength, 
@@ -1579,7 +1668,8 @@ package HTTP::BS::Server::Client {
             elsif(defined $dataitem->{'fh'}) {     
                 #try to grab a buf from the file         
                 my $FH = $dataitem->{'fh'};                
-                my $req_length = $dataitem->{'length'}; # if the file is still locked/we haven't checked for it yet it will be 99999999999                
+                #my $req_length = $dataitem->{'length'}; # if the file is still locked/we haven't checked for it yet it will be 99999999999 
+                my $req_length = $dataitem->{'get_current_length'}->();               
                 my $filepos = tell($FH);
                 if($req_length && ($filepos >= $req_length)) {
                     if($filepos > $req_length) {
@@ -1607,6 +1697,7 @@ package HTTP::BS::Server::Client {
                             $buf = undef;                        
                         }
                         else {
+                            say 'FH EOF ' .$filepos;
                             seek($FH, 0, 1);
                             _TSRReturnPrint($sentthiscall);                       
                             return '';
@@ -1691,7 +1782,8 @@ package HTTP::BS::Server::Client {
 
     sub DESTROY {
         my $self = shift;
-        say "HTTP::BS::Server::Client destructor called";
+        say "$$ HTTP::BS::Server::Client destructor: ";
+        say "$$ ".'X-MHFS-CONN-ID: ' . $self->{'outheaders'}{'X-MHFS-CONN-ID'};
         if($self->{'sock'}) {
             #shutdown($self->{'sock'}, 2);
             close($self->{'sock'});  
@@ -1916,7 +2008,11 @@ package HTTP::BS::Server::Process {
             if($context->{'on_stdout_data'}) {
                 $context->{'on_stdout_data'}->($context);
             }
-            $context->{'at_exit'}->($context);         
+            $context->{'at_exit'}->($context);
+            #$make_process_args->{'evp'}->add_timer(0, 0, sub {
+            #    $context->{'at_exit'}->($context);
+            #    return undef;
+            #});        
         },      
         };
 
@@ -1940,9 +2036,17 @@ package HTTP::BS::Server::Process {
     # subset of command process, just need the data on SIGCHLD
     sub new_output_process {
         my ($class, $evp, $cmd, $handler) = @_;
-        return new_cmd_process($class, $evp, $cmd, {
+        #my $context = {
+        #    at_exit => sub {
+        #        say "at_exit1";
+        #    }
+        #};
+        #return new_cmd_process($class, $evp, $cmd, $context);
+        
+        return new_cmd_process($class, $evp, $cmd, {   
             'at_exit' => sub {
                 my ($context) = @_;
+                say 'run handler';
                 $handler->($context->{'stdout'}, $context->{'stderr'});
             }
         });
@@ -3692,8 +3796,12 @@ sub get_video {
         }
         print "$_ " foreach @cmd;
         print "\n";           
-        #video_get_streams(\%video);
+        
         video_on_streams(\%video, $request, sub {
+        #say "there should be no pids around";
+        #$request->Send404;
+        #return undef; 
+
         if($fmt eq 'hls') {                    
             $video{'on_exists'} = \&video_hls_write_master_playlist;                                         
         }
