@@ -741,6 +741,7 @@ package HTTP::BS::Server::Client::Request {
     use IO::Poll qw(POLLIN POLLOUT POLLHUP);
     use Data::Dumper;
     use Scalar::Util qw(weaken);
+    use List::Util qw[min max];
     use Symbol 'gensym';
     use Devel::Peek;
     use constant {
@@ -1192,12 +1193,9 @@ package HTTP::BS::Server::Client::Request {
             seek($FH, $start, 0); 
         }            
         $fileitem{'fh'} = $FH;
+            
 
-        my $locksize = LOCK_GET_LOCKDATA($requestfile); 
-        my $filesize_unknown = defined($locksize) && ($locksize) ==  "99999999999";       
-        my $toread_unknown = $filesize_unknown && !defined($self->{'header'}{'_RangeEnd'});
-
-
+   
         my $ts;
         my $get_file_size_locked = sub {
             if(! defined $ts) {
@@ -1211,31 +1209,31 @@ package HTTP::BS::Server::Client::Request {
                 say "no longer locked: $ts";
             }
             return $ts;            
-        };
+        };       
         
-        # determine how to retrieve the current end size and current total filesize
-        if($toread_unknown) {
-            $fileitem{'get_current_length'} = $get_file_size_locked; 
+        my $get_read_filesize = sub {
+            my $maxsize = $get_file_size_locked->();
+            if(defined $self->{'header'}{'_RangeEnd'}) {
+                my $rangesize = $self->{'header'}{'_RangeEnd'}+1;
+                return $rangesize if($rangesize <= $maxsize);                 
+            }
+            return $maxsize;            
+        };        
+        
+        my $filelength = $get_file_size_locked->();
+        
+        # truncate the end to the read filesize        
+        if(defined $self->{'header'}{'_RangeEnd'}) {
+            $self->{'header'}{'_RangeEnd'} = min($filelength-1,  $self->{'header'}{'_RangeEnd'});           
         }
-        elsif(defined $self->{'header'}{'_RangeEnd'}) {            
-            $fileitem{'get_current_length'} = sub {
-                return $self->{'header'}{'_RangeEnd'}+1;
-            };
+        
+        # set function to retrieve the read filesize
+        $fileitem{'get_current_length'} = $get_read_filesize;
+        
+        # set file length
+        if($filelength == 99999999999) {
+            $filelength = undef;        
         }
-        else {
-            $fileitem{'get_current_length'} = sub {
-                return $locksize // $currentsize;
-            };
-        }
-        my $filelength;
-        if(!$filesize_unknown) {
-            $filelength = $locksize // $currentsize;
-        }
-        else {
-            say "size unknown";
-        }
-
-
         
         # Get the file size if possible
         #my $filelength = LOCK_GET_LOCKDATA($requestfile);        
@@ -1270,7 +1268,8 @@ package HTTP::BS::Server::Client::Request {
         my %fileitem;
         $fileitem{'fh'} = $FH;
         $fileitem{'get_current_length'} = sub {
-            return $filelength;
+            my $tocheck = defined $self->{'header'}{'_RangeEnd'} ? $self->{'header'}{'_RangeEnd'}+1 : $filelength;
+            return min($filelength, $tocheck);
         };
 
         $self->_SendDataItem(\%fileitem, {
