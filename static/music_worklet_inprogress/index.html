@@ -75,7 +75,8 @@
 
    
     urlParams.append('fmt', 'musicdbjson');
-    let myRequest = new Request('../../music?'+urlParams.toString());
+    const apiroot = '../..';
+    let myRequest = new Request(apiroot + '/music?'+urlParams.toString());
     fetch(myRequest).then(function(response) {
         if (!response.ok) {
             throw new Error(`HTTP error! status: ${response.status}`);
@@ -101,7 +102,7 @@
             else if(file.files) {
                 text += '<tr><td><table border="1" class="tbl_track"><tbody><tr class="track"><th>';
                 text += escapeHTML(file.name) + '</th><th><a href="#">Play</a></th><th><a href="#">Queue</a></th><th><a href="';
-                text += dlurl(json.apiroot, namestack, file.name) + '">DL</a></th></tr>';
+                text += dlurl(apiroot, namestack, file.name) + '">DL</a></th></tr>';
                 namestack.push(file.name);     
                 file.files.push(null);
                 file.files.push(...files);
@@ -111,12 +112,12 @@
                 // single track without dir
                 if(namestack.length === 0) {
                     text += '<table border="1" class="tbl_track"><tbody>';                    
-                    text += trackHTML(json.apiroot, namestack, file.name);
+                    text += trackHTML(apiroot, namestack, file.name);
                     text += '</tbody></table><br>'
                 }
                 // its a track
                 else {
-                    text += trackHTML(json.apiroot, namestack, file.name);
+                    text += trackHTML(apiroot, namestack, file.name);
                 }
             }
         }

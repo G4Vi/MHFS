@@ -300,6 +300,7 @@ package EventLoop::Poll {
     1;
 }
 
+# bs = byte serving?
 package HTTP::BS::Server {
     use strict; use warnings;
     use feature 'say';
@@ -784,8 +785,12 @@ package HTTP::BS::Server::Client::Request {
                 #transformations
                 $path = uri_unescape($path);
                 my %pathStruct = ( 'unescapepath' => $path );
-                my $webpath = quotemeta $self->{'client'}{'server'}{'settings'}{'WEBPATH'};
-                $path =~ s/^$webpath\/?/\//;
+                if(defined $self->{'client'}{'server'}{'settings'}{'WEBPATH'}) {
+                    say "stripping webpath: " . $self->{'client'}{'server'}{'settings'}{'WEBPATH'};
+                    my $webpath = quotemeta $self->{'client'}{'server'}{'settings'}{'WEBPATH'};
+                    $path =~ s/^$webpath\/?/\//;
+                }
+                
                 $path =~ s/(?:\/|\\)+$//;
                 print "path: $path ";                    
                 say "querystring: $querystring";                     
@@ -1309,13 +1314,13 @@ package HTTP::BS::Server::Client::Request {
     }
 
     # using curl would be better than netcat for https
+    # BROKEN
     sub Proxy {
         my ($self, $proxy, $node) = @_;
-        my $requesttext = $self->{'request'};
-        my $webpath = quotemeta $self->{'client'}{'server'}{'settings'}{'WEBPATH'};
+        my $requesttext = '';
         my @lines = split('\r\n', $requesttext);
         my @outlines = (shift @lines);
-        $outlines[0] =~ s/^(GET|HEAD)\s+$webpath\/?/$1 \//;        
+        #$outlines[0] =~ s/^(GET|HEAD)\s+$webpath\/?/$1 \//;        
         push @outlines, (shift @lines);
         my $host = $proxy->{'httphost'};
         $outlines[1] =~ s/^(Host\:\s+[^\s]+)/Host\: $host/;
@@ -2547,7 +2552,7 @@ package MusicLibrary {
 
     sub toJSON {
         my ($self) = @_;
-        my $head = {'files' => [], 'apiroot' => $self->{'settings'}{'WEBPATH'}};
+        my $head = {'files' => []};
         my @nodestack = ($head);
         my @files = (@{$self->{'library'}});
         while(@files) {
@@ -3535,8 +3540,6 @@ use Symbol 'gensym';
 binmode(STDOUT, ":utf8");
 binmode(STDERR, ":utf8");
 
-#print "Trucks Passing Trucks - - x m a s \x{2744} 2 \x{5343} 17 - - - x m a s \x{2744} 2 \x{5343} 19 - - 01 t h i s \x{1f384} x m a s.flac\n";
-#die;
 HTTP::BS::Server::Util->import();
 
 $SIG{PIPE} = sub {
@@ -3565,10 +3568,12 @@ if(! $SETTINGS->{'DROOT_IGNORE'}) {
 }
 $SETTINGS->{'BIN'} = abs_path(__FILE__);
 $SETTINGS->{'XSEND'} //= 0;
-$SETTINGS->{'WEBPATH'} ||= '/';
-$SETTINGS->{'DOMAIN'} ||= "127.0.0.1";
 $SETTINGS->{'HOST'} ||= "127.0.0.1";
-$SETTINGS->{'PORT'} ||= 8000;     
+$SETTINGS->{'PORT'} ||= 8000;
+$SETTINGS->{'ABSURL'}   ||= 'http://' . $SETTINGS->{'HOST'} . ':' . $SETTINGS->{'PORT'};
+# an absolute url must be written to the m3u8
+$SETTINGS->{'M3U8_URL'} ||= $SETTINGS->{'ABSURL_HTTP'} || $SETTINGS->{'ABSURL'};
+
 $SETTINGS->{'TMPDIR'} ||= $SETTINGS->{'DOCUMENTROOT'} . '/tmp';
 $SETTINGS->{'VIDEO_TMPDIR'} ||= $SETTINGS->{'TMPDIR'};
 $SETTINGS->{'MEDIALIBRARIES'}{'movies'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/movies", 
@@ -3639,8 +3644,8 @@ my @routes = (
         '', sub {
             my ($request) = @_;
             my $droot = $SETTINGS->{'DOCUMENTROOT'};
-            say $droot . "/static/stream.html";
-            $request->SendLocalFile("$droot/static/stream.html");
+            say $droot . "/static/index.html";
+            $request->SendLocalFile("$droot/static/index.html");
         }
     ],
     [
@@ -3648,20 +3653,6 @@ my @routes = (
     ],
     [
         '/video', \&player_video
-    ],
-    [
-        '/play_audio', sub {
-            my ($request) = @_;
-            my $buf = '<audio controls autoplay src="get_video?' . $request->{'qs'}{'querystring'} . '">Terrible</audio>';            
-            $request->SendLocalBuf($buf, 'text/html');
-        }
-    ],
-    [
-        '/play_video', sub {
-            my ($request) = @_;
-            my $buf = '<video controls autoplay src="get_video?' . $request->{'qs'}{'querystring'} . '">Terrible</video>';            
-            $request->SendLocalBuf($buf, 'text/html');
-        }
     ],
     [
         '/torrent', \&torrent
@@ -3677,23 +3668,30 @@ my @routes = (
         my ($request) = @_;
         my $droot = $SETTINGS->{'DOCUMENTROOT'};
         my $requestfile = $request->{'path'}{'requestfile'};       
+        # not a file and doesn't start with droot
         if(( ! defined $requestfile) ||
            ($requestfile !~ /^$droot/)){
             $request->Send404;            
         }
+        # forbidden file? remove?
         elsif($requestfile =~ $SETTINGS->{'DROOT_IGNORE'}) {
             say $requestfile . ' is forbidden';
             $request->Send404;
-        }          
+        }
+        # is regular file          
         elsif (-f $requestfile) {
             $request->SendFile($requestfile);
         }
+        # is directory and directory has index.html
         elsif (-d $requestfile && -f $requestfile.'/index.html') {
+            # ends with slash
             if((substr $request->{'path'}{'unescapepath'}, -1) eq '/') {
                 $request->SendFile($requestfile.'/index.html');
             }
+            # redirect to slash path
             else {
-                $request->Send301($request->{'path'}{'unescapepath'}.'/');
+                #$request->Send301($request->{'path'}{'unescapepath'}.'/');
+                $request->Send301($request->{'path'}{'basename'}.'/');
             }            
         }
         else {
@@ -3741,7 +3739,7 @@ sub get_video {
         }
         $video{'out_base'} = $video{'src_file'}{'name'};
         if($video{'out_fmt'} eq 'm3u8') {
-            my $m3u8 = video_get_m3u8(\%video, 'http://' . $SETTINGS->{'DOMAIN'} . ':' . $SETTINGS->{'PORT'} . $request->{'path'}{'unescapepath'} . '?name=');
+            my $m3u8 = video_get_m3u8(\%video, $SETTINGS->{'M3U8_URL'} . $request->{'path'}{'unsafepath'} . '?name=');
             #$request->{'outheaders'}{'Icy-Name'} = $video{'fullname'};
             $video{'src_file'}{'ext'} = $video{'src_file'}{'ext'} ? '.'. $video{'src_file'}{'ext'} : '';
             $request->SendLocalBuf($$m3u8, 'application/x-mpegURL', {'filename' => $video{'src_file'}{'name'} . $video{'src_file'}{'ext'} . '.m3u8'});

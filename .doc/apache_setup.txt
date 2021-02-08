@@ -7,3 +7,13 @@ https://serverfault.com/questions/438773/ssl-proxy-forwarding-without-the-encryp
     ProxyPass / http://localhost:9091/
     ProxyPassReverse / http://localhost:9091/
 </VirtualHost>
+
+
+RewriteEngine On
+RewriteRule ^/stream$ stream/ [R,L]
+<Location "/stream/">
+  AddOutputFilterByType DEFLATE application/json
+  ProxyPreserveHost On
+  #ProxyPass "http://127.0.0.1:8000/stream/"
+  ProxyPass "http://127.0.0.1:8000/"
+</Location>
