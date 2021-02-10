@@ -394,8 +394,9 @@ package HTTP::BS::Server {
         
         say "-------------------------------------------------";
         say "NEW CONN " . $peerhost . ':' . $peerport;        
-        my $MAX_TIME_WITHOUT_SEND = 30; #600;
+        my $MAX_TIME_WITHOUT_SEND = 30;
         #my $MAX_TIME_WITHOUT_SEND = 5;
+        #my $MAX_TIME_WITHOUT_SEND = 600;
         my $cref = HTTP::BS::Server::Client->new($csock, $server);
                
         #$server->{'evp'}->set($csock, $cref, POLLIN | $EventLoop::Poll::ALWAYSMASK);    
@@ -895,7 +896,7 @@ package HTTP::BS::Server::Client::Request {
     
     sub _SendDataItem {
         my ($self, $dataitem, $opt) = @_;
-        my $size = $opt->{'size'} ? (($opt->{'size'} == 99999999999) ? undef : $opt->{'size'}) : undef;
+        my $size  = $opt->{'size'};
         my $start =  $self->{'header'}{'_RangeStart'};
         my $end =  $self->{'header'}{'_RangeEnd'};        
         my $isrange = defined $start;
@@ -910,6 +911,13 @@ package HTTP::BS::Server::Client::Request {
                 $end = $size - 1;
                 $contentlength = $end - $start + 1;
             }
+            # no end and size unknown. we have 4 choices:
+            # set end to the current end (the satisfiable range on RFC 7233 2.1). Dumb clients don't attempt to request the rest of the data ...
+            # send non partial response (200). This will often disable range requests.
+            # send multipart. "A server MUST NOT generate a multipart response to a request for a single range"(RFC 7233 4.1) guess not
+            
+            # LIE, use a large value to signify infinite size. RFC 8673 suggests doing so when client signifies it can.
+            # Current clients don't however, so lets hope they can. 
             else {
                 say 'Implicitly setting end to 999999999999 to signify unknown end';
                 $end = 999999999999;
