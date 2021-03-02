@@ -3544,6 +3544,7 @@ use Any::URI::Escape;
 use Scalar::Util qw(looks_like_number weaken);
 use HTML::Entities;
 use Encode;
+use Devel::Peek;
 use Symbol 'gensym';
 binmode(STDOUT, ":utf8");
 binmode(STDERR, ":utf8");
@@ -3635,7 +3636,8 @@ my %VIDEOFORMATS = (
             'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/mp4seg_player.html', }, #'minsize' => '20971520'},
             
             'noconv' => {'lock' => 0, 'ext' => '', 'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/noconv_player.html', },
-            'm3u8'   => {'lock' => 0, 'ext' => ''},            
+            'm3u8'   => {'lock' => 0, 'ext' => ''},
+            'mkv'    => {'lock' => 0, 'ext' => ''}            
 );
 
 # get_video formats from plugins
@@ -3745,6 +3747,12 @@ sub get_video {
             $request->SendFile($video{'src_file'}{'filepath'});
             return 1;   
         }
+        # virtual mkv
+        elsif($video{'out_fmt'} eq 'mkv') {
+            video_matroska(\%video, $request);
+            return 1;
+        }
+
         $video{'out_base'} = $video{'src_file'}{'name'};
         if($video{'out_fmt'} eq 'm3u8') {
             my $m3u8 = video_get_m3u8(\%video, $SETTINGS->{'M3U8_URL'} . $request->{'path'}{'unsafepath'} . '?name=');
@@ -3858,6 +3866,43 @@ sub get_video {
         return undef;
     }
     return 1;    
+}
+
+use lib File::Spec->catdir($FindBin::Bin, 'perlmodules', 'Parse-Matroska', 'lib');
+use Parse::Matroska::Reader;
+
+sub video_matroska {
+    my ($video, $request) = @_;
+    
+    my $reader = Parse::Matroska::Reader->new($video->{'src_file'}{'filepath'});
+    my $elm;
+    
+    # find Segment
+    for(;;) {
+        $elm = $reader->read_element;
+        if(! $elm) {
+            $request->Send404;
+            return;
+        }
+        last if($elm->{'elid'} eq '18538067');
+        $elm->skip;
+    }
+    print "Element name: $elm->{name}\n";
+
+    # find Segment Information
+    my $child;
+    for(;;) {
+        $child = $elm->next_child();
+        if(!$child) {
+            $request->Send404;
+            return;
+        }
+        last if($child->{'elid'} eq '1549A966');
+    }
+    print "Element name: $child->{name}\n"; 
+
+    $reader->close;
+    die;
 }
 
 sub video_get_format {
