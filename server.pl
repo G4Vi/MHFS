@@ -3871,38 +3871,248 @@ sub get_video {
 use lib File::Spec->catdir($FindBin::Bin, 'perlmodules', 'Parse-Matroska', 'lib');
 use Parse::Matroska::Reader;
 
+sub ebml_read {
+    my $ebml = $_[0];
+    my $buf = \$_[1];
+    my $amount = $_[2];
+    my $lastelm = ($ebml->{'elements'} > 0) ? $ebml->{'elements'}[-1] : undef;
+    return undef if($lastelm && defined($lastelm->{'size'}) && ($amount > $lastelm->{'size'}));
+    
+    my $amtread = read($ebml->{'fh'}, $$buf, $amount);
+    if(! $amtread) {
+        return $amtread;
+    }
+
+    foreach my $elem (@{$ebml->{'elements'}}) {
+        if($elem->{'size'}) {
+            $elem->{'size'} -= $amtread;
+        }
+    }
+    return $amtread;    
+}
+
+sub ebml_seek {
+    my ($ebml, $position, $whence) = @_;
+    ($whence == SEEK_CUR) or die("unsupported seek");
+    return undef if(($ebml->{'elements'} > 0) && $ebml->{'elements'}[-1]{'size'} && ($position > $ebml->{'elements'}[-1]{'size'}));
+    return undef if(!seek($ebml->{'fh'}, $position, $whence));
+    foreach my $elem (@{$ebml->{'elements'}}) {
+        if($elem->{'size'}) {
+            $elem->{'size'} -= $position;
+        }
+    }
+    return 1;
+}
+
+sub read_vint {
+    my ($ebml, $val, $savewidth) = @_;
+    my $value;
+    ebml_read($ebml, $value, 1) or return 0;
+    my $shift = 0;
+    my $width = 1;
+    $value = unpack('C', $value);      
+    for(;;$width++) {
+        last if(($value << ($width-1)) & 0x80);
+        $width < 9 or return 0;        
+    }
+    $$savewidth = $width;
+    my $byte;
+    for(; $width > 1; $width--) {
+        $value <<= 8;
+        ebml_read($ebml, $byte, 1) or return 0;
+        $value |= unpack('C', $byte);
+    }
+    $$val = $value;
+    return 1; 
+}
+
+sub read_and_parse_vint {
+    my ($ebml, $val) = @_;
+    my $value;
+    my $width;
+    read_vint($ebml, \$value, \$width) or return 0;
+    my $andval = 0xFF >> $width;
+    for(;$width > 1; $width--) {
+        $andval <<= 8;
+        $andval |= 0xFF;               
+    }
+    $value &= $andval;
+    $$val = $value;
+    return 1;
+}
+
+sub ebml_open {
+    my ($filename) = @_;
+    open(my $fh, "<", $filename) or return 0;
+    my $magic;
+    read($fh, $magic, 4) or return 0;
+    $magic eq "\x1A\x45\xDF\xA3" or return 0;
+    my $ebmlheadsize;
+    my $ebml = {'fh' => $fh, 'elements' => []};
+    read_and_parse_vint($ebml, \$ebmlheadsize) or return 0;
+    seek($fh, $ebmlheadsize, SEEK_CUR) or return 0;    
+    return $ebml;
+}
+
+sub ebml_read_element {
+    my ($ebml) = @_;
+    my $id;
+    read_vint($ebml, \$id) or return undef;
+    my $size;
+    read_and_parse_vint($ebml, \$size) or return undef;
+    my $elm = {'id' => $id, 'size' => $size};
+    push @{$ebml->{'elements'}}, $elm;
+    return $elm;
+}
+
+sub ebml_skip {
+    my ($ebml) = @_;
+    my $elm = $ebml->{'elements'}[-1];
+    ebml_seek($ebml, $elm->{'size'}, SEEK_CUR) or return 0;
+    pop @{$ebml->{'elements'}};
+    return 1;
+}
+
+sub ebml_find_id {
+    my ($ebml, $id) = @_;
+    for(;;) {
+        my $elm = ebml_read_element($ebml);
+        $elm or return undef;        
+        if($elm->{'id'} == $id) {
+            return $elm;
+        }
+        #say "id " . $elm->{'id'};
+        ebml_skip($ebml) or return undef;        
+    }
+}
+
 sub video_matroska {
     my ($video, $request) = @_;
-    
-    my $reader = Parse::Matroska::Reader->new($video->{'src_file'}{'filepath'});
-    my $elm;
-    
-    # find Segment
+
+    my $ebml = ebml_open($video->{'src_file'}{'filepath'});
+    if(! $ebml) {
+        $request->Send404;
+        return;
+    }
+
+    my $EBMLID = {
+        'Segment'        => 0x18538067,
+        'SegmentInfo'    => 0x1549A966,
+        'TimestampScale' => 0x2AD7B1,
+        'Duration'       => 0x4489,
+        'MuxingApp'      => 0x4D80,
+        'WritingApp'     => 0x5741,
+        'Tracks'         => 0x1654AE6B,
+        'Track'          => 0xAE,
+        'CodecID'        => 0x86,
+        'TrackType'      => 0x83
+    };
+
+    # find segment
+    my $segment = ebml_find_id($ebml, $EBMLID->{'Segment'});
+    if(!$segment) {
+        $request->Send404;
+        return;
+    }
+    say "Found segment";
+    print Dumper($segment);
+    # find segment info
+    my $segmentinfo = ebml_find_id($ebml, $EBMLID->{'SegmentInfo'});
+    if(!$segmentinfo) {
+        $request->Send404;
+        return;
+    }
+    say "Found segment info";
+    print Dumper($segment);
+    # find TimestampScale
+    my $tselm = ebml_find_id($ebml, $EBMLID->{'TimestampScale'});
+    if(!$tselm) {
+        $request->Send404;
+        return;
+    }
+    say "Found ts elm";
+    my $tsbinary;
+    if(!ebml_read($ebml, $tsbinary, $tselm->{'size'})) {
+        $request->Send404;
+        return;
+    }
+    Dump($tsbinary);
+    if(!ebml_skip($ebml)) {
+        $request->Send404;
+        return;
+    }
+    # find Duration
+    my $durationelm = ebml_find_id($ebml, $EBMLID->{'Duration'});
+    if(!$durationelm) {
+        $request->Send404;
+        return;
+    }
+    say "Found duration elm";
+    my $durbin;
+    if(!ebml_read($ebml, $durbin, $durationelm->{'size'})) {
+        $request->Send404;
+        return;
+    }
+    Dump($durbin);
+    if(!ebml_skip($ebml)) {
+        $request->Send404;
+        return;
+    }
+    if(!ebml_skip($ebml)) {
+        $request->Send404;
+        return;
+    }
+    # find Tracks
+    my $tracks = ebml_find_id($ebml, $EBMLID->{'Tracks'});
+    if(!$tracks) {
+        $request->Send404;
+        return;
+    }
+    # loop through the Tracks
+    my @tracks;
     for(;;) {
-        $elm = $reader->read_element;
-        if(! $elm) {
+        my $track = ebml_find_id($ebml, $EBMLID->{'Track'});
+        if(! $track) {
+            ebml_skip($ebml);
+            last;
+        }
+        my %tcopy = %{$track};
+        my $tpos = tell($ebml->{'fh'});
+        if(!$tpos) {
+            say "tell failed";
             $request->Send404;
             return;
         }
-        last if($elm->{'elid'} eq '18538067');
-        $elm->skip;
-    }
-    print "Element name: $elm->{name}\n";
-
-    # find Segment Information
-    my $child;
-    for(;;) {
-        $child = $elm->next_child();
-        if(!$child) {
-            $request->Send404;
-            return;
+        my $codec;
+        my $type;
+        for(;;) {
+            my $telm = ebml_read_element($ebml);            
+            if(!$telm) {
+                ebml_skip($ebml);
+                last;
+            }
+            if($telm->{'id'} == $EBMLID->{'CodecID'}) {
+                ebml_read($ebml, $codec, $telm->{'size'});
+            }
+            elsif($telm->{'id'} == $EBMLID->{'TrackType'}) {
+                say "reading type " . $telm->{'size'};
+                ebml_read($ebml, $type, $telm->{'size'});
+            }                       
+            ebml_skip($ebml);
         }
-        last if($child->{'elid'} eq '1549A966');
+        push @tracks, {'size' => $tcopy{'size'}, 'pos' => $tpos, 'CodecID' => $codec, 'TrackType' => $type};
     }
-    print "Element name: $child->{name}\n"; 
+    if(scalar(@tracks) == 0) {
+        $request->Send404;
+        return;
+    }
+    print Dumper(@tracks);
 
-    $reader->close;
-    die;
+    # Send the first part of segment
+
+    # Begin reencoding the audio to FLAC
+
+    $request->Send404;
 }
 
 sub video_get_format {
