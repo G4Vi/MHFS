@@ -3987,6 +3987,76 @@ sub ebml_find_id {
     }
 }
 
+sub ebml_make_elm {
+    my $elementid = $_[0];
+    my $data = \$_[1];
+    $elementid < 0xFFFFFFFF or return undef;
+    my $size = length($$data);
+    $size < 0xFFFFFFFFFFFFFF or return undef;
+    # pack the id
+    my $buf;
+    if($elementid > 0xFFFFFF) {
+        $buf = pack('CCCC', ($elementid >> 24) & 0xFF, ($elementid >> 16) & 0xFF, ($elementid >> 8) & 0xFF, $elementid & 0xFF);
+    }
+    elsif($elementid > 0xFFFF) {
+        $buf = pack('CCC', ($elementid >> 16) & 0xFF, ($elementid >> 8) & 0xFF, $elementid & 0xFF);
+    }
+    elsif($elementid > 0xFF) {
+        $buf = pack('CC', ($elementid >> 8) & 0xFF, $elementid & 0xFF);
+    }
+    else {
+        $buf = pack('C', $elementid & 0xFF);
+    }
+    # determine the VINT width and marker value or the size
+    my $width = 1;
+    my $val = 0xFF;
+    for(;$size >= $val;$width++) {
+        $val = ($val << 8) | 0xFF;
+    }   
+    my $sizeflag = (0x1 << (8-$width)) << (($width-1)*8); 
+    # Apply the VINT marker and pack the vint   
+    $size |= $sizeflag;
+    for(;$width; $width--) {
+        $buf .= pack('C', ($size >> ($width-1)*8) & 0xFF);
+    }
+    # pack the data
+    $buf .= $$data;
+    return \$buf;
+}
+
+sub flac_read_METADATA_BLOCK {
+    my $fh = $_[0];
+    my $done = \$_[1];
+    my $buf;
+    my $headread = read($fh, $buf, 4);
+    ($headread && ($headread == 4)) or return undef;
+    my ($blocktypelast, $sizehi, $sizemid, $sizelo) = unpack('CCCC',$buf);
+    $$done = $blocktypelast & 0x80;
+    my $type = $blocktypelast & 0x7F;
+    my $size = ($sizehi << 16) | ($sizemid << 8) | ($sizelo);
+    #say "islast $$done type $type size $size";
+    $type != 0x7F or return undef;
+    my $tbuf;
+    my $dataread = read($fh, $tbuf, $size);
+    ($dataread && ($dataread == $size)) or return undef;
+    $buf .= $tbuf;
+    return \$buf;
+}
+sub flac_read_to_audio {
+    my ($fh) = @_;
+    my $buf;    
+    my $magic = read($fh, $buf, 4);
+    ($magic && ($magic == 4)) or return undef;
+    for(;;) {
+        my $done;
+        my $bref = flac_read_METADATA_BLOCK($fh, $done);
+        $bref or return undef;
+        $buf .= $$bref;
+        last if($done);
+    }
+    return \$buf;
+}
+
 sub video_matroska {
     my ($video, $request) = @_;
 
@@ -4006,8 +4076,11 @@ sub video_matroska {
         'Tracks'         => 0x1654AE6B,
         'Track'          => 0xAE,
         'TrackNumber'    => 0xD7,
+        'TrackUID'       => 0x73C5,        
+        'TrackType'      => 0x83,
         'CodecID'        => 0x86,
-        'TrackType'      => 0x83
+        'CodecPrivData', => 0x63A2,
+        'AudioTrack'     => 0xE1 
     };
 
     # find segment
@@ -4077,89 +4150,105 @@ sub video_matroska {
         if(! $track) {
             ebml_skip($ebml);
             last;
-        }
-        my %tcopy = %{$track};
-        my $tpos = tell($ebml->{'fh'});
-        if(!$tpos) {
-            say "tell failed";
-            $request->Send404;
-            return;
-        }
-        my $trackno;
-        my $codec;
-        my $type;
+        }       
+        my %track = ('raw' => {}, 'raw_arr' => []);
         for(;;) {
-            my $telm = ebml_read_element($ebml);            
+            my $telm = ebml_read_element($ebml);
             if(!$telm) {
                 ebml_skip($ebml);
                 last;
             }
+
+            my $raw;          
+            ebml_read($ebml, $raw, $telm->{'size'});            
+            
             if($telm->{'id'} == $EBMLID->{'TrackNumber'}) {
-                ebml_read($ebml, $trackno, $telm->{'size'});
+                $track{'TrackNumber'} = unpack('C', $raw);
             }
             elsif($telm->{'id'} == $EBMLID->{'CodecID'}) {
-                ebml_read($ebml, $codec, $telm->{'size'});
+                $track{'CodecID'} =  $raw;
             }
             elsif($telm->{'id'} == $EBMLID->{'TrackType'}) {
-                say "reading type " . $telm->{'size'};
-                ebml_read($ebml, $type, $telm->{'size'});
-            }                       
+                $track{'TrackType'} = unpack('C',$raw);
+            }
+
+            # save the raw data
+            push @{$track{'raw_arr'}}, $telm->{'id'};
+            $track{'raw'}{$telm->{'id'}} = $raw;                  
             ebml_skip($ebml);
         }
-        push @tracks, {'size' => $tcopy{'size'}, 'pos' => $tpos, 'TrackNumber' => unpack('C',$trackno), 'CodecID' => $codec, 'TrackType' => unpack('C',$type)};
+        push @tracks, \%track;
     }
     if(scalar(@tracks) == 0) {
         $request->Send404;
         return;
     }
-    print Dumper(@tracks);
-
-    my $cpos = tell($ebml->{'fh'});
+    #print Dumper(@tracks);
+    #die;
 
     # Build the Tracks element
     for my $track (@tracks) {
-        if(($track->{'TrackType'} != 0x2) || ($track->{'CodecID'} eq 'A_FLAC')) {
-
-            if(!seek($ebml->{'fh'}, $track->{'pos'}, SEEK_SET)) {
-                $request->Send404;
-                return;
-            }
-            # read the whole Track element
-            if(!read($ebml->{'fh'}, $track->{'buf'}, $track->{'size'})) {
-                $request->Send404;
-                return;
-            }
-            next;
-        }
-
         say "Track codec: " . $track->{'CodecID'} . ' no ' . $track->{'TrackNumber'};
-        my $flacpath = $video->{'out_location'} . '/' . $video->{'out_base'} . '.' . $track->{'TrackNumber'} . '.flac';
-        if(! -e $flacpath) {
-            mkdir($video->{'out_location'});
-            my @cmd = ('ffmpeg', '-i', $video->{'src_file'}{'filepath'}, '-map', '0:'.($track->{'TrackNumber'}-1), $flacpath);
-            print Dumper(\@cmd);
-            if(!(system(@cmd) == 0)) {
-                say "failed to extract audio track";
+
+        # remake the Track if it's audio and not in FLAC
+        if(($track->{'TrackType'} == 0x2) && ($track->{'CodecID'} ne 'A_FLAC')) {            
+            my $flacpath = $video->{'out_location'} . '/' . $video->{'out_base'} . '.' . $track->{'TrackNumber'} . '.flac';
+            if(! -e $flacpath) {
+                mkdir($video->{'out_location'});
+                my @cmd = ('ffmpeg', '-i', $video->{'src_file'}{'filepath'}, '-map', '0:'.($track->{'TrackNumber'}-1), $flacpath);
+                print Dumper(\@cmd);
+                if(!(system(@cmd) == 0)) {
+                    say "failed to extract audio track";
+                    $request->Send404;
+                    return;
+                }
+                say "converted"; 
+            }
+            # read the info necessary to make the new flac track
+            if(!open($track->{'fh'}, "<", $flacpath)) {
                 $request->Send404;
                 return;
             }
-            say "converted"; 
-        }
-        # write the ebml tracks element for this flac
-        $track->{'buf'} = 'AAAA';
-        if(!open($track->{'fh'}, "<", $flacpath)) {
-            $request->Send404;
-            return;
-        }
-    }
+            my $flac = flac_read_to_audio($track->{'fh'});
+            if(! $flac) {
+                $request->Send404;
+                return;
+            }
 
-    print Dumper(@tracks);
+            # Todo get info for AudioTrack
+            
+            # replace the track with the new flac track
+            $track->{'CodecID'} = 'A_FLAC';
+            $track->{'raw'}{$EBMLID->{'CodecPrivData'}} = $$flac;
+            $track->{'raw'}{$EBMLID->{'CodecID'}} = 'A_FLAC';
+            $track->{'raw_arr'} = [
+                $EBMLID->{'TrackNumber'},
+                $EBMLID->{'TrackUID'},
+                $EBMLID->{'CodecID'},
+                $EBMLID->{'TrackType'},
+                $EBMLID->{'CodecPrivData'}
+            ];
+        }
+
+        # serialize the track
+        my $tbuf;
+        foreach my $tid (@{$track->{'raw_arr'}}) {
+            my $buf = ebml_make_elm($tid, $track->{'raw'}{$tid});
+            if(! $buf) {
+                $request->Send404;
+                return;
+            }
+            $tbuf .= $$buf;
+        }
+        Dump($tbuf);
+        #write_file($video->{'out_location'}.'/part.mkv', $tbuf);
+        #die;        
+    }
+    
+    #print Dumper(@tracks);
 
     # write the tracks elements
-    if(!seek($ebml->{'fh'}, $cpos, SEEK_SET)) {
-        $request->Send404;
-        return;
-    }
+
     
 
     $request->Send404;
