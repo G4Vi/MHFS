@@ -693,6 +693,7 @@ package HTTP::BS::Server::Util {
         my %videoexts = ('mp4' => 'video/mp4',
             'mkv'  => 'video/mp4',
             'ts'   => 'video/mp2t',
+            'mkv'  => 'video/x-matroska',
             'webm' => 'video/webm',
             'flv'  => 'video/x-flv');
     
@@ -3987,74 +3988,135 @@ sub ebml_find_id {
     }
 }
 
-sub ebml_make_elm {
-    my $elementid = $_[0];
-    my $data = \$_[1];
-    $elementid < 0xFFFFFFFF or return undef;
-    my $size = length($$data);
-    $size < 0xFFFFFFFFFFFFFF or return undef;
-    # pack the id
-    my $buf;
-    if($elementid > 0xFFFFFF) {
-        $buf = pack('CCCC', ($elementid >> 24) & 0xFF, ($elementid >> 16) & 0xFF, ($elementid >> 8) & 0xFF, $elementid & 0xFF);
+sub ebml_make_elms {
+    my @elms = @_;
+    my @bufstack = ('');
+    while(@elms) {
+        my $elm = $elms[0];
+        if(! $elm) {
+            shift @elms;
+            $elm = $elms[0];
+            $elm->{'data'} = pop @bufstack;
+        }
+        elsif(! $elm->{'data'}) {
+            @elms = (@{$elm->{'elms'}}, undef, @elms);
+            push @bufstack, '';
+            next;
+        }
+        shift @elms;
+        my $elementid = $elm->{'id'};    
+        $elementid < 0xFFFFFFFF or return undef;
+        my $data = \$elm->{'data'};
+    
+        my $size = length($$data);
+        $size < 0xFFFFFFFFFFFFFF or return undef;
+        # pack the id
+        my $buf;
+        if($elementid > 0xFFFFFF) {
+            $buf = pack('CCCC', ($elementid >> 24) & 0xFF, ($elementid >> 16) & 0xFF, ($elementid >> 8) & 0xFF, $elementid & 0xFF);
+        }
+        elsif($elementid > 0xFFFF) {
+            $buf = pack('CCC', ($elementid >> 16) & 0xFF, ($elementid >> 8) & 0xFF, $elementid & 0xFF);
+        }
+        elsif($elementid > 0xFF) {
+            $buf = pack('CC', ($elementid >> 8) & 0xFF, $elementid & 0xFF);
+        }
+        else {
+            $buf = pack('C', $elementid & 0xFF);
+        }
+
+        # pack the size
+        if($elm->{'infsize'}) {
+            $buf .= pack('C', 0xFF);            
+        }
+        else {
+            # determine the VINT width and marker value or the size
+            my $width = 1;
+            my $val = 0xFF;
+            for(;$size >= $val;$width++) {
+                $val = ($val << 8) | 0xFF;
+            }   
+            my $sizeflag = (0x1 << (8-$width)) << (($width-1)*8); 
+            # Apply the VINT marker and pack the vint   
+            $size |= $sizeflag;
+            for(;$width; $width--) {
+                $buf .= pack('C', ($size >> ($width-1)*8) & 0xFF);
+            }
+        }
+        
+        # pack the data
+        $buf .= $$data;
+        $bufstack[-1] .= $buf;
     }
-    elsif($elementid > 0xFFFF) {
-        $buf = pack('CCC', ($elementid >> 16) & 0xFF, ($elementid >> 8) & 0xFF, $elementid & 0xFF);
-    }
-    elsif($elementid > 0xFF) {
-        $buf = pack('CC', ($elementid >> 8) & 0xFF, $elementid & 0xFF);
-    }
-    else {
-        $buf = pack('C', $elementid & 0xFF);
-    }
-    # determine the VINT width and marker value or the size
-    my $width = 1;
-    my $val = 0xFF;
-    for(;$size >= $val;$width++) {
-        $val = ($val << 8) | 0xFF;
-    }   
-    my $sizeflag = (0x1 << (8-$width)) << (($width-1)*8); 
-    # Apply the VINT marker and pack the vint   
-    $size |= $sizeflag;
-    for(;$width; $width--) {
-        $buf .= pack('C', ($size >> ($width-1)*8) & 0xFF);
-    }
-    # pack the data
-    $buf .= $$data;
-    return \$buf;
+    
+    return \$bufstack[0];
 }
 
 sub flac_read_METADATA_BLOCK {
     my $fh = $_[0];
-    my $done = \$_[1];
+    my $type = \$_[1];
+    my $done = \$_[2];
     my $buf;
     my $headread = read($fh, $buf, 4);
     ($headread && ($headread == 4)) or return undef;
     my ($blocktypelast, $sizehi, $sizemid, $sizelo) = unpack('CCCC',$buf);
     $$done = $blocktypelast & 0x80;
-    my $type = $blocktypelast & 0x7F;
+    $$type = $blocktypelast & 0x7F;
     my $size = ($sizehi << 16) | ($sizemid << 8) | ($sizelo);
     #say "islast $$done type $type size $size";
-    $type != 0x7F or return undef;
+    $$type != 0x7F or return undef;
     my $tbuf;
     my $dataread = read($fh, $tbuf, $size);
     ($dataread && ($dataread == $size)) or return undef;
     $buf .= $tbuf;
     return \$buf;
 }
+
+sub flac_parseStreamInfo {
+        # https://metacpan.org/source/DANIEL/Audio-FLAC-Header-2.4/Header.pm
+        my ($buf) = @_;
+        my $metaBinString = unpack('B144', $buf);
+ 
+        my $x32 = 0 x 32;
+        my $info = {};
+        $info->{'MINIMUMBLOCKSIZE'} = unpack('N', pack('B32', substr($x32 . substr($metaBinString, 0, 16), -32)));
+        $info->{'MAXIMUMBLOCKSIZE'} = unpack('N', pack('B32', substr($x32 . substr($metaBinString, 16, 16), -32)));
+        $info->{'MINIMUMFRAMESIZE'} = unpack('N', pack('B32', substr($x32 . substr($metaBinString, 32, 24), -32)));
+        $info->{'MAXIMUMFRAMESIZE'} = unpack('N', pack('B32', substr($x32 . substr($metaBinString, 56, 24), -32)));
+ 
+        $info->{'SAMPLERATE'}       = unpack('N', pack('B32', substr($x32 . substr($metaBinString, 80, 20), -32)));
+        $info->{'NUMCHANNELS'}      = unpack('N', pack('B32', substr($x32 . substr($metaBinString, 100, 3), -32))) + 1;
+        $info->{'BITSPERSAMPLE'}    = unpack('N', pack('B32', substr($x32 . substr($metaBinString, 103, 5), -32))) + 1;
+ 
+        # Calculate total samples in two parts
+        my $highBits = unpack('N', pack('B32', substr($x32 . substr($metaBinString, 108, 4), -32)));
+ 
+        $info->{'TOTALSAMPLES'} = $highBits * 2 ** 32 +
+                unpack('N', pack('B32', substr($x32 . substr($metaBinString, 112, 32), -32)));
+ 
+        # Return the MD5 as a 32-character hexadecimal string
+        $info->{'MD5CHECKSUM'} = unpack('H32',substr($buf, 18, 16));
+        return $info; 
+    }
+
 sub flac_read_to_audio {
     my ($fh) = @_;
     my $buf;    
     my $magic = read($fh, $buf, 4);
     ($magic && ($magic == 4)) or return undef;
+    my $streaminfo;
     for(;;) {
+        my $type;
         my $done;
-        my $bref = flac_read_METADATA_BLOCK($fh, $done);
+        my $bref = flac_read_METADATA_BLOCK($fh, $type, $done);
         $bref or return undef;
         $buf .= $$bref;
+        if($type == 0) {
+            $streaminfo = flac_parseStreamInfo(substr($$bref, 4));
+        }
         last if($done);
     }
-    return \$buf;
+    return {'streaminfo' => $streaminfo, 'buf' => \$buf};
 }
 
 sub video_matroska {
@@ -4067,38 +4129,51 @@ sub video_matroska {
     }
 
     my $EBMLID = {
-        'Segment'        => 0x18538067,
-        'SegmentInfo'    => 0x1549A966,
-        'TimestampScale' => 0x2AD7B1,
-        'Duration'       => 0x4489,
-        'MuxingApp'      => 0x4D80,
-        'WritingApp'     => 0x5741,
-        'Tracks'         => 0x1654AE6B,
-        'Track'          => 0xAE,
-        'TrackNumber'    => 0xD7,
-        'TrackUID'       => 0x73C5,        
-        'TrackType'      => 0x83,
-        'CodecID'        => 0x86,
-        'CodecPrivData', => 0x63A2,
-        'AudioTrack'     => 0xE1 
+        'EBMLHead'           => 0x1A45DFA3,
+        'EBMLVersion'        => 0x4286,
+        'EBMLReadVersion'    => 0x42F7,
+        'EBMLMaxIDLength'    => 0x42F2,
+        'EBMLMaxSizeLength'  => 0x42F3,
+        'EBMLDocType'        => 0x4282,
+        'EBMLDocTypeVer'     => 0x4287,
+        'EBMLDocTypeReadVer' => 0x4285,
+        'Segment'            => 0x18538067,
+        'SegmentInfo'        => 0x1549A966,
+        'TimestampScale'     => 0x2AD7B1,
+        'Duration'           => 0x4489,
+        'MuxingApp'          => 0x4D80,
+        'WritingApp'         => 0x5741,
+        'Tracks'             => 0x1654AE6B,
+        'Track'              => 0xAE,
+        'TrackNumber'        => 0xD7,
+        'TrackUID'           => 0x73C5,        
+        'TrackType'          => 0x83,
+        'CodecID'            => 0x86,
+        'CodecPrivData',     => 0x63A2,
+        'AudioTrack'         => 0xE1,
+        'AudioChannels'      => 0x9F,
+        'AudioSampleRate'    => 0xB5,
+        'AudioBitDepth'      => 0x6264
     };
 
     # find segment
-    my $segment = ebml_find_id($ebml, $EBMLID->{'Segment'});
-    if(!$segment) {
+    my $foundsegment = ebml_find_id($ebml, $EBMLID->{'Segment'});
+    if(!$foundsegment) {
         $request->Send404;
         return;
     }
     say "Found segment";
-    print Dumper($segment);
+    my %segment = (id => $EBMLID->{'Segment'}, 'infsize' => 1, 'elms' => []);    
+
     # find segment info
-    my $segmentinfo = ebml_find_id($ebml, $EBMLID->{'SegmentInfo'});
-    if(!$segmentinfo) {
+    my $foundsegmentinfo = ebml_find_id($ebml, $EBMLID->{'SegmentInfo'});
+    if(!$foundsegmentinfo) {
         $request->Send404;
         return;
     }
     say "Found segment info";
-    print Dumper($segment);
+    my %segmentinfo = (id => $EBMLID->{'SegmentInfo'}, elms => []);
+
     # find TimestampScale
     my $tselm = ebml_find_id($ebml, $EBMLID->{'TimestampScale'});
     if(!$tselm) {
@@ -4116,6 +4191,8 @@ sub video_matroska {
         $request->Send404;
         return;
     }
+    push @{$segmentinfo{'elms'}}, {id => $EBMLID->{'TimestampScale'}, data => $tsbinary};
+
     # find Duration
     my $durationelm = ebml_find_id($ebml, $EBMLID->{'Duration'});
     if(!$durationelm) {
@@ -4137,21 +4214,29 @@ sub video_matroska {
         $request->Send404;
         return;
     }
+    push @{$segmentinfo{'elms'}}, {id => $EBMLID->{'Duration'}, data => $durbin};
+
+    # set multiplexing app and writing application
+    push @{$segmentinfo{'elms'}}, {id => $EBMLID->{'MuxingApp'}, data => 'mhfs-alpha_0'};
+    push @{$segmentinfo{'elms'}}, {id => $EBMLID->{'WritingApp'}, data => 'mhfs-alpha_0'};
+    
+    push @{$segment{'elms'}}, \%segmentinfo;
+
     # find Tracks
-    my $tracks = ebml_find_id($ebml, $EBMLID->{'Tracks'});
-    if(!$tracks) {
+    my $in_tracks = ebml_find_id($ebml, $EBMLID->{'Tracks'});
+    if(!$in_tracks) {
         $request->Send404;
         return;
     }
     # loop through the Tracks
     my @tracks;
     for(;;) {
-        my $track = ebml_find_id($ebml, $EBMLID->{'Track'});
-        if(! $track) {
+        my $in_track = ebml_find_id($ebml, $EBMLID->{'Track'});
+        if(! $in_track) {
             ebml_skip($ebml);
             last;
         }       
-        my %track = ('raw' => {}, 'raw_arr' => []);
+        my %track = ('id' => $EBMLID->{'Track'}, 'elms' => []);
         for(;;) {
             my $telm = ebml_read_element($ebml);
             if(!$telm) {
@@ -4159,22 +4244,25 @@ sub video_matroska {
                 last;
             }
 
-            my $raw;          
-            ebml_read($ebml, $raw, $telm->{'size'});            
-            
-            if($telm->{'id'} == $EBMLID->{'TrackNumber'}) {
-                $track{'TrackNumber'} = unpack('C', $raw);
+            # save the element into tracks
+            my %elm = ('id' => $telm->{'id'}, 'data' => '');         
+            ebml_read($ebml, $elm{'data'}, $telm->{'size'});
+            if($elm{'id'} == $EBMLID->{'TrackNumber'}) {
+                $elm{'value'} = unpack('C', $elm{'data'});
+                $track{$elm{'id'}} = \%elm;
             }
-            elsif($telm->{'id'} == $EBMLID->{'CodecID'}) {
-                $track{'CodecID'} =  $raw;
+            elsif($elm{'id'} == $EBMLID->{'CodecID'}) {
+                $track{$elm{'id'}} = \%elm;
             }
-            elsif($telm->{'id'} == $EBMLID->{'TrackType'}) {
-                $track{'TrackType'} = unpack('C',$raw);
+            elsif($elm{'id'} == $EBMLID->{'TrackType'}) {
+                $elm{'value'} = unpack('C', $elm{'data'});
+                $track{$elm{'id'}} = \%elm;
             }
-
-            # save the raw data
-            push @{$track{'raw_arr'}}, $telm->{'id'};
-            $track{'raw'}{$telm->{'id'}} = $raw;                  
+            elsif($elm{'id'} == $EBMLID->{'TrackUID'}) {
+                $track{$elm{'id'}} = \%elm;
+            }
+            push @{$track{'elms'}}, \%elm;
+                         
             ebml_skip($ebml);
         }
         push @tracks, \%track;
@@ -4185,17 +4273,21 @@ sub video_matroska {
     }
     #print Dumper(@tracks);
     #die;
+    sub telmval {
+        my ($track, $stringid) = @_;
+        return $track->{$EBMLID->{$stringid}}{'value'} // $track->{$EBMLID->{$stringid}}{'data'};
+    }
 
     # Build the Tracks element
     for my $track (@tracks) {
-        say "Track codec: " . $track->{'CodecID'} . ' no ' . $track->{'TrackNumber'};
+        say "Track codec: " . telmval($track, 'CodecID') . ' no ' . telmval($track, 'TrackNumber');
 
         # remake the Track if it's audio and not in FLAC
-        if(($track->{'TrackType'} == 0x2) && ($track->{'CodecID'} ne 'A_FLAC')) {            
-            my $flacpath = $video->{'out_location'} . '/' . $video->{'out_base'} . '.' . $track->{'TrackNumber'} . '.flac';
+        if((telmval($track, 'TrackType') == 0x2) && (telmval($track, 'CodecID') ne 'A_FLAC')) {            
+            my $flacpath = $video->{'out_location'} . '/' . $video->{'out_base'} . '.' . telmval($track, 'TrackNumber') . '.flac';
             if(! -e $flacpath) {
                 mkdir($video->{'out_location'});
-                my @cmd = ('ffmpeg', '-i', $video->{'src_file'}{'filepath'}, '-map', '0:'.($track->{'TrackNumber'}-1), $flacpath);
+                my @cmd = ('ffmpeg', '-i', $video->{'src_file'}{'filepath'}, '-map', '0:'.(telmval($track, 'TrackNumber')-1), $flacpath);
                 print Dumper(\@cmd);
                 if(!(system(@cmd) == 0)) {
                     say "failed to extract audio track";
@@ -4214,37 +4306,84 @@ sub video_matroska {
                 $request->Send404;
                 return;
             }
-
-            # Todo get info for AudioTrack
             
             # replace the track with the new flac track
-            $track->{'CodecID'} = 'A_FLAC';
-            $track->{'raw'}{$EBMLID->{'CodecPrivData'}} = $$flac;
-            $track->{'raw'}{$EBMLID->{'CodecID'}} = 'A_FLAC';
-            $track->{'raw_arr'} = [
-                $EBMLID->{'TrackNumber'},
-                $EBMLID->{'TrackUID'},
-                $EBMLID->{'CodecID'},
-                $EBMLID->{'TrackType'},
-                $EBMLID->{'CodecPrivData'}
-            ];
-        }
-
-        # serialize the track
-        my $tbuf;
-        foreach my $tid (@{$track->{'raw_arr'}}) {
-            my $buf = ebml_make_elm($tid, $track->{'raw'}{$tid});
-            if(! $buf) {
-                $request->Send404;
-                return;
-            }
-            $tbuf .= $$buf;
-        }
-        Dump($tbuf);
-        #write_file($video->{'out_location'}.'/part.mkv', $tbuf);
-        #die;        
+            my $oldelms = $track->{'elms'};
+            $track->{$EBMLID->{'CodecID'}}{'data'} = 'A_FLAC';
+            $track->{'elms'} = [
+                $track->{$EBMLID->{'TrackNumber'}},
+                $track->{$EBMLID->{'TrackUID'}},
+                $track->{$EBMLID->{'CodecID'}},
+                $track->{$EBMLID->{'TrackType'}},
+                {
+                    id => $EBMLID->{'AudioTrack'},
+                    elms => [
+                        {
+                            id => $EBMLID->{'AudioChannels'},
+                            data => pack('C', $flac->{'streaminfo'}{'NUMCHANNELS'})
+                        },
+                        {
+                            id => $EBMLID->{'AudioSampleRate'},
+                            data => pack('d>', $flac->{'streaminfo'}{'SAMPLERATE'})
+                        },
+                        {
+                            id => $EBMLID->{'AudioBitDepth'},
+                            data => pack('C', $flac->{'streaminfo'}{'BITSPERSAMPLE'})
+                        }
+                    ]
+                },
+                {
+                    id => $EBMLID->{'CodecPrivData'},
+                    data => ${$flac->{'buf'}}
+                }
+            ];           
+        }     
     }
-    
+    push @{$segment{'elms'}}, {
+        'id' => $EBMLID->{'Tracks'},
+        'elms' => \@tracks        
+    };
+           
+    my %elmhead = ('id' => $EBMLID->{'EBMLHead'}, 'elms' => [
+        {
+            id => $EBMLID->{'EBMLVersion'},
+            data => pack('C', 1)
+        },
+        {
+            id => $EBMLID->{'EBMLReadVersion'},
+            data => pack('C', 1)
+        },
+        {
+            id => $EBMLID->{'EBMLMaxIDLength'},
+            data => pack('C', 4)
+        },
+        {
+            id => $EBMLID->{'EBMLMaxSizeLength'},
+            data => pack('C', 8)
+        },
+        {
+            id => $EBMLID->{'EBMLDocType'},
+            data => 'matroska'
+        },
+        {
+            id => $EBMLID->{'EBMLDocTypeVer'},
+            data => pack('C', 4)
+        },
+        {
+            id => $EBMLID->{'EBMLDocTypeReadVer'},
+            data => pack('C', 2)
+        },
+    ]);
+ 
+    my $ebml_serialized = ebml_make_elms(\%elmhead, \%segment);
+    if(!$ebml_serialized) {
+        $request->Send404;
+        return;
+    }
+
+    $request->SendLocalBuf($$ebml_serialized, 'video/x-matroska', {'filename' => $video->{'out_base'} .'.mhfs.mkv'});
+    return;
+
     #print Dumper(@tracks);
 
     # write the tracks elements
