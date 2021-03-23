@@ -4013,15 +4013,21 @@ sub ebml_make_elms {
         # pack the id
         my $buf;
         if($elementid > 0xFFFFFF) {
-            $buf = pack('CCCC', ($elementid >> 24) & 0xFF, ($elementid >> 16) & 0xFF, ($elementid >> 8) & 0xFF, $elementid & 0xFF);
+            # pack BE uint32_t
+            #$buf = pack('CCCC', ($elementid >> 24) & 0xFF, ($elementid >> 16) & 0xFF, ($elementid >> 8) & 0xFF, $elementid & 0xFF);
+            $buf = pack('N', $elementid);
         }
         elsif($elementid > 0xFFFF) {
+            # pack BE uint24_t
             $buf = pack('CCC', ($elementid >> 16) & 0xFF, ($elementid >> 8) & 0xFF, $elementid & 0xFF);
         }
         elsif($elementid > 0xFF) {
-            $buf = pack('CC', ($elementid >> 8) & 0xFF, $elementid & 0xFF);
+            # pack BE uint16_t
+            #$buf = pack('CC', ($elementid >> 8) & 0xFF, $elementid & 0xFF);
+            $buf = pack('n', $elementid);
         }
         else {
+            # pack BE uint8_t
             $buf = pack('C', $elementid & 0xFF);
         }
 
@@ -4036,7 +4042,13 @@ sub ebml_make_elms {
             for(;$size >= $val;$width++) {
                 $val = ($val << 8) | 0xFF;
             }   
-            my $sizeflag = (0x1 << (8-$width)) << (($width-1)*8); 
+            my $sizeflag = (0x1 << (8-$width)) << (($width-1)*8);
+            if($sizeflag & $size) {
+                $sizeflag <<= 7;
+                $width++;
+            }
+
+            say "packing size: $size width: $width sizeflag $sizeflag"; 
             # Apply the VINT marker and pack the vint   
             $size |= $sizeflag;
             for(;$width; $width--) {
@@ -4153,7 +4165,12 @@ sub video_matroska {
         'AudioTrack'         => 0xE1,
         'AudioChannels'      => 0x9F,
         'AudioSampleRate'    => 0xB5,
-        'AudioBitDepth'      => 0x6264
+        'AudioBitDepth'      => 0x6264,
+        'Cluster'            => 0x1F43B675,
+        'ClusterTimestamp'   => 0xE7,
+        'SimpleBlock'        => 0xA3,
+        'BlockGroup'         => 0xA0,
+        'Block'              => 0xA1
     };
 
     # find segment
@@ -4381,16 +4398,41 @@ sub video_matroska {
         return;
     }
 
+    # loop thorough the clusters
+    my @outclusters;
+    while(1) {
+        my $custer = ebml_find_id($ebml, $EBMLID->{'Cluster'});
+        last if(! $custer);
+
+        my %outcluster = ('id' => $EBMLID->{'Cluster'}, elms => []);
+        for(;;) {
+            my $belm = ebml_read_element($ebml);
+            if(!$belm) {
+                ebml_skip($ebml);
+                last;
+            }
+            my %elm = ('id' => $belm->{'id'}, 'data' => '');
+            say "elm size " . $belm->{'size'};          
+            ebml_read($ebml, $elm{'data'}, $belm->{'size'});
+            if($elm{'id'} == $EBMLID->{'SimpleBlock'}) {
+
+            }
+            # todo handle blockgroup
+
+            push @{$outcluster{'elms'}}, \%elm;                         
+            ebml_skip($ebml);
+        }
+        push @outclusters, \%outcluster;
+        last;     
+    }
+    my $serializedclusters = ebml_make_elms(@outclusters);
+    if(!$serializedclusters) {
+        $request->Send404;
+        return;
+    }
+    $$ebml_serialized .= $$serializedclusters;
+
     $request->SendLocalBuf($$ebml_serialized, 'video/x-matroska', {'filename' => $video->{'out_base'} .'.mhfs.mkv'});
-    return;
-
-    #print Dumper(@tracks);
-
-    # write the tracks elements
-
-    
-
-    $request->Send404;
 }
 
 sub video_get_format {
