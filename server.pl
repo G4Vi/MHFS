@@ -4036,23 +4036,19 @@ sub ebml_make_elms {
             $buf .= pack('C', 0xFF);            
         }
         else {
-            # determine the VINT width and marker value or the size
-            my $width = 1;
-            my $val = 0xFF;
-            for(;$size >= $val;$width++) {
-                $val = ($val << 8) | 0xFF;
-            }   
-            my $sizeflag = (0x1 << (8-$width)) << (($width-1)*8);
-            if($sizeflag & $size) {
-                $sizeflag <<= 7;
-                $width++;
+            # determine the VINT width and marker value, and the size needed for the vint
+            my $sizeflag = 0x80;
+            my $bitwidth = 0x8;
+            while($size >= $sizeflag) {
+                $bitwidth += 0x8;
+                $sizeflag <<= 0x7;                
             }
 
-            say "packing size: $size width: $width sizeflag $sizeflag"; 
             # Apply the VINT marker and pack the vint   
             $size |= $sizeflag;
-            for(;$width; $width--) {
-                $buf .= pack('C', ($size >> ($width-1)*8) & 0xFF);
+            while($bitwidth) {
+                $bitwidth -= 8;
+                $buf .= pack('C', ($size >> $bitwidth) & 0xFF);
             }
         }
         
