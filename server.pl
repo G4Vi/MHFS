@@ -4004,7 +4004,11 @@ sub ebml_make_elms {
             next;
         }
         shift @elms;
-        my $elementid = $elm->{'id'};    
+        my $elementid = $elm->{'id'};
+        if(! $elementid) {
+            print Dumper($elm);
+            die;
+        }    
         $elementid < 0xFFFFFFFF or return undef;
         my $data = \$elm->{'data'};
     
@@ -4058,6 +4062,75 @@ sub ebml_make_elms {
     }
     
     return \$bufstack[0];
+}
+
+
+use constant {
+        'EBMLID_EBMLHead'           => 0x1A45DFA3,
+        'EBMLID_EBMLVersion'        => 0x4286,
+        'EBMLID_EBMLReadVersion'    => 0x42F7,
+        'EBMLID_EBMLMaxIDLength'    => 0x42F2,
+        'EBMLID_EBMLMaxSizeLength'  => 0x42F3,
+        'EBMLID_EBMLDocType'        => 0x4282,
+        'EBMLID_EBMLDocTypeVer'     => 0x4287,
+        'EBMLID_EBMLDocTypeReadVer' => 0x4285,
+        'EBMLID_Segment'            => 0x18538067,
+        'EBMLID_SegmentInfo'        => 0x1549A966,
+        'EBMLID_TimestampScale'     => 0x2AD7B1,
+        'EBMLID_Duration'           => 0x4489,
+        'EBMLID_MuxingApp'          => 0x4D80,
+        'EBMLID_WritingApp'         => 0x5741,
+        'EBMLID_Tracks'             => 0x1654AE6B,
+        'EBMLID_Track'              => 0xAE,
+        'EBMLID_TrackNumber'        => 0xD7,
+        'EBMLID_TrackUID'           => 0x73C5,        
+        'EBMLID_TrackType'          => 0x83,
+        'EBMLID_CodecID'            => 0x86,
+        'EBMLID_CodecPrivData',     => 0x63A2,
+        'EBMLID_AudioTrack'         => 0xE1,
+        'EBMLID_AudioChannels'      => 0x9F,
+        'EBMLID_AudioSampleRate'    => 0xB5,
+        'EBMLID_AudioBitDepth'      => 0x6264,
+        'EBMLID_Cluster'            => 0x1F43B675,
+        'EBMLID_ClusterTimestamp'   => 0xE7,
+        'EBMLID_SimpleBlock'        => 0xA3,
+        'EBMLID_BlockGroup'         => 0xA0,
+        'EBMLID_Block'              => 0xA1
+    };
+
+sub matroska_cluster_read_block {
+    my $ebml = $_[0];
+    my $dataref = \$_[1];
+
+    if($ebml->{'elements'}[-1]->{'id'} == EBMLID_BlockGroup) {
+        say "blockgroup";
+        return undef;
+    }
+    elsif($ebml->{'elements'}[-1]->{'id'} == EBMLID_SimpleBlock) {
+        say "IS SIMPLEBLOCK";
+        return undef;
+    }
+    else {
+        die "unhandled block type";
+    }
+}
+
+sub telmval {
+        my ($track, $stringid) = @_;
+        my $constname = "EBMLID_$stringid";
+        my $id = App::MHFS->$constname;
+        return $track->{$id}{'value'}  // $track->{$id}{'data'};
+        #return $track->{"$stringid"}}{'value'} // $track->{$EBMLID->{$stringid}}{'data'};
+    }
+
+sub trackno_is_audio {
+    my ($tracks, $trackno) = @_;
+    foreach my $track (@$tracks) {
+        if(telmval($track, 'TrackNumber') == $trackno) {
+            return telmval($track, 'TrackType') == 0x2;
+        }
+    }
+    return undef;
 }
 
 sub flac_read_METADATA_BLOCK {
@@ -4136,59 +4209,26 @@ sub video_matroska {
         return;
     }
 
-    my $EBMLID = {
-        'EBMLHead'           => 0x1A45DFA3,
-        'EBMLVersion'        => 0x4286,
-        'EBMLReadVersion'    => 0x42F7,
-        'EBMLMaxIDLength'    => 0x42F2,
-        'EBMLMaxSizeLength'  => 0x42F3,
-        'EBMLDocType'        => 0x4282,
-        'EBMLDocTypeVer'     => 0x4287,
-        'EBMLDocTypeReadVer' => 0x4285,
-        'Segment'            => 0x18538067,
-        'SegmentInfo'        => 0x1549A966,
-        'TimestampScale'     => 0x2AD7B1,
-        'Duration'           => 0x4489,
-        'MuxingApp'          => 0x4D80,
-        'WritingApp'         => 0x5741,
-        'Tracks'             => 0x1654AE6B,
-        'Track'              => 0xAE,
-        'TrackNumber'        => 0xD7,
-        'TrackUID'           => 0x73C5,        
-        'TrackType'          => 0x83,
-        'CodecID'            => 0x86,
-        'CodecPrivData',     => 0x63A2,
-        'AudioTrack'         => 0xE1,
-        'AudioChannels'      => 0x9F,
-        'AudioSampleRate'    => 0xB5,
-        'AudioBitDepth'      => 0x6264,
-        'Cluster'            => 0x1F43B675,
-        'ClusterTimestamp'   => 0xE7,
-        'SimpleBlock'        => 0xA3,
-        'BlockGroup'         => 0xA0,
-        'Block'              => 0xA1
-    };
-
     # find segment
-    my $foundsegment = ebml_find_id($ebml, $EBMLID->{'Segment'});
+    my $foundsegment = ebml_find_id($ebml, EBMLID_Segment);
     if(!$foundsegment) {
         $request->Send404;
         return;
     }
     say "Found segment";
-    my %segment = (id => $EBMLID->{'Segment'}, 'infsize' => 1, 'elms' => []);    
+    my %segment = (id => EBMLID_Segment, 'infsize' => 1, 'elms' => []);    
 
     # find segment info
-    my $foundsegmentinfo = ebml_find_id($ebml, $EBMLID->{'SegmentInfo'});
+    my $foundsegmentinfo = ebml_find_id($ebml, EBMLID_SegmentInfo);
     if(!$foundsegmentinfo) {
         $request->Send404;
         return;
     }
     say "Found segment info";
-    my %segmentinfo = (id => $EBMLID->{'SegmentInfo'}, elms => []);
+    my %segmentinfo = (id => EBMLID_SegmentInfo, elms => []);
 
     # find TimestampScale
-    my $tselm = ebml_find_id($ebml, $EBMLID->{'TimestampScale'});
+    my $tselm = ebml_find_id($ebml, EBMLID_TimestampScale);
     if(!$tselm) {
         $request->Send404;
         return;
@@ -4204,10 +4244,10 @@ sub video_matroska {
         $request->Send404;
         return;
     }
-    push @{$segmentinfo{'elms'}}, {id => $EBMLID->{'TimestampScale'}, data => $tsbinary};
+    push @{$segmentinfo{'elms'}}, {id => EBMLID_TimestampScale, data => $tsbinary};
 
     # find Duration
-    my $durationelm = ebml_find_id($ebml, $EBMLID->{'Duration'});
+    my $durationelm = ebml_find_id($ebml, EBMLID_Duration);
     if(!$durationelm) {
         $request->Send404;
         return;
@@ -4227,16 +4267,16 @@ sub video_matroska {
         $request->Send404;
         return;
     }
-    push @{$segmentinfo{'elms'}}, {id => $EBMLID->{'Duration'}, data => $durbin};
+    push @{$segmentinfo{'elms'}}, {id => EBMLID_Duration, data => $durbin};
 
     # set multiplexing app and writing application
-    push @{$segmentinfo{'elms'}}, {id => $EBMLID->{'MuxingApp'}, data => 'mhfs-alpha_0'};
-    push @{$segmentinfo{'elms'}}, {id => $EBMLID->{'WritingApp'}, data => 'mhfs-alpha_0'};
+    push @{$segmentinfo{'elms'}}, {id => EBMLID_MuxingApp, data => 'mhfs-alpha_0'};
+    push @{$segmentinfo{'elms'}}, {id => EBMLID_WritingApp, data => 'mhfs-alpha_0'};
     
     push @{$segment{'elms'}}, \%segmentinfo;
 
     # find Tracks
-    my $in_tracks = ebml_find_id($ebml, $EBMLID->{'Tracks'});
+    my $in_tracks = ebml_find_id($ebml, EBMLID_Tracks);
     if(!$in_tracks) {
         $request->Send404;
         return;
@@ -4244,12 +4284,12 @@ sub video_matroska {
     # loop through the Tracks
     my @tracks;
     for(;;) {
-        my $in_track = ebml_find_id($ebml, $EBMLID->{'Track'});
+        my $in_track = ebml_find_id($ebml, EBMLID_Track);
         if(! $in_track) {
             ebml_skip($ebml);
             last;
         }       
-        my %track = ('id' => $EBMLID->{'Track'}, 'elms' => []);
+        my %track = ('id' => EBMLID_Track, 'elms' => []);
         for(;;) {
             my $telm = ebml_read_element($ebml);
             if(!$telm) {
@@ -4260,24 +4300,28 @@ sub video_matroska {
             # save the element into tracks
             my %elm = ('id' => $telm->{'id'}, 'data' => '');         
             ebml_read($ebml, $elm{'data'}, $telm->{'size'});
-            if($elm{'id'} == $EBMLID->{'TrackNumber'}) {
+            if($elm{'id'} == EBMLID_TrackNumber) {
+                say "trackno";
                 $elm{'value'} = unpack('C', $elm{'data'});
                 $track{$elm{'id'}} = \%elm;
             }
-            elsif($elm{'id'} == $EBMLID->{'CodecID'}) {
+            elsif($elm{'id'} == EBMLID_CodecID) {
+                say "codec";
                 $track{$elm{'id'}} = \%elm;
             }
-            elsif($elm{'id'} == $EBMLID->{'TrackType'}) {
+            elsif($elm{'id'} == EBMLID_TrackType) {
+                say "tracktype";
                 $elm{'value'} = unpack('C', $elm{'data'});
                 $track{$elm{'id'}} = \%elm;
             }
-            elsif($elm{'id'} == $EBMLID->{'TrackUID'}) {
+            elsif($elm{'id'} == EBMLID_TrackUID) {
+                say "trackuid";
                 $track{$elm{'id'}} = \%elm;
             }
             push @{$track{'elms'}}, \%elm;
                          
             ebml_skip($ebml);
-        }
+        }         
         push @tracks, \%track;
     }
     if(scalar(@tracks) == 0) {
@@ -4285,11 +4329,7 @@ sub video_matroska {
         return;
     }
     #print Dumper(@tracks);
-    #die;
-    sub telmval {
-        my ($track, $stringid) = @_;
-        return $track->{$EBMLID->{$stringid}}{'value'} // $track->{$EBMLID->{$stringid}}{'data'};
-    }
+    
 
     # Build the Tracks element
     for my $track (@tracks) {
@@ -4322,71 +4362,74 @@ sub video_matroska {
             
             # replace the track with the new flac track
             my $oldelms = $track->{'elms'};
-            $track->{$EBMLID->{'CodecID'}}{'data'} = 'A_FLAC';
+            $track->{+EBMLID_CodecID}{'data'} = 'A_FLAC';
             $track->{'elms'} = [
-                $track->{$EBMLID->{'TrackNumber'}},
-                $track->{$EBMLID->{'TrackUID'}},
-                $track->{$EBMLID->{'CodecID'}},
-                $track->{$EBMLID->{'TrackType'}},
+                $track->{+EBMLID_TrackNumber},
+                $track->{+EBMLID_TrackUID},
+                $track->{+EBMLID_CodecID},
+                $track->{+EBMLID_TrackType},
                 {
-                    id => $EBMLID->{'AudioTrack'},
+                    id => EBMLID_AudioTrack,
                     elms => [
                         {
-                            id => $EBMLID->{'AudioChannels'},
+                            id => EBMLID_AudioChannels,
                             data => pack('C', $flac->{'streaminfo'}{'NUMCHANNELS'})
                         },
                         {
-                            id => $EBMLID->{'AudioSampleRate'},
+                            id => EBMLID_AudioSampleRate,
                             data => pack('d>', $flac->{'streaminfo'}{'SAMPLERATE'})
                         },
                         {
-                            id => $EBMLID->{'AudioBitDepth'},
+                            id => EBMLID_AudioBitDepth,
                             data => pack('C', $flac->{'streaminfo'}{'BITSPERSAMPLE'})
                         }
                     ]
                 },
                 {
-                    id => $EBMLID->{'CodecPrivData'},
+                    id => EBMLID_CodecPrivData,
                     data => ${$flac->{'buf'}}
                 }
-            ];           
+            ];         
         }     
     }
     push @{$segment{'elms'}}, {
-        'id' => $EBMLID->{'Tracks'},
+        'id' => EBMLID_Tracks,
         'elms' => \@tracks        
     };
            
-    my %elmhead = ('id' => $EBMLID->{'EBMLHead'}, 'elms' => [
+    my %elmhead = ('id' => EBMLID_EBMLHead, 'elms' => [
         {
-            id => $EBMLID->{'EBMLVersion'},
+            id => EBMLID_EBMLVersion,
             data => pack('C', 1)
         },
         {
-            id => $EBMLID->{'EBMLReadVersion'},
+            id => EBMLID_EBMLReadVersion,
             data => pack('C', 1)
         },
         {
-            id => $EBMLID->{'EBMLMaxIDLength'},
+            id => EBMLID_EBMLMaxIDLength,
             data => pack('C', 4)
         },
         {
-            id => $EBMLID->{'EBMLMaxSizeLength'},
+            id => EBMLID_EBMLMaxSizeLength,
             data => pack('C', 8)
         },
         {
-            id => $EBMLID->{'EBMLDocType'},
+            id => EBMLID_EBMLDocType,
             data => 'matroska'
         },
         {
-            id => $EBMLID->{'EBMLDocTypeVer'},
+            id => EBMLID_EBMLDocTypeVer,
             data => pack('C', 4)
         },
         {
-            id => $EBMLID->{'EBMLDocTypeReadVer'},
+            id => EBMLID_EBMLDocTypeReadVer,
             data => pack('C', 2)
         },
     ]);
+
+    #print Dumper(\%segment);
+    #die;
  
     my $ebml_serialized = ebml_make_elms(\%elmhead, \%segment);
     if(!$ebml_serialized) {
@@ -4397,10 +4440,10 @@ sub video_matroska {
     # loop thorough the clusters
     my @outclusters;
     while(1) {
-        my $custer = ebml_find_id($ebml, $EBMLID->{'Cluster'});
+        my $custer = ebml_find_id($ebml, EBMLID_Cluster);
         last if(! $custer);
 
-        my %outcluster = ('id' => $EBMLID->{'Cluster'}, elms => []);
+        my %outcluster = ('id' => EBMLID_Cluster, elms => []);
         for(;;) {
             my $belm = ebml_read_element($ebml);
             if(!$belm) {
@@ -4409,11 +4452,19 @@ sub video_matroska {
             }
             my %elm = ('id' => $belm->{'id'}, 'data' => '');
             say "elm size " . $belm->{'size'};          
-            ebml_read($ebml, $elm{'data'}, $belm->{'size'});
-            if($elm{'id'} == $EBMLID->{'SimpleBlock'}) {
-
+            
+            if($elm{'id'} == EBMLID_SimpleBlock) {
+                my $block = matroska_cluster_read_block($ebml, $elm{'data'});
+                if($block && trackno_is_audio(\@tracks, $block->{'trackno'})) {
+                    say "block is audio";
+                    die;
+                }
+                # to delete
+                ebml_read($ebml, $elm{'data'}, $belm->{'size'});
             }
-            # todo handle blockgroup
+            else {
+                ebml_read($ebml, $elm{'data'}, $belm->{'size'});
+            }                     
 
             push @{$outcluster{'elms'}}, \%elm;                         
             ebml_skip($ebml);
