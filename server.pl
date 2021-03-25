@@ -3906,11 +3906,48 @@ sub ebml_seek {
     return 1;
 }
 
+sub read_vint_from_buf {
+    my $bufref   = $_[0];
+    my $savewidth = $_[1];
+
+    my $width = 1;
+    my $value = unpack('C', substr($$bufref, 0, 1, ''));
+    for(;;$width++) {
+        last if(($value << ($width-1)) & 0x80);
+        $width < 9 or return undef;       
+    }
+
+    length($$bufref) >= ($width-1) or return undef;
+
+    for(my $wcopy = $width; $wcopy > 1; $wcopy--) {
+        $value <<= 8;
+        $value |= unpack('C', substr($$bufref, 0, 1, ''));
+    }
+
+    $$savewidth = $width;
+    return $value;
+}
+
+sub read_and_parse_vint_from_buf {
+    my $bufref = $_[0];
+
+    my $width;
+    my $value = read_vint_from_buf($bufref, \$width);
+    defined($value) or return undef;    
+
+    my $andval = 0xFF >> $width;
+    for(my $wcopy = $width; $wcopy > 1; $wcopy--) {
+        $andval <<= 8;
+        $andval |= 0xFF;               
+    }
+    $value &= $andval;
+    return $value;     
+}
+
 sub read_vint {
     my ($ebml, $val, $savewidth) = @_;
     my $value;
     ebml_read($ebml, $value, 1) or return 0;
-    my $shift = 0;
     my $width = 1;
     $value = unpack('C', $value);      
     for(;;$width++) {
@@ -4098,21 +4135,42 @@ use constant {
         'EBMLID_Block'              => 0xA1
     };
 
-sub matroska_cluster_read_block {
-    my $ebml = $_[0];
-    my $dataref = \$_[1];
+sub matroska_cluster_parse_simpleblock_or_blockgroup {
+    my ($elm) = @_;
 
-    if($ebml->{'elements'}[-1]->{'id'} == EBMLID_BlockGroup) {
+    my $data = $elm->{'data'};
+    if($elm->{'id'} == EBMLID_BlockGroup) {
         say "blockgroup";
-        return undef;
+        while(1) {
+            my $width;
+            my $id = read_vint_from_buf(\$data, \$width);
+            defined($id) or return undef;
+            my $size = read_and_parse_vint_from_buf(\$data);
+            defined($size) or return undef;
+            say "blockgroup item: $id $size";
+            last if($id == EBMLID_Block);
+            substr($data, 0, $size, '');
+        }
+        say "IS BLOCK";
     }
-    elsif($ebml->{'elements'}[-1]->{'id'} == EBMLID_SimpleBlock) {
+    elsif($elm->{'id'} == EBMLID_SimpleBlock) {
         say "IS SIMPLEBLOCK";
-        return undef;
     }
     else {
         die "unhandled block type";
     }
+    my $trackno = read_and_parse_vint_from_buf(\$data);
+    if((!defined $trackno) || (length($data) < 3)) {
+        return undef;
+    }
+    my $rawts = substr($data, 0, 2, '');
+    my $rawflag = substr($data, 0, 1, '');
+
+    return {
+        'trackno' => $trackno,
+        'rawts' => $rawts,
+        'rawflag'  => $rawflag
+    };
 }
 
 sub telmval {
@@ -4453,24 +4511,22 @@ sub video_matroska {
             my %elm = ('id' => $belm->{'id'}, 'data' => '');
             say "elm size " . $belm->{'size'};          
             
-            if($elm{'id'} == EBMLID_SimpleBlock) {
-                my $block = matroska_cluster_read_block($ebml, $elm{'data'});
+            ebml_read($ebml, $elm{'data'}, $belm->{'size'});
+            if(($elm{'id'} == EBMLID_SimpleBlock) || ($elm{'id'} == EBMLID_BlockGroup)) {
+                my $block = matroska_cluster_parse_simpleblock_or_blockgroup(\%elm);
+                print Dumper($block);
                 if($block && trackno_is_audio(\@tracks, $block->{'trackno'})) {
                     say "block is audio";
-                    die;
-                }
-                # to delete
-                ebml_read($ebml, $elm{'data'}, $belm->{'size'});
-            }
-            else {
-                ebml_read($ebml, $elm{'data'}, $belm->{'size'});
-            }                     
+                    ebml_skip($ebml);
+                    next;
+                }                
+            }                                           
 
             push @{$outcluster{'elms'}}, \%elm;                         
             ebml_skip($ebml);
         }
         push @outclusters, \%outcluster;
-        last;     
+        #last;     
     }
     my $serializedclusters = ebml_make_elms(@outclusters);
     if(!$serializedclusters) {
