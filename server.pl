@@ -947,7 +947,7 @@ package HTTP::BS::Server::Client::Request {
         
         my $mime     = $opt->{'mime'};
         my $filename = $opt->{'filename'};
-        my $fullpath = $opt->{'fullpath'};
+        my $fullpath = $opt->{'fullname'};
         my %lookup = (
             200 => "HTTP/1.1 200 OK\r\n",
             206 => "HTTP/1.1 206 Partial Content\r\n",
@@ -971,10 +971,17 @@ package HTTP::BS::Server::Client::Request {
         $self->{'outheaders'}{'Connection'} //= 'keep-alive';
         
         # SharedArrayBuffer
-        if($fullpath && (index($fullpath, 'static/music_worklet') != -1) && (index($fullpath, 'index.html') != -1)) {
-            $self->{'outheaders'}{'Cross-Origin-Opener-Policy'} =  'same-origin';
-            $self->{'outheaders'}{'Cross-Origin-Embedder-Policy'} = 'require-corp';
-        }
+        if($fullpath) {
+            my @SABpaths = ('static/music_worklet/index.html', 'static/music_worklet_inprogress/index.html');
+            foreach my $sabpath (@SABpaths) {
+                if($fullpath =~ /\Q$sabpath\E$/) {
+                    say "sending SAB headers";
+                    $self->{'outheaders'}{'Cross-Origin-Opener-Policy'} =  'same-origin';
+                    $self->{'outheaders'}{'Cross-Origin-Embedder-Policy'} = 'require-corp';
+                    last;
+                }
+            }           
+        }        
 
         # serialize the outgoing headers
         foreach my $header (keys %{$self->{'outheaders'}}) {
@@ -984,97 +991,7 @@ package HTTP::BS::Server::Client::Request {
         $headtext .= "\r\n";
         $dataitem->{'buf'} = $headtext;        
         $self->_SendResponse($dataitem);      
-    }
-
-    sub _BuildHeaders {
-        my ($self, $datalength, $mime, $filename, $fullpath) = @_;
-        my $start =  $self->{'header'}{'_RangeStart'};                 
-        my $end =  $self->{'header'}{'_RangeEnd'};
-        my $headtext;             
-        my $code;
-        my $is_partial = ( defined $start);
-        $start //= 0;
-        # determine if we know the size of the content
-        if((! defined $datalength) || ($datalength == 99999999999)) {
-            $datalength = '*';
-            if($is_partial && (!defined($end))) {
-                if($start == 0) {
-                    $is_partial = 0;
-                }
-                else {
-                    #416 this
-                    say "should 416, can't do range request without knowing size";
-                    $code = 416;
-                    $self->{'outheaders'}{'Content-Range'} = "bytes */*";
-                }
-            }
-        }
-        else {
-            # set the end if not set
-            $end //= $datalength - 1;
-            say "datalength: $datalength";    
-        }        
-        if(defined($end) && !$self->{'outheaders'}{'Transfer-Encoding'}) {
-            say "end: $end";
-            my $contentlength = $end - $start + 1;
-            $self->{'outheaders'}{'Content-Length'} = "$contentlength";                        
-        }
-        else {
-            #$self->{'outheaders'}{'Connection'} = 'close';
-            $self->{'outheaders'}{'Transfer-Encoding'} = 'chunked';            
-        }
-
-        my %lookup = (
-            200 => "HTTP/1.1 200 OK\r\n",
-            206 => "HTTP/1.1 206 Partial Content\r\n",
-            301 => "HTTP/1.1 301 Moved Permanently\r\n",
-            307 => "HTTP/1.1 307 Temporary Redirect\r\n",
-            403 => "HTTP/1.1 403 Forbidden\r\n",
-            404 => "HTTP/1.1 404 File Not Found\r\n",
-            416 => "HTTP/1.1 416 Range Not Satisfiable\r\n",
-        );
-        if(!$code) {
-            if(!$is_partial) {
-                $code = 200;
-            }
-            # todo, check if end if >= size
-            elsif($end < $start){
-                say "range messed up";
-                $self->{'outheaders'}{'Content-Length'} = 0;
-                $code = 403;
-            }
-            else {
-                $code = 206;
-                $self->{'outheaders'}{'Content-Range'} = "bytes $start-$end/$datalength";
-            }
-        }
-        $headtext = $lookup{$code} || $lookup{403};
-        $headtext .=   "Content-Type: $mime\r\n";
-        $headtext .=   'Content-Disposition: inline; filename="' . $filename . "\"\r\n" if ($filename);
-        if($datalength ne '*') {
-            $headtext .= "Accept-Ranges: bytes\r\n";
-        }
-        else {
-            # range requests without an end specified will fail so dont claim to support them
-            $headtext .= "Accept-Ranges: none\r\n";
-        }        
-        $self->{'outheaders'}{'Connection'} //= $self->{'header'}{'Connection'};
-        $self->{'outheaders'}{'Connection'} //= 'keep-alive';
-        
-        # SharedArrayBuffer
-        if($fullpath && (index($fullpath, 'static/music_worklet') != -1) && (index($fullpath, 'index.html') != -1)) {
-            $self->{'outheaders'}{'Cross-Origin-Opener-Policy'} =  'same-origin';
-            $self->{'outheaders'}{'Cross-Origin-Embedder-Policy'} = 'require-corp';
-        }
-
-        # serialize the outgoing headers
-        foreach my $header (keys %{$self->{'outheaders'}}) {
-            $headtext .= "$header: " . $self->{'outheaders'}{$header} . "\r\n";
-        }       
-        
-        $headtext .= "\r\n";        
-        return \$headtext;
-    }
+    }   
 
     sub _SendResponse {
         my ($self, $fileitem) = @_;        
@@ -1263,11 +1180,7 @@ package HTTP::BS::Server::Client::Request {
            'mime'     => $mime,
            'filename' => basename($requestfile),
            'fullname'    => $requestfile,          
-        });
-        
-        #my $headtext = $self->_BuildHeaders($filelength, $mime, basename($requestfile), $requestfile);       
-        #$fileitem{'buf'} = $$headtext;
-        #$self->_SendResponse(\%fileitem);        
+        });       
     }
 
     # currently only supports fixed filelength
@@ -1291,10 +1204,6 @@ package HTTP::BS::Server::Client::Request {
            'mime'     => $mime,
            'filename' => $filename         
         });        
-        
-        #my $headtext = $self->_BuildHeaders($filelength, $mime, $filename);
-        #$fileitem{'buf'} = $$headtext;
-        #$self->_SendResponse(\%fileitem);
     }
 
     # to do get rid of shell escape, launch ssh without blocking
@@ -1387,12 +1296,6 @@ package HTTP::BS::Server::Client::Request {
            'mime'     => $mime,
            'filename' => $options->{'filename'}            
         });
-        
-        
-        #my $headtext = $self->_BuildHeaders($bytesize, $mime, $options->{'filename'});    
-        #$fileitem{'buf'}      = $$headtext;
-        #$fileitem{'localbuf'} = $buf;
-        #$self->_SendResponse(\%fileitem);
     }
     
     sub SendCallback {
@@ -1404,12 +1307,7 @@ package HTTP::BS::Server::Client::Request {
            'size'     => $options->{'size'},
            'mime'     => $options->{'mime'},
            'filename' => $options->{'filename'}            
-        });        
-
-                
-        #my $headtext = $self->_BuildHeaders($options->{'size'}, $options->{'mime'}, $options->{'filename'});    
-        #$fileitem{'buf'} = $$headtext;        
-        #$self->_SendResponse(\%fileitem);        
+        });           
     }
     
     sub SendAsTar {
