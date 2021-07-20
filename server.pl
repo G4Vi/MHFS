@@ -2268,7 +2268,7 @@ package MusicLibrary {
     use Encode qw(decode encode);
     use Any::URI::Escape;
     use URI::Escape;
-    use Storable;
+    use Storable qw(dclone);
     use Fcntl ':mode';  
     use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
     use Scalar::Util qw(looks_like_number weaken);
@@ -2344,56 +2344,7 @@ package MusicLibrary {
             return undef if( $size eq 0);
             return [$basepath, $size, \@tree, $utf8name];
        }        
-    }
-
-    sub BuildLibrary2 {
-        my ($self, $path) = @_;
-        # recursive disk read is expensive ... do it in another process
-        #my $data = `find /media/storage/music -type f -printf "%P\\n%s\\n"`;
-        my @scan = ($path);
-        while(@scan) {
-            my $file = shift @scan;
-            my $snode = $self->{'libs'}{$path}{'files'}{$file}{'stat'};
-            #say 'stat ' . $file;
-            my $finfo = stat($file);
-            #print Dumper($finfo);
-            if(S_ISDIR($finfo->mode)) {                
-                if((!$snode) || ($finfo->mtime ne $snode->mtime) || ($finfo->uid ne $snode->uid) || ($finfo->gid ne $snode->gid) || ($finfo->ino ne $snode->ino) || ($finfo->mode ne $snode->mode)) {
-                    $self->{'libs'}{$path}{'files'}{$file}{'stat'} = $finfo;                    
-                    # directory changed reread it
-                    my $dir;
-                    if(! opendir($dir, $file)) {
-                        warn "outputdir: Cannot open directory: $file $!";
-                        return undef;
-                    }
-                    my @files = sort { uc($a) cmp uc($b)} (readdir $dir);
-                    my @fullfiles;
-                    foreach my $ffile (@files) {
-                        next if(($ffile eq '.') || ($ffile eq '..'));
-                        push @fullfiles, $file.'/'.$ffile;
-                    }
-                    $self->{'libs'}{$path}{'files'}{$file}{'files'} = \@fullfiles;                   
-                }
-                my $fref = $self->{'libs'}{$path}{'files'}{$file}{'files'};
-                push(@scan, @{$fref}) if (@{$fref});
-            }
-            elsif((!$snode) || ($finfo->mtime ne $snode->mtime) || ($finfo->uid ne $snode->uid) || ($finfo->gid ne $snode->gid) || ($finfo->ino ne $snode->ino) || ($finfo->mode ne $snode->mode) || ($finfo->size ne $snode->size)) {
-                $self->{'libs'}{$path}{'files'}{$file}{'stat'} = $finfo;
-            }
-        }
-
-        #print Dumper($self->{'libs'}{$path});
-        #die;
-    
-
-        # determine if any changes occured since last time        
-        #mtime
-        #size
-        #inode number
-        #file mode
-        #owner uid and gid
-
-    }
+    }    
 
     sub BuildRemoteLibrary {
         my ($self, $source) = @_;
@@ -2653,10 +2604,6 @@ package MusicLibrary {
         print Dumper($info); 
         $continue->(); 
     }
-
-    sub onSampleRates {
-        my ($request, $file, $rates) = @_;
-    }
     
     sub SendLocalTrack {
         my ($request, $file) = @_;    
@@ -2797,8 +2744,11 @@ package MusicLibrary {
     sub BuildLibraries {
         my ($self) = @_;
         my @wholeLibrary;
+
+        $self->{'sources'} = [];
+        my $tocheck = dclone($self->{'settings'}{'MUSICLIBRARY'}{'sources'});
        
-        foreach my $source (@{$self->{'sources'}}) {
+        foreach my $source (@{$tocheck}) {
             my $lib;
             if($source->{'type'} eq 'local') {
                 say "MusicLibrary: building music " . clock_gettime(CLOCK_MONOTONIC);             
@@ -2825,6 +2775,7 @@ package MusicLibrary {
             }
             if($lib) {                
                 $source->{'lib'} = $lib;
+                push @{$self->{'sources'}}, $source;
                 OUTER: foreach my $item (@{$lib->[2]}) {
                     foreach my $already (@wholeLibrary) {
                         next OUTER if($already->[0] eq $item->[0]);
@@ -2834,7 +2785,8 @@ package MusicLibrary {
             }
             else {
                 $source->{'lib'} = undef;
-                die "invalid source: " . $source->{'type'};
+                warn "invalid source: " . $source->{'type'};
+                warn 'folder: '. $source->{'folder'} if($source->{'type'} eq 'local');
             }
         }
         $self->{'library'} = \@wholeLibrary;
@@ -2898,7 +2850,7 @@ package MusicLibrary {
             if($utf8name =~ /(.+\/).+$/) {
                 $nameloc  = $1;
             }
-            if($source->{'SendFile'}->($request, $node->{'path'}, $node->{'node'}, $source, $nameloc)) {
+            if($sendFiles{$source->{'type'}}->($request, $node->{'path'}, $node->{'node'}, $source, $nameloc)) {
                 return 1;
             } 
         }
@@ -2933,15 +2885,27 @@ package MusicLibrary {
         HTTP::BS::Server::Process->new_output_child($evp, sub {            
             # done in child
             my ($datachannel) = @_;
-            $self->BuildLibraries();
-            print STDERR "MusicLibrary: UpdateLibrariesAsync: Building libraries\n";
-            my @mlibs;
-            foreach my $source (@{$self->{'sources'}}) {
-                push @mlibs, $source->{'lib'};                
+
+            # save references to before
+            my @potentialupdates = ('html_gapless', 'html', 'musicdbhtml', 'musicdbjson');
+            my %before;
+            foreach my $pupdate (@potentialupdates) {
+                $before{$pupdate} = $self->{$pupdate};
             }
+
+            # build the new libraries
+            $self->BuildLibraries();
+
+            # determine what needs to be updated
+            my @updates = (['sources', $self->{'sources'}]);
+            foreach my $pupdate(@potentialupdates) {
+                if($before{$pupdate} ne $self->{$pupdate}) {
+                    push @updates, [$pupdate, $self->{$pupdate}];
+                }
+            }
+
             print STDERR "MusicLibrary: UpdateLibrariesAsync:freezing\n";
-            my %updatedlibrary = ('libs' => \@mlibs, 'html_gapless' => $self->{'html_gapless'}, 'html' => $self->{'html'}, 'musicdbhtml' => $self->{'musicdbhtml'}, 'musicdbjson' => $self->{'musicdbjson'});
-            my $pipedata = freeze(\%updatedlibrary);
+            my $pipedata = freeze(\@updates);
             print STDERR "MusicLibrary: UpdateLibrariesAsync: outputting on pipe\n";  
             print $datachannel $pipedata;
             exit 0;
@@ -2950,25 +2914,24 @@ package MusicLibrary {
             say "BEGIN_FROM_CHILD---------";
             print $err;
             say "END_FROM_CHILD-----------";
-            my $unthawed = thaw($out);
-            if($unthawed && $unthawed->{'libs'} && $unthawed->{'html_gapless'} && $unthawed->{'html'}){
-                my $temp = $unthawed->{'libs'};
-                if(scalar(@{$temp}) != scalar(@{$self->{'sources'}})) {
-                    say "incorrect number of sources, not updating library";                                                
-                }
-                else {                        
-                    foreach my $source (@{$self->{'sources'}}) {
-                        say "updating library " . $source->{'folder'};
-                        $source->{'lib'} = shift @{$temp};                       
-                    }
-                    $self->{'html_gapless'} = $unthawed->{'html_gapless'};
-                    $self->{'html'} = $unthawed->{'html'};
-                    $self->{'musicdbhtml'} = $unthawed->{'musicdbhtml'};
-                    $self->{'musicdbjson'} = $unthawed->{'musicdbjson'};
+            my $unthawed;           
+            {
+                local $@;
+                unless (eval {
+                    $unthawed = thaw($out);
+                    return 1;                    
+                }) {
+                    warn("thaw threw exception");
                 }
             }
+            if($unthawed){
+                foreach my $update (@$unthawed) {
+                    say "Updating " . $update->[0];
+                    $self->{$update->[0]} = $update->[1];
+                }                
+            }
             else {
-                say "failed to unthaw, library not updated.";
+                say "failed to thaw, library not updated.";
             }           
             $onUpdateEnd->();
         });
@@ -2979,24 +2942,14 @@ package MusicLibrary {
         my $self =  {'settings' => $settings};
         bless $self, $class;  
         my $pstart = 'plugin(' . ref($self) . '): ';
-        say $pstart . "setting up sources";
-        $self->{'sources'} = $settings->{'MUSICLIBRARY'}{'sources'};        
-        foreach my $source(@{$self->{'sources'}}) {
-            $source->{'SendFile'} //= $sendFiles{$source->{'type'}};        
-        }
+        
+        # no sources until loaded
+        $self->{'sources'} = [];
+        $self->{'html_gapless'} = 'MusicLibrary not loaded';
+        $self->{'html'} = 'MusicLibrary not loaded';
+        $self->{'musicdbhtml'} = 'MusicLibrary not loaded';
+        $self->{'musicdbjson'} = '{}';
 
-        # we want to serve 503 instead of 404 when the musiclibrary is loading
-        my $nolibraryroute = sub {
-            my ($request) = @_;
-            $request->Send503();
-        };
-        $self->{'routes'} = [
-            ['/music', $nolibraryroute],
-            ['/music_dl',$nolibraryroute],
-            ['/music_resources',$nolibraryroute],                         
-        ];
-
-        # once the music library is loaded we can serve these real routes
         my $musicpageroute = sub {
             my ($request) = @_;
             if($request->{'qs'}{'segments'} || ($request->{'header'}{'User-Agent'} =~ /Linux/) || $request->{'qs'}{'fmt'} ) {
@@ -3015,31 +2968,15 @@ package MusicLibrary {
             return $self->SendResources($request);
         };       
 
-        my %realroutes = (
-            '/music' => $musicpageroute,
-            '/music_dl' => $musicdlroute,
-            '/music_resources' => $musicresourcesroute,
-        );        
+        $self->{'routes'} = [
+            ['/music', $musicpageroute],
+            ['/music_dl', $musicdlroute],
+            ['/music_resources', $musicresourcesroute],
+        ];        
 
         $self->{'timers'} = [
-            # finish initialization once the event loop is running
-            [0, 0, sub {
-                my ($timer, $current_time, $evp) = @_;
-                say "$pstart init timer";                
-                UpdateLibrariesAsync($self, $evp, sub {
-                    say "$pstart init timer done";
-                    my $routesref = $self->{'server'}{'routes'};
-                    for(my $i = (@$routesref)-1; $i >= 0; $i--) {
-                        my $route = $routesref->[$i][0];
-                        if(defined $realroutes{$route}) {
-                            $routesref->[$i][1] = $realroutes{$route};
-                        }
-                    }                    
-                });
-                return undef;
-            }],
-            # update the library periodically
-            [300, 300, sub {
+            # update the library at start and periodically
+            [0, 300, sub {
                 my ($timer, $current_time, $evp) = @_;
                 say "$pstart  library timer";                
                 UpdateLibrariesAsync($self, $evp, sub {
