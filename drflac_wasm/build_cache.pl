@@ -10,7 +10,7 @@ my $debug = 0;
 my $outdir;
 my @cmd = ('emcc');
 if($debug) {
-    push @cmd, ("-O0", "-g4", '--source-map-base', './'); #'--source-map-base', 'https://computoid.com/stream/static/music_inc/'); # for chrome
+    push @cmd, ("-O0", "-g4", '--source-map-base', './');
     #push @cmd, ('-s', 'SAFE_HEAP=1');
     $outdir = 'mod_dbg';
 }

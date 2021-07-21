@@ -10,8 +10,9 @@ streaminfo
 _Inline
 drflac_wasm/drflac.js
 drflac_wasm/drflac.wasm
-static/drflac.wasm
-static/drflac.js
+drflac_wasm/mod_rel
+static/music_inc/drflac.js
+static/music_inc/drflac.wasm
 static/music_worklet/decoder/bin
 static/music_worklet_inprogress/decoder/bin
 server.pl.old

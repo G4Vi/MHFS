@@ -3705,9 +3705,6 @@ sub get_video {
     return 1;    
 }
 
-use lib File::Spec->catdir($FindBin::Bin, 'perlmodules', 'Parse-Matroska', 'lib');
-use Parse::Matroska::Reader;
-
 sub ebml_read {
     my $ebml = $_[0];
     my $buf = \$_[1];
@@ -4538,7 +4535,7 @@ sub GetResource {
 sub ptp_request {
     my ($evp, $url, $handler, $tried_login) = @_;
     my $atbuf;
-    my @cmd = ('curl', '-s', '-v', '-b', '/tmp/ptp', '-c', '/tmp/ptp', 'https://xxxxxxx.domain/' . $url);    
+    my @cmd = ('curl', '-s', '-v', '-b', '/tmp/ptp', '-c', '/tmp/ptp', $SETTINGS->{'PTP'}{'url'}.'/' . $url);
 
     my $process;
     $process    = HTTP::BS::Server::Process->new_output_process($evp, \@cmd, sub {
@@ -4555,7 +4552,7 @@ sub ptp_request {
             }
             $tried_login = 1;
             my $postdata = 'username=' . $SETTINGS->{'PTP'}{'username'} . '&password=' . $SETTINGS->{'PTP'}{'password'} . '&passkey=' . $SETTINGS->{'PTP'}{'passkey'};
-            my @logincmd = ('curl', '-s', '-v', '-b', '/tmp/ptp', '-c', '/tmp/ptp', '-d', $postdata,  'https://xxxxxxx.domain/ajax.php?action=login');
+            my @logincmd = ('curl', '-s', '-v', '-b', '/tmp/ptp', '-c', '/tmp/ptp', '-d', $postdata, $SETTINGS->{'PTP'}{'url'}.'/ajax.php?action=login');
             $process = HTTP::BS::Server::Process->new_output_process($evp, \@logincmd, sub {
                  my ($output, $error) = @_;
                  # todo error handling
