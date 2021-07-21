@@ -15,4 +15,5 @@ static/music_inc/drflac.js
 static/music_inc/drflac.wasm
 static/music_worklet/decoder/bin
 static/music_worklet_inprogress/decoder/bin
+static/music_worklet_inprogress/player/worklet_processor_ff.js
 server.pl.old
