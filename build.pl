@@ -5,10 +5,10 @@ use FindBin;
 use File::Spec;
 
 # build music_worklet
-system('perl', '-xstatic/music_worklet_inprogress/decoder', 'static/music_worklet_inprogress/decoder/build_cache_worklet.pl') == 0 or die('failed to make worklet emcc');
-system('sh', 'static/music_worklet_inprogress/player/ff.sh') == 0 or die('failed to make worklet');
+system('make', '-C', 'static/music_worklet_inprogress/decoder') == 0 or die('failed to make wasm');
+system('make', '-C', 'static/music_worklet_inprogress/player/') == 0 or die('failed to make worklet');
 
-# build flac library
+# build xs library for server
 say "current binary " . $FindBin::Bin;
 my $flacdir = File::Spec->catdir($FindBin::Bin, 'Mytest');
 chdir($flacdir) or die("failed to enter flac dir");
