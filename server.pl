@@ -2970,15 +2970,6 @@ package MusicLibrary {
 
         $self->{'routes'} = [
             ['/music', $musicpageroute],
-            ['/static/music_worklet_inprogress/player/worklet_processor.js', sub {
-                my ($request) = @_;
-                if($request->{'header'}{'User-Agent'} =~ /Firefox/) {
-                    say "sending ff worklet processor instead";
-                    return $request->Send307('worklet_processor_ff.js');
-                }
-                my $requestfile = $request->{'path'}{'requestfile'};
-                return $request->SendFile($requestfile);                 
-            }],
             ['/music_dl', $musicdlroute],
             ['/music_resources', $musicresourcesroute],
         ];        

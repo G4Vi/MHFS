@@ -126,7 +126,12 @@ const MHFSPlayer = async function(opt) {
     that._ab = Float32AudioRingBufferWriter.create(that.ARBLen, that.channels, that.sampleRate);   
 
     // create worklet
-    await that.ac.audioWorklet.addModule('player/worklet_processor.js'); // is annoying the path isn't consistent with import
+    let workletProcessorPath = 'player/worklet_processor.js';
+    if(navigator.userAgent.toLowerCase().indexOf('firefox') > -1){
+        // Firefox can't handle import in worklet so use concat version
+        workletProcessorPath = 'player/worklet_processor_ff.js';
+    }
+    await that.ac.audioWorklet.addModule(workletProcessorPath);
     let MusicNode = new AudioWorkletNode(that.ac, 'MusicProcessor',  {'numberOfOutputs' : 1, 'outputChannelCount': [that.channels]});
     MusicNode.connect(that.GainNode);
     MusicNode.port.postMessage({'message' : 'init', 'audiobuffer' : that._ab.to()});     
