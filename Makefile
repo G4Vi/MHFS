@@ -5,7 +5,7 @@ PLAYERDIR:=static/music_worklet_inprogress/player
 all: Mytest music_worklet
 
 Mytest:
-	$(MAKE) -C Mytest -f MakeMakefile.mk
+	$(MAKE) -C Mytest -f ActualMakefile.mk
 
 music_worklet_decoder:
 	$(MAKE) -C $(DECODERDIR)
@@ -16,7 +16,7 @@ music_worklet_player:
 music_worklet: music_worklet_decoder music_worklet_player
 
 Mytest_clean:
-	$(MAKE) -C Mytest -f MakeMakefile.mk clean
+	$(MAKE) -C Mytest -f ActualMakefile.mk clean
 
 music_worklet_decoder_clean:
 	$(MAKE) -C $(DECODERDIR) clean
