@@ -15,5 +15,6 @@ WriteMakefile(
     INC               => '-I.',
     # OBJECT            => '$(O_FILES)', # link all the C files too
     CCFLAGS        => '-Wall -std=c11',
-    OPTIMIZE       => '-O3',
+    #OPTIMIZE       => '-O3',
+    OPTIMIZE       => '-g',
 );

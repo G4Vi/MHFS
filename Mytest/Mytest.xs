@@ -221,7 +221,7 @@ _mytest_get_flac_cleanup:
 	return false;
 }
 
-bool _mytest_get_wav(_mytest *mytest, uint64_t start, uint64_t end)
+bool _mytest_wavvfs_read_range(_mytest *mytest, uint64_t start, uint64_t end)
 {
     if(start > end)
     {
@@ -297,7 +297,7 @@ bool _mytest_get_wav(_mytest *mytest, uint64_t start, uint64_t end)
         return false;   
     }
 
-    // TODO faster routine for 16 bit samples
+    // TODO use miniaudio instead
     {
         int32_t *raw32Samples = malloc(framecount * pFlac->channels * sizeof(int32_t));
         if(raw32Samples == NULL)
@@ -309,16 +309,25 @@ bool _mytest_get_wav(_mytest *mytest, uint64_t start, uint64_t end)
             free(raw32Samples);
             return false;     
         }
-        unsigned sample_byte_index = sizeof(int32_t) - samplesize;
+
         unsigned flacbufferpos = mytest->largest_offset-bytesleft;
         for(unsigned sampleindex = skipsample; bytesleft > 0; sampleindex++)
         {
             unsigned tocopy = (bytesleft > samplesize ? samplesize : bytesleft) - skipbytes;
-            uint8_t *sample = ((uint8_t*)(&raw32Samples[sampleindex])) + sample_byte_index + skipbytes;
-            skipbytes = 0;
-            memcpy(&mytest->flacbuffer[flacbufferpos], sample, tocopy);                
-            bytesleft -= tocopy;           
-            flacbufferpos += tocopy;
+            
+            // drflac decodes to the high bytes, normalize the integer
+            int32_t sample = raw32Samples[sampleindex] >> ((sizeof(int32_t)-samplesize) * 8);
+
+            // copy the parts of the sample we want and encode as little endian
+            sample >>= (skipbytes * 8);
+            skipbytes = 0;                
+            bytesleft -= tocopy;
+            while(tocopy)
+            {
+                mytest->flacbuffer[flacbufferpos++] = sample;
+                sample >>= 8;
+                tocopy--; 
+            }            
         }
         free(raw32Samples);
     }
@@ -478,13 +487,13 @@ get_flac(mytest, start, count)
         RETVAL
 
 SV *
-get_wav(mytest, start, end)
+wavvfs_read_range(mytest, start, end)
         Mytest mytest
 		UV start
 		UV end
 	CODE:
         SV *data = NULL;
-        if(_mytest_get_wav(mytest, start, end))
+        if(_mytest_wavvfs_read_range(mytest, start, end))
         {
             mytest->flacbuffer[mytest->largest_offset] = '\0';
 			data = newSV(0);

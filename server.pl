@@ -2538,7 +2538,7 @@ package MusicLibrary {
             my $endbyte = $request->{'header'}{'_RangeEnd'} // $wavsize-1;
             say "start byte" . $startbyte;
             say "end byte " . $endbyte;           
-            say "Mytest::get_wav " . $startbyte . ' ' . $endbyte;          
+            say "Mytest::wavvfs_read_range " . $startbyte . ' ' . $endbyte;          
             my $maxsendsize;
             $maxsendsize = 1048576/2;            
             say "maxsendsize $maxsendsize " . ' bytespersample ' . ($TRACKINFO{$tosend}{'BITSPERSAMPLE'}/8) . ' numchannels ' . $TRACKINFO{$tosend}{'NUMCHANNELS'};
@@ -2552,8 +2552,8 @@ package MusicLibrary {
                 }                
                 my $actual_startbyte = $startbyte;
                 $startbyte = $actual_endbyte+1;
-                say "SendCallback get_wav " . $actual_startbyte . ' ' . $actual_endbyte;               
-                return Mytest::get_wav($pv, $actual_startbyte, $actual_endbyte);
+                say "SendCallback wavvfs_read_range " . $actual_startbyte . ' ' . $actual_endbyte;               
+                return Mytest::wavvfs_read_range($pv, $actual_startbyte, $actual_endbyte);
             }, {
                 'mime' => 'audio/wav',
                 'size' => $wavsize,            
