@@ -315,8 +315,9 @@ bool _mytest_wavvfs_read_range(_mytest *mytest, uint64_t start, uint64_t end)
         {
             unsigned tocopy = (bytesleft > samplesize ? samplesize : bytesleft) - skipbytes;
             
-            // drflac decodes to the high bytes, normalize the integer
-            int32_t sample = raw32Samples[sampleindex] >> ((sizeof(int32_t)-samplesize) * 8);
+            // drflac decodes to the high bytes, skip the unneeded low bytes
+            skipbytes += (sizeof(int32_t) - samplesize);
+            uint32_t sample = ((uint32_t)raw32Samples[sampleindex]);
 
             // copy the parts of the sample we want and encode as little endian
             sample >>= (skipbytes * 8);
