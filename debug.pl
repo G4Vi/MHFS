@@ -25,7 +25,7 @@ foreach my $perls (@pids) {
 chdir($FindBin::Bin) or die("Failed to change to script location");
 
 # build mhfs
-system('perl', 'build.pl') == 0 or die("Failed to build MHFS");
+system('make') == 0 or die("Failed to build MHFS");
 
 # run the server
 exec('perl', 'server.pl', 'flush');

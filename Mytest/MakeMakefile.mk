@@ -9,4 +9,4 @@ clean:
 	$(MAKE) clean || [ ! -f Makefile ]
 	rm -f Makefile
 
-.PHONY: all
+.PHONY: all clean

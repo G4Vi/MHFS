@@ -8,7 +8,7 @@ You likely need to create `.conf/settings.pl` to specify folder paths and networ
 
 ## Build
 
-emscripten is required to build wasm.  `cd drflac_wasm && perl build_cache.pl && cd .. && perl build.pl`
+emscripten is required to build wasm.  `cd drflac_wasm && perl build_cache.pl && cd .. && make -j4`
 
 ## Run
 
@@ -27,7 +27,7 @@ music player is by default accessed with `/music`
 
 `static/music_worklet_inprogress` The main audio player. Unfortunately Linux has poor support for `audio worklet` and older browsers have no support for it, so older versions of the music player are included.
 
-`/music?legacy=1` minimal js, use html audio tag
+`/music?legacy=1` minimal js, uses html audio tag
 
 `/music` on linux, gapless player, requests flac segments of a track from `MHFS` and uses `AudioBufferSourceNode`
 
