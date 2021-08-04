@@ -84,6 +84,10 @@ FLAC__StreamEncoderTellStatus tellcb(const FLAC__StreamEncoder *encoder, FLAC__u
      return FLAC__STREAM_ENCODER_TELL_STATUS_OK;
 }
 
+static __attribute__((always_inline)) int32_t sar(const int32_t value, const int shift)
+{
+    return value < 0 ? ~(~value >> shift) : value >> shift;
+}
 
 bool _mytest_get_flac(_mytest *mytest, uint64_t start, size_t count)
 {
@@ -185,15 +189,7 @@ bool _mytest_get_flac(_mytest *mytest, uint64_t start, size_t count)
         for(unsigned i = 0; i < (count * pFlac->channels) ; i++)
         {
             // drflac outputs 24 bit audio to the higher bits of int32_t, we need it represented as a normal integer for libflac
-            uint32_t sample;
-            memcpy(&sample, &raw32Samples[i], 4);
-            sample = (sample >> 8);
-            // sign extension
-            if(sample & (1 << 23))
-            {
-                sample |= 0xFF000000;
-            }
-            memcpy(&fbuffer[i], &sample, 4);            
+            fbuffer[i] = sar(raw32Samples[i], 8);                       
         }
     }   
     
