@@ -16,8 +16,7 @@ package EventLoop::Poll::Linux::Timer {
     };
     # x86_64 numbers
     require 'syscall.ph';
-    #my $timerfd_create_no = 283;
-    #my $timerfd_settime_no = 286; 
+
     my $TFD_CLOEXEC = 0x80000;
     my $TFD_NONBLOCK = 0x800;     
 

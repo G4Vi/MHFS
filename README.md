@@ -8,7 +8,7 @@ You likely need to create `.conf/settings.pl` to specify folder paths and networ
 
 ## Build
 
-emscripten is required to build wasm.  `cd drflac_wasm && perl build_cache.pl && cd .. && make -j4`
+emscripten is required to build wasm.  `make -j4`
 
 ## Run
 
