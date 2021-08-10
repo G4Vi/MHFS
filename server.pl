@@ -2279,9 +2279,20 @@ package MusicLibrary {
     use File::Spec;    
     use List::Util qw[min max];
     use HTML::Template;
+
+    # Optional dependency, MHFS XS
     use lib File::Spec->catdir($FindBin::Bin, 'Mytest', 'blib', 'lib');
-    use lib File::Spec->catdir($FindBin::Bin, 'Mytest', 'blib', 'arch');
-    use Mytest;
+    use lib File::Spec->catdir($FindBin::Bin, 'Mytest', 'blib', 'arch');    
+    BEGIN {
+        if(! (eval "use Mytest; 1")) {
+            warn "plugin(MusicLibrary): XS not available";
+            our $HAS_MHFS_XS = 0;
+        }
+        else {
+            our $HAS_MHFS_XS = 1;
+        }
+    }
+    
 
     # read the directory tree from desk and store
     # this assumes filenames are UTF-8ish, the octlets will be the actual filename, but the printable filename is created by decoding it as UTF-8
@@ -2497,6 +2508,12 @@ package MusicLibrary {
     sub SendTrack {
         my ($request, $tosend) = @_;        
         if(defined $request->{'qs'}{'part'}) {
+            if(! $MusicLibrary::HAS_MHFS_XS) {
+                say "MusicLibrary: route not available without XS";
+                $request->Send503();
+                return;
+            }
+
             if(!defined($TRACKINFO{$tosend}))
             {
                 GetTrackInfo($tosend, sub {
@@ -2521,6 +2538,12 @@ package MusicLibrary {
             }
         }
         elsif(defined $request->{'qs'}{'fmt'} && ($request->{'qs'}{'fmt'}  eq 'wav')) {
+            if(! $MusicLibrary::HAS_MHFS_XS) {
+                say "MusicLibrary: route not available without XS";
+                $request->Send503();
+                return;
+            }
+            
             if(!defined($TRACKINFO{$tosend}))
             {
                 GetTrackInfo($tosend, sub {
@@ -2860,6 +2883,13 @@ package MusicLibrary {
 
     sub SendResources {        
         my ($self, $request) = @_;
+
+        if(! $MusicLibrary::HAS_MHFS_XS) {
+            say "MusicLibrary: route not available without XS";
+            $request->Send503();
+            return;
+        }
+
         my $utf8name = decode('UTF-8', $request->{'qs'}{'name'});
         foreach my $source (@{$self->{'sources'}}) {
             my $node = FindInLibrary($source, $utf8name);

@@ -5,6 +5,8 @@ MUSICINCDIR=static/music_inc
 
 all: Mytest music_worklet music_inc
 
+noxs: music_worklet music_inc
+
 Mytest:
 	$(MAKE) -C Mytest -f ActualMakefile.mk
 
@@ -35,4 +37,4 @@ music_inc_clean:
 
 clean: Mytest_clean music_worklet_clean music_inc_clean
 
-.PHONY: all clean Mytest music_worklet music_worklet_decoder music_worklet_player Mytest_clean music_worklet_decoder_clean music_worklet_player_clean music_worklet_clean music_inc music_inc_clean
+.PHONY: all clean noxs Mytest music_worklet music_worklet_decoder music_worklet_player Mytest_clean music_worklet_decoder_clean music_worklet_player_clean music_worklet_clean music_inc music_inc_clean
