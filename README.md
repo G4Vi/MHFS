@@ -39,7 +39,7 @@ The music player is by default accessed with `/music`.
 `/static/music_inc/` similar to the gapless player, but doesn't buffer the whole track ahead of time.
 
 #### API
-`/music` Request a music player or the music library in a variety of formats. See `MusicLibrary::SendLibrary`.  
+`/music` Request a music player or the music library in a variety of formats. See `MusicLibrary::new` and `MusicLibrary::SendLibrary`.  
 
 `/music_dl?name=folderpath` Download a track [or part of one] by filename with optional resampling, channel mixing, and encoding. See `MusicLibrary::SendLocalTrack`.
 
