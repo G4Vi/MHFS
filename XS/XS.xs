@@ -25,44 +25,46 @@ typedef struct {
     uint64_t file_offset;
     uint64_t largest_offset;
 
-} _mytest;
+} MHFS_XS_Track;
 
 #define MIN(a,b) (((a)<(b))?(a):(b))
 
-_mytest *_mytest_new(_mytest *mytest, const char *filename, malloc_ptr mymalloc, free_ptr myfree, realloc_ptr myrealloc)
+MHFS_XS_Track *_MHFS_XS_Track_new(const char *filename, malloc_ptr mymalloc, free_ptr myfree, realloc_ptr myrealloc)
 {
-	memset(mytest, 0, sizeof(*mytest));    
-    mytest->malloc  = mymalloc ? mymalloc : &malloc;
-	mytest->free    = myfree  ? myfree: &free;
-	mytest->realloc = myrealloc ? myrealloc : &realloc;
-    mytest->pFlac = drflac_open_file(filename, NULL);
-    if (mytest->pFlac == NULL) {
+    MHFS_XS_Track *track = mymalloc(sizeof(MHFS_XS_Track));
+    if(track == NULL) return NULL;
+	memset(track, 0, sizeof(*track));    
+    track->malloc  = mymalloc ? mymalloc : &malloc;
+	track->free    = myfree  ? myfree: &free;
+	track->realloc = myrealloc ? myrealloc : &realloc;
+    track->pFlac = drflac_open_file(filename, NULL);
+    if (track->pFlac == NULL) {
         return NULL;
     }
 
-	return mytest;
+	return track;
 }
 
 FLAC__StreamEncoderWriteStatus writecb(const FLAC__StreamEncoder *encoder, const FLAC__byte buffer[], size_t bytes, unsigned samples, unsigned current_frame, void *client_data)
 {
     //fprintf(stderr, "writecb %u %u\n", bytes, samples);
-    _mytest *mytest = (_mytest*)client_data;
+    MHFS_XS_Track *track = (MHFS_XS_Track*)client_data;
     // + 1 for terminating 0
-    if((mytest->file_offset + bytes + 1) > mytest->flacbuffersize)
+    if((track->file_offset + bytes + 1) > track->flacbuffersize)
     {
-        fprintf(stderr, "reallocating to %zu\n", mytest->flacbuffersize + (bytes * 2));
-        mytest->flacbuffer = mytest->realloc(mytest->flacbuffer, mytest->flacbuffersize + (bytes * 2));
-        if(mytest->flacbuffer == NULL)
+        fprintf(stderr, "reallocating to %zu\n", track->flacbuffersize + (bytes * 2));
+        track->flacbuffer = track->realloc(track->flacbuffer, track->flacbuffersize + (bytes * 2));
+        if(track->flacbuffer == NULL)
         {
             return  FLAC__STREAM_ENCODER_WRITE_STATUS_FATAL_ERROR;
         }
-        mytest->flacbuffersize = mytest->flacbuffersize + (bytes * 2);        
+        track->flacbuffersize = track->flacbuffersize + (bytes * 2);        
     }
     
     
-    memcpy(&mytest->flacbuffer[mytest->file_offset], buffer, bytes);
-    mytest->file_offset += bytes;
-    if(mytest->file_offset > mytest->largest_offset) mytest->largest_offset = mytest->file_offset;
+    memcpy(&track->flacbuffer[track->file_offset], buffer, bytes);
+    track->file_offset += bytes;
+    if(track->file_offset > track->largest_offset) track->largest_offset = track->file_offset;
     return FLAC__STREAM_ENCODER_WRITE_STATUS_OK;
 }
 
@@ -72,15 +74,15 @@ FLAC__StreamEncoderWriteStatus writecb(const FLAC__StreamEncoder *encoder, const
 
 FLAC__StreamEncoderSeekStatus seekcb(const FLAC__StreamEncoder *encoder, FLAC__uint64 absolute_byte_offset, void *client_data)
 {
-    _mytest *mytest = (_mytest*)client_data;
-    mytest->file_offset = absolute_byte_offset;
+    MHFS_XS_Track *track = (MHFS_XS_Track*)client_data;
+    track->file_offset = absolute_byte_offset;
     return FLAC__STREAM_ENCODER_SEEK_STATUS_OK;
 }
 
 FLAC__StreamEncoderTellStatus tellcb(const FLAC__StreamEncoder *encoder, FLAC__uint64 *absolute_byte_offset, void *client_data)
 {
-     _mytest *mytest = (_mytest*)client_data;
-     *absolute_byte_offset = mytest->file_offset;
+     MHFS_XS_Track *track = (MHFS_XS_Track*)client_data;
+     *absolute_byte_offset = track->file_offset;
      return FLAC__STREAM_ENCODER_TELL_STATUS_OK;
 }
 
@@ -89,12 +91,12 @@ static __attribute__((always_inline)) int32_t sar(const int32_t value, const int
     return value < 0 ? ~(~value >> shift) : value >> shift;
 }
 
-bool _mytest_get_flac(_mytest *mytest, uint64_t start, size_t count)
+bool _MHFS_XS_Track_get_flac(MHFS_XS_Track *track, uint64_t start, size_t count)
 {
-    mytest->file_offset     = 0;
-    mytest->largest_offset  = 0;
-	mytest->flacbuffersize = count * sizeof(FLAC__int32);		
-    drflac *pFlac = mytest->pFlac;
+    track->file_offset     = 0;
+    track->largest_offset  = 0;
+	track->flacbuffersize = count * sizeof(FLAC__int32);		
+    drflac *pFlac = track->pFlac;
     unsigned samplesize;
     if(pFlac->bitsPerSample == 16)
     {
@@ -110,15 +112,15 @@ bool _mytest_get_flac(_mytest *mytest, uint64_t start, size_t count)
         return false;
     }
 
-	mytest->flacbuffer = mytest->malloc(mytest->flacbuffersize);
-    if(mytest->flacbuffer == NULL)
+	track->flacbuffer = track->malloc(track->flacbuffersize);
+    if(track->flacbuffer == NULL)
     {
         return false;
     }
    
 
 	/* allocate the encoder */
-	if((mytest->encoder = FLAC__stream_encoder_new()) == NULL) {
+	if((track->encoder = FLAC__stream_encoder_new()) == NULL) {
 		fprintf(stderr, "ERROR: allocating encoder\n");
 		return true;
 	}
@@ -126,29 +128,29 @@ bool _mytest_get_flac(_mytest *mytest, uint64_t start, size_t count)
     FLAC__bool ok = true;
 	FLAC__StreamEncoderInitStatus init_status;
     
-	//ok &= FLAC__stream_encoder_set_verify(mytest->encoder, true);
-	ok &= FLAC__stream_encoder_set_verify(mytest->encoder, false);
-	ok &= FLAC__stream_encoder_set_compression_level(mytest->encoder, 5);
-	ok &= FLAC__stream_encoder_set_channels(mytest->encoder, pFlac->channels);
-	ok &= FLAC__stream_encoder_set_bits_per_sample(mytest->encoder, pFlac->bitsPerSample);
-	ok &= FLAC__stream_encoder_set_sample_rate(mytest->encoder, pFlac->sampleRate);
-	ok &= FLAC__stream_encoder_set_total_samples_estimate(mytest->encoder, count);
+	//ok &= FLAC__stream_encoder_set_verify(track->encoder, true);
+	ok &= FLAC__stream_encoder_set_verify(track->encoder, false);
+	ok &= FLAC__stream_encoder_set_compression_level(track->encoder, 5);
+	ok &= FLAC__stream_encoder_set_channels(track->encoder, pFlac->channels);
+	ok &= FLAC__stream_encoder_set_bits_per_sample(track->encoder, pFlac->bitsPerSample);
+	ok &= FLAC__stream_encoder_set_sample_rate(track->encoder, pFlac->sampleRate);
+	ok &= FLAC__stream_encoder_set_total_samples_estimate(track->encoder, count);
 
 	if(!ok) {
-		goto _mytest_get_flac_cleanup;
+		goto _MHFS_XS_Track_get_flac_cleanup;
 	}
     
-	//init_status = FLAC__stream_encoder_init_stream(mytest->encoder, &writecb, &seekcb, &tellcb, NULL, mytest);
-	init_status = FLAC__stream_encoder_init_stream(mytest->encoder, &writecb, NULL, NULL, NULL, mytest);
+	//init_status = FLAC__stream_encoder_init_stream(track->encoder, &writecb, &seekcb, &tellcb, NULL, track);
+	init_status = FLAC__stream_encoder_init_stream(track->encoder, &writecb, NULL, NULL, NULL, track);
 	if(init_status != FLAC__STREAM_ENCODER_INIT_STATUS_OK) {
 		fprintf(stderr, "ERROR: initializing encoder: %s\n", FLAC__StreamEncoderInitStatusString[init_status]);
-		goto _mytest_get_flac_cleanup;
+		goto _MHFS_XS_Track_get_flac_cleanup;
 	}
 
    
     if(!drflac_seek_to_pcm_frame(pFlac, start))
     {
-        goto _mytest_get_flac_cleanup;    
+        goto _MHFS_XS_Track_get_flac_cleanup;    
     }    
 
     long unsigned rawSamplesSize = count * pFlac->channels * samplesize;
@@ -156,21 +158,21 @@ bool _mytest_get_flac(_mytest *mytest, uint64_t start, size_t count)
     void *rawSamples = malloc(rawSamplesSize);
     if(rawSamples == NULL)
     {
-        goto _mytest_get_flac_cleanup;
+        goto _MHFS_XS_Track_get_flac_cleanup;
     }
     FLAC__int32 *fbuffer = malloc(sizeof(FLAC__int32)*count * pFlac->channels);
     if(fbuffer == NULL)
     {
-        goto _mytest_get_flac_cleanup;
+        goto _MHFS_XS_Track_get_flac_cleanup;
     }
     if(pFlac->bitsPerSample == 16)
     {
         int16_t *raw16Samples = (int16_t*)rawSamples;
-        if(drflac_read_pcm_frames_s16(mytest->pFlac, count, raw16Samples) != count)
+        if(drflac_read_pcm_frames_s16(track->pFlac, count, raw16Samples) != count)
         {
             free(fbuffer);
             free(rawSamples);
-            goto _mytest_get_flac_cleanup;       
+            goto _MHFS_XS_Track_get_flac_cleanup;       
         }
         for(unsigned i = 0; i < (count * pFlac->channels) ; i++)
         {
@@ -180,11 +182,11 @@ bool _mytest_get_flac(_mytest *mytest, uint64_t start, size_t count)
     else
     {
         int32_t *raw32Samples = (int32_t*)rawSamples;
-        if(drflac_read_pcm_frames_s32(mytest->pFlac, count, raw32Samples) != count)
+        if(drflac_read_pcm_frames_s32(track->pFlac, count, raw32Samples) != count)
         {
             free(fbuffer);
             free(rawSamples);
-            goto _mytest_get_flac_cleanup;       
+            goto _MHFS_XS_Track_get_flac_cleanup;       
         }
         for(unsigned i = 0; i < (count * pFlac->channels) ; i++)
         {
@@ -193,50 +195,50 @@ bool _mytest_get_flac(_mytest *mytest, uint64_t start, size_t count)
         }
     }   
     
-    if(!FLAC__stream_encoder_process_interleaved(mytest->encoder, fbuffer, count))
+    if(!FLAC__stream_encoder_process_interleaved(track->encoder, fbuffer, count))
     {
-        fprintf(stderr, "   state: %s\n", FLAC__StreamEncoderStateString[FLAC__stream_encoder_get_state(mytest->encoder)]);
+        fprintf(stderr, "   state: %s\n", FLAC__StreamEncoderStateString[FLAC__stream_encoder_get_state(track->encoder)]);
         free(fbuffer);
         free(rawSamples);
-        goto _mytest_get_flac_cleanup;        
+        goto _MHFS_XS_Track_get_flac_cleanup;        
     }
     free(rawSamples);
     free(fbuffer);   
     
-    if(FLAC__stream_encoder_finish(mytest->encoder))
+    if(FLAC__stream_encoder_finish(track->encoder))
     {
         fprintf(stderr, "should be encoded by now\n");
-		FLAC__stream_encoder_delete(mytest->encoder);
-        mytest->encoder = NULL;
+		FLAC__stream_encoder_delete(track->encoder);
+        track->encoder = NULL;
 		return true;
     }    
    
-_mytest_get_flac_cleanup:
-	FLAC__stream_encoder_delete(mytest->encoder);
-    mytest->encoder = NULL;
+_MHFS_XS_Track_get_flac_cleanup:
+	FLAC__stream_encoder_delete(track->encoder);
+    track->encoder = NULL;
 	return false;
 }
 
-bool _mytest_wavvfs_read_range(_mytest *mytest, uint64_t start, uint64_t end)
+bool _MHFS_XS_Track_wavvfs_read_range(MHFS_XS_Track *track, uint64_t start, uint64_t end)
 {
     if(start > end)
     {
         return false;
     }
-    drflac *pFlac = mytest->pFlac;
-    mytest->flacbuffersize = (end - start) + 1 + 1;
-    if((mytest->flacbuffersize - 1)	> (44 + (pFlac->totalPCMFrameCount * pFlac->channels * (pFlac->bitsPerSample/8))))
+    drflac *pFlac = track->pFlac;
+    track->flacbuffersize = (end - start) + 1 + 1;
+    if((track->flacbuffersize - 1)	> (44 + (pFlac->totalPCMFrameCount * pFlac->channels * (pFlac->bitsPerSample/8))))
     {
         return false;    
     }
-    mytest->largest_offset  = mytest->flacbuffersize - 1;
-	mytest->flacbuffer = mytest->malloc(mytest->flacbuffersize);
-    if(mytest->flacbuffer == NULL)
+    track->largest_offset  = track->flacbuffersize - 1;
+	track->flacbuffer = track->malloc(track->flacbuffersize);
+    if(track->flacbuffer == NULL)
     {
         return false;
     }   
     
-    uint64_t bytesleft = mytest->largest_offset;
+    uint64_t bytesleft = track->largest_offset;
     if(start < 44) {
         // WAVE_FORMAT_EXTENSIBLE doesn't exist
         uint32_t audio_data_size = pFlac->totalPCMFrameCount * pFlac->channels * (pFlac->bitsPerSample/8);
@@ -262,7 +264,7 @@ bool _mytest_wavvfs_read_range(_mytest *mytest, uint64_t start, uint64_t end)
         memcpy(&data[36], "data", 4);
         memcpy(&data[40], &audio_data_size, 4);
         unsigned tcopy = MIN(44, end+1) - start;
-        memcpy(&mytest->flacbuffer[start], data, tcopy);
+        memcpy(&track->flacbuffer[start], data, tcopy);
         bytesleft -= tcopy;         
     }
     if(bytesleft == 0)
@@ -300,13 +302,13 @@ bool _mytest_wavvfs_read_range(_mytest *mytest, uint64_t start, uint64_t end)
         {
             return false;
         }        
-        if(drflac_read_pcm_frames_s32(mytest->pFlac, framecount, raw32Samples) != framecount)
+        if(drflac_read_pcm_frames_s32(track->pFlac, framecount, raw32Samples) != framecount)
         {
             free(raw32Samples);
             return false;     
         }
 
-        unsigned flacbufferpos = mytest->largest_offset-bytesleft;
+        unsigned flacbufferpos = track->largest_offset-bytesleft;
         for(unsigned sampleindex = skipsample; bytesleft > 0; sampleindex++)
         {
             unsigned tocopy = (bytesleft > samplesize ? samplesize : bytesleft) - skipbytes;
@@ -321,7 +323,7 @@ bool _mytest_wavvfs_read_range(_mytest *mytest, uint64_t start, uint64_t end)
             bytesleft -= tocopy;
             while(tocopy)
             {
-                mytest->flacbuffer[flacbufferpos++] = sample;
+                track->flacbuffer[flacbufferpos++] = sample;
                 sample >>= 8;
                 tocopy--; 
             }            
@@ -331,17 +333,17 @@ bool _mytest_wavvfs_read_range(_mytest *mytest, uint64_t start, uint64_t end)
     return true;    
 }
 
-void * _mytest_get_wav_seg(_mytest *mytest, uint64_t start, size_t count)
+void * _MHFS_XS_Track_get_wav_seg(MHFS_XS_Track *track, uint64_t start, size_t count)
 {
-    drflac *pFlac = mytest->pFlac;
+    drflac *pFlac = track->pFlac;
     // read in the desired amount of samples   
     if(!drflac_seek_to_pcm_frame(pFlac, start))
     {
         return NULL;
     }     
     fprintf(stderr, "seeked to absolute\n");
-    mytest->largest_offset = 44+ (count * pFlac->channels * sizeof(int16_t));
-    uint8_t *data =  mytest->malloc(((size_t)count * pFlac->channels * sizeof(int16_t)) + 44 + 1);
+    track->largest_offset = 44+ (count * pFlac->channels * sizeof(int16_t));
+    uint8_t *data =  track->malloc(((size_t)count * pFlac->channels * sizeof(int16_t)) + 44 + 1);
     memcpy(data, "RIFF", 4);
     uint32_t chunksize = (count * pFlac->channels * sizeof(int16_t)) + 36;
     memcpy(&data[4], &chunksize, 4);
@@ -369,7 +371,7 @@ void * _mytest_get_wav_seg(_mytest *mytest, uint64_t start, size_t count)
     {
         return NULL;
     }    
-    if(drflac_read_pcm_frames_s16(mytest->pFlac, count, rawSamples) != count)
+    if(drflac_read_pcm_frames_s16(track->pFlac, count, rawSamples) != count)
     {
         free(data);
         return NULL;    
@@ -378,7 +380,7 @@ void * _mytest_get_wav_seg(_mytest *mytest, uint64_t start, size_t count)
     return (void*)data;
 }
 
-void _mytest_on_meta(void* pUserData, drflac_metadata* pMetadata)
+void _MHFS_XS_Track_on_meta(void* pUserData, drflac_metadata* pMetadata)
 {
     pTHX = *(tTHX*)pUserData;
     if(pMetadata->type == DRFLAC_METADATA_BLOCK_TYPE_VORBIS_COMMENT)
@@ -404,48 +406,46 @@ void _mytest_on_meta(void* pUserData, drflac_metadata* pMetadata)
     }
 }
 
-void _mytest_delete(_mytest *mytest)
+void _MHFS_XS_Track_delete(MHFS_XS_Track *track)
 {
-	drflac_close(mytest->pFlac);
+	drflac_close(track->pFlac);
 }
 
-void *mytest_perl_malloc(size_t size)
+void *MHFS_XS_Track_perl_malloc(size_t size)
 {
 	void *ret;
 	Newx(ret, size, uint8_t);
 	return ret;
 }
 
-void mytest_perl_free(void *ptr)
+void MHFS_XS_Track_perl_free(void *ptr)
 {
     Safefree(ptr);
 }
 
-void *mytest_perl_realloc(void *ptr, size_t size)
+void *MHFS_XS_Track_perl_realloc(void *ptr, size_t size)
 {
 	Renew(ptr, size, uint8_t);
 	return ptr;
 }
 
-typedef _mytest* MHFS_XS_Track;
+typedef MHFS_XS_Track* P_MHFS_XS_Track;
 
 MODULE = MHFS::XS		PACKAGE = MHFS::XS
 
-MHFS_XS_Track
+P_MHFS_XS_Track
 new(filename)
         const char *filename
 	CODE:		
-		_mytest *mytest;
-		Newx(mytest, 1, _mytest);
-		fprintf(stderr, "pointer %p\n", mytest);
-		if(_mytest_new(mytest, filename, &mytest_perl_malloc, &mytest_perl_free, &mytest_perl_realloc))
+		MHFS_XS_Track *track = _MHFS_XS_Track_new(filename, &MHFS_XS_Track_perl_malloc, &MHFS_XS_Track_perl_free, &MHFS_XS_Track_perl_realloc);		
+		if(track != NULL)
 		{
-	        RETVAL = mytest;
+	        RETVAL = track;
 		}
 		else
 		{
 			/* to do exception instead?*/
-			RETVAL = (MHFS_XS_Track)&PL_sv_undef;
+			RETVAL = (P_MHFS_XS_Track)&PL_sv_undef;
 		}
 		
 	OUTPUT:
@@ -453,26 +453,26 @@ new(filename)
 
 
 void 
-DESTROY(mytest)
-        MHFS_XS_Track mytest
+DESTROY(track)
+        P_MHFS_XS_Track track
 	CODE:
-		_mytest_delete(mytest);
+		_MHFS_XS_Track_delete(track);
 		fprintf(stderr, "deleted decoder\n");
 
 SV *
-get_flac(mytest, start, count)
-        MHFS_XS_Track mytest
+get_flac(track, start, count)
+        P_MHFS_XS_Track track
 		UV start
 		size_t count
 	CODE:
-	    fprintf(stderr, "_pointer %p\n", mytest);
+	    fprintf(stderr, "_pointer %p\n", track);
 		SV *data = NULL;		
-		if(_mytest_get_flac(mytest, start, count))
+		if(_MHFS_XS_Track_get_flac(track, start, count))
 		{
-			fprintf(stderr, "flacbuffer at %p largest_offset %"PRIu64"\n", mytest->flacbuffer,mytest->largest_offset);
-			mytest->flacbuffer[mytest->largest_offset] = '\0';
+			fprintf(stderr, "flacbuffer at %p largest_offset %"PRIu64"\n", track->flacbuffer,track->largest_offset);
+			track->flacbuffer[track->largest_offset] = '\0';
 			data = newSV(0);
-			sv_usepvn_flags(data, (char*)mytest->flacbuffer, mytest->largest_offset, SV_SMAGIC | SV_HAS_TRAILING_NUL);
+			sv_usepvn_flags(data, (char*)track->flacbuffer, track->largest_offset, SV_SMAGIC | SV_HAS_TRAILING_NUL);
 			fprintf(stderr, "pvx %p\n", SvPVX(data));
 		}
         else
@@ -484,17 +484,17 @@ get_flac(mytest, start, count)
         RETVAL
 
 SV *
-wavvfs_read_range(mytest, start, end)
-        MHFS_XS_Track mytest
+wavvfs_read_range(track, start, end)
+        P_MHFS_XS_Track track
 		UV start
 		UV end
 	CODE:
         SV *data = NULL;
-        if(_mytest_wavvfs_read_range(mytest, start, end))
+        if(_MHFS_XS_Track_wavvfs_read_range(track, start, end))
         {
-            mytest->flacbuffer[mytest->largest_offset] = '\0';
+            track->flacbuffer[track->largest_offset] = '\0';
 			data = newSV(0);
-			sv_usepvn_flags(data, (char*)mytest->flacbuffer, mytest->largest_offset, SV_SMAGIC | SV_HAS_TRAILING_NUL);
+			sv_usepvn_flags(data, (char*)track->flacbuffer, track->largest_offset, SV_SMAGIC | SV_HAS_TRAILING_NUL);
 			fprintf(stderr, "pvx %p\n", SvPVX(data));
         }
         else
@@ -506,18 +506,18 @@ wavvfs_read_range(mytest, start, end)
         RETVAL
         
 SV *
-get_wav_seg(mytest, start, count)
-        MHFS_XS_Track mytest
+get_wav_seg(track, start, count)
+        P_MHFS_XS_Track track
 		UV start
 		size_t count
 	CODE:
         SV *data = NULL;
-        void *wav = _mytest_get_wav_seg(mytest, start, count);
+        void *wav = _MHFS_XS_Track_get_wav_seg(track, start, count);
         if(wav)
         {
-            mytest->flacbuffer[mytest->largest_offset] = '\0';
+            track->flacbuffer[track->largest_offset] = '\0';
 			data = newSV(0);
-			sv_usepvn_flags(data, (char*)wav, mytest->largest_offset, SV_SMAGIC | SV_HAS_TRAILING_NUL);
+			sv_usepvn_flags(data, (char*)wav, track->largest_offset, SV_SMAGIC | SV_HAS_TRAILING_NUL);
 			fprintf(stderr, "pvx %p\n", SvPVX(data));
         }
         else
@@ -533,7 +533,7 @@ get_vorbis_comments(filename)
         const char *filename
 	CODE:
         void *thedata = aTHX;
-    	drflac *pFlac = drflac_open_file_with_metadata(filename, &_mytest_on_meta, &thedata, NULL);
+    	drflac *pFlac = drflac_open_file_with_metadata(filename, &_MHFS_XS_Track_on_meta, &thedata, NULL);
         drflac_close(pFlac);
         if(thedata == aTHX) {
             thedata = &PL_sv_undef;
