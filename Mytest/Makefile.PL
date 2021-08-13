@@ -2,11 +2,11 @@ use 5.020002;
 use ExtUtils::MakeMaker;
 
 WriteMakefile(
-    NAME              => 'Mytest',
-    VERSION_FROM      => 'lib/Mytest.pm', # finds $VERSION, requires EU::MM from perl >= 5.5
+    NAME              => 'MHFS::XS',
+    VERSION_FROM      => 'lib/MHFS/XS.pm', # finds $VERSION, requires EU::MM from perl >= 5.5
     PREREQ_PM         => {}, # e.g., Module::Name => 1.1
-    ABSTRACT_FROM     => 'lib/Mytest.pm', # retrieve abstract from module
-    AUTHOR            => 'Sample Text <sample@>',
+    ABSTRACT_FROM     => 'lib/MHFS/XS.pm', # retrieve abstract from module
+    AUTHOR            => 'G4Vi',
     #LICENSE           => 'perl',
     #Value must be from legacy list of licenses here
     #http://search.cpan.org/perldoc?Module%3A%3ABuild%3A%3AAPI
