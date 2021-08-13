@@ -6,7 +6,7 @@ server.pl.10.11.19
 log.log
 testrextime.pl
 streaminfo
-/Mytest/Makefile.old
+/XS/Makefile.old
 _Inline
 drflac_wasm/drflac.js
 drflac_wasm/drflac.wasm

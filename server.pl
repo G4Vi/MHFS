@@ -2281,18 +2281,18 @@ package MusicLibrary {
     use HTML::Template;
 
     # Optional dependency, MHFS::XS
-    use lib File::Spec->catdir($FindBin::Bin, 'Mytest', 'blib', 'lib');
-    use lib File::Spec->catdir($FindBin::Bin, 'Mytest', 'blib', 'arch');    
+    use lib File::Spec->catdir($FindBin::Bin, 'XS', 'blib', 'lib');
+    use lib File::Spec->catdir($FindBin::Bin, 'XS', 'blib', 'arch');    
     BEGIN {
-        #if(! (eval "use MHFS::XS; 1")) {
-        #    warn "plugin(MusicLibrary): XS not available";
-        #    our $HAS_MHFS_XS = 0;
-        #}
-        #else {
-        #    our $HAS_MHFS_XS = 1;
-        #}
-        use MHFS::XS;
-        our $HAS_MHFS_XS = 1;
+        if(! (eval "use MHFS::XS; 1")) {
+            warn "plugin(MusicLibrary): XS not available";
+            our $HAS_MHFS_XS = 0;
+        }
+        else {
+            our $HAS_MHFS_XS = 1;
+        }
+        #use MHFS::XS;
+        #our $HAS_MHFS_XS = 1;
     }
     
 
