@@ -1,5 +1,5 @@
 TYPEMAP
-Mytest      T_PTROBJ
+MHFS_XS_Track      T_PTROBJ
 
 
 

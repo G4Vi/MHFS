@@ -427,11 +427,11 @@ void *mytest_perl_realloc(void *ptr, size_t size)
 	return ptr;
 }
 
-typedef _mytest* Mytest;
+typedef _mytest* MHFS_XS_Track;
 
-MODULE = Mytest		PACKAGE = Mytest
+MODULE = MHFS::XS		PACKAGE = MHFS::XS
 
-Mytest
+MHFS_XS_Track
 new(filename)
         const char *filename
 	CODE:		
@@ -445,7 +445,7 @@ new(filename)
 		else
 		{
 			/* to do exception instead?*/
-			RETVAL = (Mytest)&PL_sv_undef;
+			RETVAL = (MHFS_XS_Track)&PL_sv_undef;
 		}
 		
 	OUTPUT:
@@ -454,14 +454,14 @@ new(filename)
 
 void 
 DESTROY(mytest)
-        Mytest mytest
+        MHFS_XS_Track mytest
 	CODE:
 		_mytest_delete(mytest);
 		fprintf(stderr, "deleted decoder\n");
 
 SV *
 get_flac(mytest, start, count)
-        Mytest mytest
+        MHFS_XS_Track mytest
 		UV start
 		size_t count
 	CODE:
@@ -485,7 +485,7 @@ get_flac(mytest, start, count)
 
 SV *
 wavvfs_read_range(mytest, start, end)
-        Mytest mytest
+        MHFS_XS_Track mytest
 		UV start
 		UV end
 	CODE:
@@ -507,7 +507,7 @@ wavvfs_read_range(mytest, start, end)
         
 SV *
 get_wav_seg(mytest, start, count)
-        Mytest mytest
+        MHFS_XS_Track mytest
 		UV start
 		size_t count
 	CODE:

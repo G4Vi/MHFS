@@ -2280,11 +2280,10 @@ package MusicLibrary {
     use List::Util qw[min max];
     use HTML::Template;
 
-    # Optional dependency, MHFS XS
+    # Optional dependency, MHFS::XS
     use lib File::Spec->catdir($FindBin::Bin, 'Mytest', 'blib', 'lib');
     use lib File::Spec->catdir($FindBin::Bin, 'Mytest', 'blib', 'arch');    
     BEGIN {
-        #if(! (eval "use Mytest; 1")) {
         #if(! (eval "use MHFS::XS; 1")) {
         #    warn "plugin(MusicLibrary): XS not available";
         #    our $HAS_MHFS_XS = 0;
@@ -2528,14 +2527,14 @@ package MusicLibrary {
             
             if($TRACKDURATION{$tosend}) {
                 say "no proc, duration cached";
-                my $pv = Mytest::new($tosend);
+                my $pv = MHFS::XS::new($tosend);
                 $request->{'outheaders'}{'X-MHFS-NUMSEGMENTS'} = ceil($TRACKDURATION{$tosend} / $SEGMENT_DURATION);
                 $request->{'outheaders'}{'X-MHFS-TRACKDURATION'} = $TRACKDURATION{$tosend};
                 $request->{'outheaders'}{'X-MHFS-MAXSEGDURATION'} = $SEGMENT_DURATION;
                 my $samples_per_seg = $TRACKINFO{$tosend}{'SAMPLERATE'} * $SEGMENT_DURATION;
                 my $spos = $samples_per_seg * ($request->{'qs'}{'part'} - 1);                
                 my $samples_left = $TRACKINFO{$tosend}{'TOTALSAMPLES'} - $spos;                
-                my $res = Mytest::get_flac($pv, $spos, $samples_per_seg < $samples_left ? $samples_per_seg : $samples_left);
+                my $res = MHFS::XS::get_flac($pv, $spos, $samples_per_seg < $samples_left ? $samples_per_seg : $samples_left);
                 $request->SendLocalBuf($res, 'audio/flac');
                 return;                
             }
@@ -2556,14 +2555,14 @@ package MusicLibrary {
                 return;
             }
             
-            my $pv = Mytest::new($tosend);
+            my $pv = MHFS::XS::new($tosend);
             my $outbuf = '';
             my $wavsize = (44+ $TRACKINFO{$tosend}{'TOTALSAMPLES'} * ($TRACKINFO{$tosend}{'BITSPERSAMPLE'}/8) * $TRACKINFO{$tosend}{'NUMCHANNELS'});
             my $startbyte = $request->{'header'}{'_RangeStart'} || 0;
             my $endbyte = $request->{'header'}{'_RangeEnd'} // $wavsize-1;
             say "start byte" . $startbyte;
             say "end byte " . $endbyte;           
-            say "Mytest::wavvfs_read_range " . $startbyte . ' ' . $endbyte;          
+            say "MHFS::XS::wavvfs_read_range " . $startbyte . ' ' . $endbyte;          
             my $maxsendsize;
             $maxsendsize = 1048576/2;            
             say "maxsendsize $maxsendsize " . ' bytespersample ' . ($TRACKINFO{$tosend}{'BITSPERSAMPLE'}/8) . ' numchannels ' . $TRACKINFO{$tosend}{'NUMCHANNELS'};
@@ -2578,7 +2577,7 @@ package MusicLibrary {
                 my $actual_startbyte = $startbyte;
                 $startbyte = $actual_endbyte+1;
                 say "SendCallback wavvfs_read_range " . $actual_startbyte . ' ' . $actual_endbyte;               
-                return Mytest::wavvfs_read_range($pv, $actual_startbyte, $actual_endbyte);
+                return MHFS::XS::wavvfs_read_range($pv, $actual_startbyte, $actual_endbyte);
             }, {
                 'mime' => 'audio/wav',
                 'size' => $wavsize,            
@@ -2897,7 +2896,7 @@ package MusicLibrary {
         foreach my $source (@{$self->{'sources'}}) {
             my $node = FindInLibrary($source, $utf8name);
             next if ! $node;
-            my $comments = Mytest::get_vorbis_comments($node->{'path'});
+            my $comments = MHFS::XS::get_vorbis_comments($node->{'path'});
             my $commenthash = {};
             foreach my $comment (@{$comments}) {
                 $comment = decode('UTF-8', $comment);
