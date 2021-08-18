@@ -86,7 +86,7 @@ FLAC__StreamEncoderTellStatus tellcb(const FLAC__StreamEncoder *encoder, FLAC__u
      return FLAC__STREAM_ENCODER_TELL_STATUS_OK;
 }
 
-static __attribute__((always_inline)) int32_t sar(const int32_t value, const int shift)
+static __attribute__((always_inline)) inline int32_t sar(const int32_t value, const int shift)
 {
     return value < 0 ? ~(~value >> shift) : value >> shift;
 }
@@ -295,7 +295,6 @@ bool _MHFS_XS_Track_wavvfs_read_range(MHFS_XS_Track *track, uint64_t start, uint
         return false;   
     }
 
-    // TODO use miniaudio instead
     {
         int32_t *raw32Samples = malloc(framecount * pFlac->channels * sizeof(int32_t));
         if(raw32Samples == NULL)
@@ -315,16 +314,15 @@ bool _MHFS_XS_Track_wavvfs_read_range(MHFS_XS_Track *track, uint64_t start, uint
             
             // drflac decodes to the high bytes, skip the unneeded low bytes
             skipbytes += (sizeof(int32_t) - samplesize);
-            uint32_t sample = ((uint32_t)raw32Samples[sampleindex]);
 
             // copy the parts of the sample we want and encode as little endian
-            sample >>= (skipbytes * 8);
+            int32_t sample = sar(raw32Samples[sampleindex], (skipbytes * 8));
             skipbytes = 0;                
             bytesleft -= tocopy;
             while(tocopy)
             {
                 track->flacbuffer[flacbufferpos++] = sample;
-                sample >>= 8;
+                sample = sar(sample, 8);
                 tocopy--; 
             }            
         }
@@ -344,6 +342,10 @@ void * _MHFS_XS_Track_get_wav_seg(MHFS_XS_Track *track, uint64_t start, size_t c
     fprintf(stderr, "seeked to absolute\n");
     track->largest_offset = 44+ (count * pFlac->channels * sizeof(int16_t));
     uint8_t *data =  track->malloc(((size_t)count * pFlac->channels * sizeof(int16_t)) + 44 + 1);
+    if(data == NULL)
+    {
+        return NULL;
+    }
     memcpy(data, "RIFF", 4);
     uint32_t chunksize = (count * pFlac->channels * sizeof(int16_t)) + 36;
     memcpy(&data[4], &chunksize, 4);
@@ -366,11 +368,7 @@ void * _MHFS_XS_Track_get_wav_seg(MHFS_XS_Track *track, uint64_t start, size_t c
     uint32_t totalsize = count * pFlac->channels * sizeof(int16_t);
     memcpy(&data[40], &totalsize, 4);
     
-    int16_t *rawSamples = (int16_t*)(data + 44);
-    if(rawSamples == NULL)
-    {
-        return NULL;
-    }    
+    int16_t *rawSamples = (int16_t*)(data + 44); 
     if(drflac_read_pcm_frames_s16(track->pFlac, count, rawSamples) != count)
     {
         free(data);
