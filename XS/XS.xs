@@ -408,7 +408,8 @@ void _MHFS_XS_Track_on_meta(void* pUserData, drflac_metadata* pMetadata)
 
 void _MHFS_XS_Track_delete(MHFS_XS_Track *track)
 {
-	drflac_close(track->pFlac);
+    drflac_close(track->pFlac);
+    track->free(track);
 }
 
 void *MHFS_XS_Track_perl_malloc(size_t size)
