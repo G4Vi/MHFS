@@ -2767,7 +2767,7 @@ package MusicLibrary {
         my @wholeLibrary;
 
         $self->{'sources'} = [];
-        my $tocheck = dclone($self->{'settings'}{'MUSICLIBRARY'}{'sources'});
+        my $tocheck = dclone($self->{'settings'}{'MusicLibrary'}{'sources'});
        
         foreach my $source (@{$tocheck}) {
             my $lib;
@@ -3128,7 +3128,7 @@ package Youtube {
     sub onYoutube {
         my ($self, $request) = @_;         
         my $evp = $request->{'client'}{'server'}{'evp'};        
-        my $youtubequery = 'q=' . (uri_escape($request->{'qs'}{'q'}) // '') . '&maxResults=' . ($request->{'qs'}{'maxResults'} // '25') . '&part=snippet&key=' . $self->{'settings'}{'YOUTUBE'}{'key'};
+        my $youtubequery = 'q=' . (uri_escape($request->{'qs'}{'q'}) // '') . '&maxResults=' . ($request->{'qs'}{'maxResults'} // '25') . '&part=snippet&key=' . $self->{'settings'}{'Youtube'}{'key'};
         $youtubequery .= '&type=video'; # playlists not supported yet
         my $tosend = '';
         my @curlcmd = ('curl', '-G', '-d', $youtubequery, 'https://www.googleapis.com/youtube/v3/search');
@@ -3419,16 +3419,21 @@ $SIG{PIPE} = sub {
 };
 
 # main
-if($ARGV[0] eq 'flush') {
-    STDOUT->autoflush(1);
-    STDERR->autoflush(1);
+if(scalar(@ARGV) => 1 ) {
+    if($ARGV[0] eq 'flush') {
+        STDOUT->autoflush(1);
+        STDERR->autoflush(1);
+    }
 }
 
 my $SCRIPTDIR = dirname(abs_path(__FILE__));
 my $CFGDIR = $SCRIPTDIR . '/.conf';
 my $SETTINGS_FILE = $CFGDIR . '/settings.pl';
 my $SETTINGS = do ($SETTINGS_FILE);
-$SETTINGS or die "Failed to read settings: $@";
+if(! $SETTINGS) {
+    warn("No settings file found, using default settings");
+    $SETTINGS = {};
+}
 if( ! $SETTINGS->{'DOCUMENTROOT'}) {
     die "Must specify DOCUMENTROOT if specifying DROOT_IGNORE" if $SETTINGS->{'DROOT_IGNORE'};
     $SETTINGS->{'DOCUMENTROOT'} = $SCRIPTDIR;
@@ -3455,14 +3460,29 @@ $SETTINGS->{'BINDIR'} ||= $SCRIPTDIR . '/.bin';
 $SETTINGS->{'TOOLDIR'} ||= $SCRIPTDIR . '/.tool';
 $SETTINGS->{'DOCDIR'} ||= $SCRIPTDIR . '/.doc';
 $SETTINGS->{'CFGDIR'} ||= $CFGDIR;
+
+if( ! defined $SETTINGS->{'MusicLibrary'}) {
+    my $folder = $SETTINGS->{'DOCUMENTROOT'} . "/media/music";
+    if(-d $folder) {
+        $SETTINGS->{'MusicLibrary'} = {
+        'enabled' => 1,
+        'sources' => [
+            { 'type' => 'local', 'folder' => $folder},
+            ]
+        };
+    }
+}
+
 my %RESOURCES; # Caching of resources
 
 # load plugins
 my @plugins;
 {
-    my @pluginnames = ('GDRIVE', 'MusicLibrary', 'Youtube');
-    foreach my $plugin (@pluginnames) {
-        next if(defined $SETTINGS->{$plugin}{'enabled'} && ($SETTINGS->{$plugin}{'enabled'} == '0'));
+    my @plugintotry = ('Youtube');
+    #push @plugintotry, 'GDRIVE' if($SETTINGS->{'GDRIVE'});
+    push (@plugintotry, 'MusicLibrary') if($SETTINGS->{'MusicLibrary'});
+    foreach my $plugin (@plugintotry) {
+        next if(defined $SETTINGS->{$plugin}{'enabled'} && (!$SETTINGS->{$plugin}{'enabled'}));
         my $loaded = $plugin->new($SETTINGS);
         next if(! $loaded);
         push @plugins, $loaded;
