@@ -1,6 +1,5 @@
 needed noncore perl modules:
 URI::Escape
-HTML::Entities
 HTML::Template
 
 optional perl modules:

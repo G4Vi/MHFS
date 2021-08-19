@@ -2262,7 +2262,6 @@ package MusicLibrary {
             warn "plugin(MusicLibrary): Using PurePerl version of JSON (JSON::PP), see .doc/dependencies.txt about installing faster version";
         }
     }
-    use HTML::Entities;
     use Encode qw(decode encode);
     use URI::Escape;
     use Storable qw(dclone);
@@ -3407,7 +3406,6 @@ use POSIX;
 use Encode qw(decode encode find_encoding);
 use URI::Escape;
 use Scalar::Util qw(looks_like_number weaken);
-use HTML::Entities;
 use Encode;
 use Devel::Peek;
 use Symbol 'gensym';
