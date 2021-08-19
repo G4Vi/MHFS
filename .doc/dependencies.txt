@@ -1,22 +1,20 @@
 needed noncore perl modules:
-Any::URI::Escape - apt-get install libany-uri-escape-perl
-html escape?
-
-Devel::Cycle  - apt-get install libdevel-cycle-perl
-
-apt-get install libpadwalker-perl
-
-#Unicode::Escape - apt-get install libunicode-escape-perl
+URI::Escape
+HTML::Entities
+HTML::Template
 
 optional perl modules:
-JSON::XS 
+JSON::XS
+
+MHFS::XS
+libflac (with headers)
 
 binaries:
 ffmpeg
 sox
-stunnel
 youtube-dl for Youtube plugin
 
 
-# no longer needed
-IO::AIO - apt-get install libio-aio-perl 
+# maybe for debug
+Devel::Cycle  - apt-get install libdevel-cycle-perl
+apt-get install libpadwalker-perl

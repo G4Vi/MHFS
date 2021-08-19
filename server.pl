@@ -736,7 +736,7 @@ package HTTP::BS::Server::Client::Request {
     use strict; use warnings;
     use feature 'say';
     use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
-    use Any::URI::Escape;
+    use URI::Escape;
     use Cwd qw(abs_path getcwd);
     use File::Basename;
     use File::stat;
@@ -1802,7 +1802,6 @@ package HTTP::BS::Server::Process {
     use Scalar::Util qw(looks_like_number weaken);
     use Data::Dumper;
     use Devel::Peek;
-    use Devel::Cycle;
 
     use Carp;
     $SIG{ __DIE__ } = sub { Carp::confess( @_ ) };
@@ -2265,7 +2264,6 @@ package MusicLibrary {
     }
     use HTML::Entities;
     use Encode qw(decode encode);
-    use Any::URI::Escape;
     use URI::Escape;
     use Storable qw(dclone);
     use Fcntl ':mode';  
@@ -3029,7 +3027,7 @@ package Youtube {
     use Data::Dumper;
     use feature 'state';
     use Encode;
-    use Any::URI::Escape;
+    use URI::Escape;
     use Scalar::Util qw(looks_like_number weaken);
     use File::stat;
     HTTP::BS::Server::Util->import();
@@ -3407,7 +3405,7 @@ use File::Path qw(make_path);
 use File::Copy;
 use POSIX;
 use Encode qw(decode encode find_encoding);
-use Any::URI::Escape;
+use URI::Escape;
 use Scalar::Util qw(looks_like_number weaken);
 use HTML::Entities;
 use Encode;
