@@ -3419,7 +3419,7 @@ $SIG{PIPE} = sub {
 };
 
 # main
-if(scalar(@ARGV) => 1 ) {
+if(scalar(@ARGV) >= 1 ) {
     if($ARGV[0] eq 'flush') {
         STDOUT->autoflush(1);
         STDERR->autoflush(1);
