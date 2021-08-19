@@ -2466,18 +2466,7 @@ package MusicLibrary {
     sub SendLibrary {
         my ($self, $request) = @_;
 
-        if($request->{'qs'}{'fmt'}) {
-            if($request->{'qs'}{'fmt'} eq 'musicdbhtml') {
-                return $request->SendLocalBuf($self->{'musicdbhtml'}, "text/html; charset=utf-8");
-                return 1;            
-            }
-            elsif($request->{'qs'}{'fmt'} eq 'musicdbjson') {
-                return $request->SendLocalBuf($self->{'musicdbjson'}, "application/json");
-                return 1;            
-            }
-        }
-
-        # maybe not allow everyone to do this, it blocks the main thread
+        # maybe not allow everyone to do these commands?
         if($request->{'qs'}{'forcerefresh'}) {
             say "MusicLibrary: forcerefresh";
             $self->BuildLibraries(); 
@@ -2492,12 +2481,41 @@ package MusicLibrary {
             return 1;
         }
 
-        if($request->{'qs'}{'legacy'}) {
+        # deduce the format if not provided
+        my $fmt = $request->{'qs'}{'fmt'};
+        if(! $fmt) {
+            if($request->{'qs'}{'segments'} || ($request->{'header'}{'User-Agent'} =~ /Linux/)) {
+                $fmt = 'gapless';
+            }
+            else {
+                $fmt = 'worklet';
+            }
+        }
+
+        # route
+        if($fmt eq 'worklet') {
+            return $request->Send307('static/music_worklet_inprogress/');
+        }
+        elsif($fmt eq 'musicdbjson') {
+            return $request->SendLocalBuf($self->{'musicdbjson'}, "application/json");
+            return 1;
+        }
+        elsif($fmt eq 'musicdbhtml') {
+            return $request->SendLocalBuf($self->{'musicdbhtml'}, "text/html; charset=utf-8");
+            return 1;
+        }
+        elsif($fmt eq 'gapless') {
+            return $request->SendLocalBuf($self->{'html_gapless'}, "text/html; charset=utf-8");
+        }
+        elsif($fmt eq 'musicinc') {
+            return $request->Send307('static/music_inc/');
+        }
+        elsif($fmt eq 'legacy') {
             say "MusicLibrary: legacy";
             return $request->SendLocalBuf($self->{'html'}, "text/html; charset=utf-8");
-        }        
+        }
         else {
-            return $request->SendLocalBuf($self->{'html_gapless'}, "text/html; charset=utf-8");
+            return $request->Send404;
         }
     }
     
@@ -2980,10 +2998,7 @@ package MusicLibrary {
 
         my $musicpageroute = sub {
             my ($request) = @_;
-            if($request->{'qs'}{'segments'} || ($request->{'header'}{'User-Agent'} =~ /Linux/) || $request->{'qs'}{'fmt'} ) {
-                return $self->SendLibrary($request);
-            }
-            return $request->Send307('static/music_worklet_inprogress/'); 
+            return $self->SendLibrary($request);
         };
 
         my $musicdlroute = sub {
