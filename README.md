@@ -2,9 +2,32 @@
 #### Stream your own music and video library via your browser and standard media players.
 
 ## Setup
-`.doc/dependencies.txt` required.
 
-You likely need to create `.conf/settings.pl` to specify folder paths and network settings. See the source in `server.pl` to see what's needed.
+### Grab the repo 
+
+`git clone https://github.com/G4Vi/MHFS.git && cd MHFS`
+
+### Setup a perl distribution just for MHFS
+`PERLBREW_ROOT=ABSPATHTOREPO/perl5/perlbrew` replacing `ABSPATHTOREPO` with the abosolute path to the repo
+```bash
+curl -L https://install.perlbrew.pl | bash
+source "$PERLBREW_ROOT/etc/bashrc"
+perlbrew install stable
+perlbrew list
+```
+`perlbrew switch perl-5.34.0` where `perl-5.34.0` is the version listed.
+
+`perlbrew install cpamn`
+
+`cd /usr/include/x86_64-linux-gnu/ && h2ph -r -l . && cd sys && h2ph syscall.h` where `/usr/include/x86_64-linux-gnu` is the kernel headers. 
+
+### Install non-core dependencies
+
+`cpanm cpanfile`
+
+### Add settings
+
+TODO
 
 ## Build
 
