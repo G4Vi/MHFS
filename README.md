@@ -7,31 +7,47 @@
 
 `git clone https://github.com/G4Vi/MHFS.git && cd MHFS`
 
-### Setup a perl distribution just for MHFS
-`PERLBREW_ROOT=ABSPATHTOREPO/perl5/perlbrew` replacing `ABSPATHTOREPO` with the abosolute path to the repo
+### Setup perl distribution
+Using system perl is possible, but not recommended.
+<details>
+<summary>Setup perlbrew distribution</summary>
+`export PERLBREW_ROOT=ABSPATHTOREPO/perl5/perlbrew` replacing `ABSPATHTOREPO` with the absolute path to the repo
 ```bash
 curl -L https://install.perlbrew.pl | bash
 source "$PERLBREW_ROOT/etc/bashrc"
-perlbrew install stable
+perlbrew install perl-5.34.0
 perlbrew list
 ```
 `perlbrew switch perl-5.34.0` where `perl-5.34.0` is the version listed.
 
-`perlbrew install cpamn`
+`perlbrew install-cpamn`
 
-`cd /usr/include/x86_64-linux-gnu/ && h2ph -r -l . && cd sys && h2ph syscall.h` where `/usr/include/x86_64-linux-gnu` is the kernel headers. 
+`cd /usr/include/x86_64-linux-gnu/ && h2ph -r -l . && cd sys && h2ph syscall.h && cd ABSPATHTOREPO` where `/usr/include/x86_64-linux-gnu` is the kernel header files and `ABSPATHTOREPO` is the absolute path to the repo used before.
 
-### Install non-core dependencies
+</details>
+OR
+<details>
+<summary>Setup local::lib [TODO]</summary>
+</details>
 
-`cpanm cpanfile`
+
+### Install dependencies
+
+`cpanm --installdeps .`
+
+### Install XS module (for server-side decoding and encoding) [optional]
+
+`libflac` is required to build the XS module for server-side decoding and encoding. TODO how to acquire it.
+
+`make XS`
 
 ### Add settings
 
 TODO
 
-## Build
+## Development
 
-emscripten is required to build wasm.  `make -j4`. A build without the XS extension can be done with `make -j4 noxs`
+emscripten is required to build wasm.  A full build is done with `make -j4`. A build without the XS extension can be done with `make -j4 noxs`
 
 ## Run
 
