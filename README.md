@@ -37,8 +37,18 @@ OR
 
 ### Install XS module (for server-side decoding and encoding) [optional]
 
-`libflac` is required to build the XS module for server-side decoding and encoding. TODO how to acquire it.
+`libflac` is required to build the XS module for server-side decoding and encoding.
 
+<details>
+<summary>Build and install libflac inside MHFS::XS</summary>
+`mkdir -p XS/thirdparty && cd XS/thirdparty && wget http://downloads.xiph.org/releases/flac/flac-1.3.3.tar.xz` Download it.
+`tar xvf flac-1.3.3.tar.xz && cd flac-1.3.3 && ./configure && make`
+</details>
+OR
+
+Install from your package manager i.e `apt-get install libflac-dev`.
+
+Build the XS module (from the root of the project)
 `make XS`
 
 ### Add settings

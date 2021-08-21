@@ -17,3 +17,4 @@ static/music_worklet/decoder/bin
 static/music_worklet_inprogress/decoder/bin
 static/music_worklet_inprogress/player/worklet_processor_ff.js
 server.pl.old
+XS/thirdparty
