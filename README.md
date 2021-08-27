@@ -11,15 +11,13 @@
 Using system perl is possible, but not recommended.
 <details>
 <summary>Setup perlbrew distribution</summary>
-`export PERLBREW_ROOT=ABSPATHTOREPO/perl5/perlbrew` replacing `ABSPATHTOREPO` with the absolute path to the repo
-```bash
-curl -L https://install.perlbrew.pl | bash
-source "$PERLBREW_ROOT/etc/bashrc"
-perlbrew install perl-5.34.0
-perlbrew list
-```
-`perlbrew switch perl-5.34.0` where `perl-5.34.0` is the version listed.
 
+`export PERLBREW_ROOT=ABSPATHTOREPO/perl5/perlbrew` replacing `ABSPATHTOREPO` with the absolute path to the repo<br>
+`curl -L https://install.perlbrew.pl | bash`<br>
+`source "$PERLBREW_ROOT/etc/bashrc"`<br>
+`perlbrew install perl-5.34.0`<br>
+`perlbrew list`<br>
+`perlbrew switch perl-5.34.0` where `perl-5.34.0` is the version listed.<br>
 `perlbrew install-cpamn`
 
 `cd /usr/include/x86_64-linux-gnu/ && h2ph -r -l . && cd sys && h2ph syscall.h && cd ABSPATHTOREPO` where `/usr/include/x86_64-linux-gnu` is the kernel header files and `ABSPATHTOREPO` is the absolute path to the repo used before.
@@ -41,8 +39,11 @@ OR
 
 <details>
 <summary>Build and install libflac inside MHFS::XS</summary>
-`mkdir -p XS/thirdparty && cd XS/thirdparty && wget http://downloads.xiph.org/releases/flac/flac-1.3.3.tar.xz` Download it.
-`tar xvf flac-1.3.3.tar.xz && cd flac-1.3.3 && ./configure && make`
+Download, configure, and make it:<br>
+
+`mkdir -p XS/thirdparty && cd XS/thirdparty && wget http://downloads.xiph.org/releases/flac/flac-1.3.3.tar.xz`<br>
+
+`tar xvf flac-1.3.3.tar.xz && cd flac-1.3.3 && ./configure --enable-ogg=no && make`
 </details>
 OR
 

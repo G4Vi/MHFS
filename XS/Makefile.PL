@@ -7,11 +7,25 @@ use Cwd qw(abs_path);
 use Config;
 my $lddlflags = $Config{lddlflags};
 my $include = '';
+my $link_libFLAC = '-lFLAC';
+my $myextlib = '';
+
 
 my $useselflibflac = 1;
 if($useselflibflac) {
     $include   = "-Ithirdparty/flac-1.3.3/include $include";
-    $lddlflags = '-Wl,-rpath=' . abs_path(dirname($0)).'/thirdparty/flac-1.3.3/src/libFLAC/.libs '. $lddlflags;
+    
+    #$link_libFLAC = '-Lthirdparty/flac-1.3.3/src/libFLAC/.libs -l:libFLAC-static.a'
+    
+    #$link_libFLAC = '-l:libFLAC-static.a';
+    #$lddlflags = '-L'. abs_path(dirname($0)).'/thirdparty/flac-1.3.3/src/libFLAC/.libs ' . $lddlflags;
+
+    $link_libFLAC = '';
+    $myextlib = 'thirdparty/flac-1.3.3/src/libFLAC/.libs/libFLAC-static.a';
+
+    #$lddlflags = '-Lthirdparty/flac-1.3.3/src/libFLAC/.libs -Wl,-Bstatic -lFLAC ' . $lddlflags;
+
+    #$lddlflags = '-Wl,-rpath=' . abs_path(dirname($0)).'/thirdparty/flac-1.3.3/src/libFLAC/.libs '. $lddlflags;
 }
 
 WriteMakefile(
@@ -24,11 +38,13 @@ WriteMakefile(
     #Value must be from legacy list of licenses here
     #http://search.cpan.org/perldoc?Module%3A%3ABuild%3A%3AAPI
     LDDLFLAGS =>  $lddlflags,
-    LIBS              => ['-lFLAC'],
+    LIBS              => [$link_libFLAC],
     DEFINE            => '', 
     INC               =>  $include,
+    MYEXTLIB =>        $myextlib,
     # OBJECT            => '$(O_FILES)', # link all the C files too
     CCFLAGS        => '-Wall -std=c11',
     OPTIMIZE       => '-O3',
+     
     #OPTIMIZE       => '-g',
 );
