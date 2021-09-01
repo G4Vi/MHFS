@@ -783,6 +783,7 @@ package HTTP::BS::Server::Client::Request {
                 }
                 my ($path, $querystring) = ($self->{'uri'} =~ /^([^\?]+)(?:\?)?(.*)$/g);             
                 say("raw path: $path\nraw querystring: $querystring");
+                my $serversettings = $self->{'client'}{'server'}{'settings'};
                 #transformations
                 $path = uri_unescape($path);
                 my %pathStruct = ( 'unescapepath' => $path );
@@ -797,7 +798,7 @@ package HTTP::BS::Server::Client::Request {
                 say "querystring: $querystring";                     
                 #parse path                     
                 $pathStruct{'unsafepath'} = $path;
-                my $abspath = abs_path('.' . $path);                  
+                my $abspath = abs_path($serversettings->{'DOCUMENTROOT'} . $path);                  
                 if (defined $abspath) {
                    print "abs: " . $abspath;
                    $pathStruct{'requestfile'} = $abspath;
@@ -3455,7 +3456,7 @@ if(! $SETTINGS) {
 $SETTINGS->{'APPDIR'} = $APPDIR;
 if( ! $SETTINGS->{'DOCUMENTROOT'}) {
     die "Must specify DOCUMENTROOT if specifying DROOT_IGNORE" if $SETTINGS->{'DROOT_IGNORE'};
-    $SETTINGS->{'DOCUMENTROOT'} = $APPDIR;
+    $SETTINGS->{'DOCUMENTROOT'} = "$APPDIR/public_html";
 }
 if(! $SETTINGS->{'DROOT_IGNORE'}) {
     my $droot = $SETTINGS->{'DOCUMENTROOT'};
@@ -3579,8 +3580,8 @@ my @routes = (
     sub {
         my ($request) = @_;
         my $droot = $SETTINGS->{'DOCUMENTROOT'};
-        my $requestfile = $request->{'path'}{'requestfile'};       
-        # not a file and doesn't start with droot
+        my $requestfile = $request->{'path'}{'requestfile'};    
+        # not a file or is outside of the document root
         if(( ! defined $requestfile) ||
            ($requestfile !~ /^$droot/)){
             $request->Send404;            

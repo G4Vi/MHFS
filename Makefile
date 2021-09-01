@@ -1,7 +1,7 @@
 # source ~/emsdk/emsdk_env.sh
-DECODERDIR:=static/music_worklet_inprogress/decoder
-PLAYERDIR:=static/music_worklet_inprogress/player
-MUSICINCDIR=static/music_inc
+DECODERDIR:=public_html/static/music_worklet_inprogress/decoder
+PLAYERDIR:=public_html/static/music_worklet_inprogress/player
+MUSICINCDIR=public_html/static/music_inc
 
 all: XS music_worklet music_inc
 

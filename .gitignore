@@ -11,10 +11,10 @@ _Inline
 drflac_wasm/drflac.js
 drflac_wasm/drflac.wasm
 drflac_wasm/mod_rel
-static/music_inc/drflac.js
-static/music_inc/drflac.wasm
-static/music_worklet/decoder/bin
-static/music_worklet_inprogress/decoder/bin
-static/music_worklet_inprogress/player/worklet_processor_ff.js
+public_html/static/music_inc/drflac.js
+public_html/static/music_inc/drflac.wasm
+public_html/static/music_worklet/decoder/bin
+public_html/static/music_worklet_inprogress/decoder/bin
+public_html/static/music_worklet_inprogress/player/worklet_processor_ff.js
 server.pl.old
 XS/thirdparty
