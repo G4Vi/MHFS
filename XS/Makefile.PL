@@ -34,9 +34,7 @@ WriteMakefile(
     PREREQ_PM         => {}, # e.g., Module::Name => 1.1
     ABSTRACT_FROM     => 'lib/MHFS/XS.pm', # retrieve abstract from module
     AUTHOR            => 'G4Vi',
-    #LICENSE           => 'perl',
-    #Value must be from legacy list of licenses here
-    #http://search.cpan.org/perldoc?Module%3A%3ABuild%3A%3AAPI
+    LICENSE           => 'gpl_2',
     LDDLFLAGS =>  $lddlflags,
     LIBS              => [$link_libFLAC],
     DEFINE            => '', 
@@ -44,7 +42,7 @@ WriteMakefile(
     MYEXTLIB =>        $myextlib,
     # OBJECT            => '$(O_FILES)', # link all the C files too
     CCFLAGS        => '-Wall -std=c11',
-    OPTIMIZE       => '-O3',
-     
+    
+    OPTIMIZE       => '-O3',     
     #OPTIMIZE       => '-g',
 );

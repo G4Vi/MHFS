@@ -2450,11 +2450,11 @@ package MusicLibrary {
             $buf .= '<br>';
         }
 
-        my $legacy_template = HTML::Template->new(filename => 'static/music_legacy.html', path => $self->{'settings'}{'DOCUMENTROOT'} );
+        my $legacy_template = HTML::Template->new(filename => 'templates/music_legacy.html', path => $self->{'settings'}{'APPDIR'} );
         $legacy_template->param(musicdb => $buf);
         $self->{'html'} = encode_utf8($legacy_template->output);
 
-        my $gapless_template = HTML::Template->new(filename => 'static/music_gapless.html', path => $self->{'settings'}{'DOCUMENTROOT'} );
+        my $gapless_template = HTML::Template->new(filename => 'templates/music_gapless.html', path => $self->{'settings'}{'APPDIR'} );
         $gapless_template->param(INLINE => 1);
         $gapless_template->param(musicdb => $buf);
         #$gapless_template->param(musicdb => '');       
@@ -3441,17 +3441,21 @@ if(scalar(@ARGV) >= 1 ) {
     }
 }
 
+# locate files based on appdir
 my $SCRIPTDIR = dirname(abs_path(__FILE__));
-my $CFGDIR = $SCRIPTDIR . '/.conf';
+my $APPDIR = $SCRIPTDIR;
+
+my $CFGDIR = $APPDIR . '/.conf';
 my $SETTINGS_FILE = $CFGDIR . '/settings.pl';
 my $SETTINGS = do ($SETTINGS_FILE);
 if(! $SETTINGS) {
     warn("No settings file found, using default settings");
     $SETTINGS = {};
 }
+$SETTINGS->{'APPDIR'} = $APPDIR;
 if( ! $SETTINGS->{'DOCUMENTROOT'}) {
     die "Must specify DOCUMENTROOT if specifying DROOT_IGNORE" if $SETTINGS->{'DROOT_IGNORE'};
-    $SETTINGS->{'DOCUMENTROOT'} = $SCRIPTDIR;
+    $SETTINGS->{'DOCUMENTROOT'} = $APPDIR;
 }
 if(! $SETTINGS->{'DROOT_IGNORE'}) {
     my $droot = $SETTINGS->{'DOCUMENTROOT'};
@@ -3471,9 +3475,9 @@ $SETTINGS->{'VIDEO_TMPDIR'} ||= $SETTINGS->{'TMPDIR'};
 $SETTINGS->{'MEDIALIBRARIES'}{'movies'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/movies", 
 $SETTINGS->{'MEDIALIBRARIES'}{'tv'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/tv", 
 $SETTINGS->{'MEDIALIBRARIES'}{'music'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/music", 
-$SETTINGS->{'BINDIR'} ||= $SCRIPTDIR . '/.bin';
-$SETTINGS->{'TOOLDIR'} ||= $SCRIPTDIR . '/.tool';
-$SETTINGS->{'DOCDIR'} ||= $SCRIPTDIR . '/.doc';
+$SETTINGS->{'BINDIR'} ||= $APPDIR . '/.bin';
+$SETTINGS->{'TOOLDIR'} ||= $APPDIR . '/.tool';
+$SETTINGS->{'DOCDIR'} ||= $APPDIR . '/.doc';
 $SETTINGS->{'CFGDIR'} ||= $CFGDIR;
 
 if( ! defined $SETTINGS->{'MusicLibrary'}) {
