@@ -2359,7 +2359,6 @@ package MusicLibrary {
     sub BuildRemoteLibrary {
         my ($self, $source) = @_;
         return undef if($source->{'type'} ne 'ssh');
-        my $bin = $self->{'settings'}{'BIN'};
         my $aslibrary = $self->{'settings'}{'BINDIR'} . '/aslibrary.pl';
         my $userhost = $source->{'userhost'};
         my $port = $source->{'port'};
@@ -3455,15 +3454,8 @@ if(! $SETTINGS) {
 }
 $SETTINGS->{'APPDIR'} = $APPDIR;
 if( ! $SETTINGS->{'DOCUMENTROOT'}) {
-    die "Must specify DOCUMENTROOT if specifying DROOT_IGNORE" if $SETTINGS->{'DROOT_IGNORE'};
     $SETTINGS->{'DOCUMENTROOT'} = "$APPDIR/public_html";
 }
-if(! $SETTINGS->{'DROOT_IGNORE'}) {
-    my $droot = $SETTINGS->{'DOCUMENTROOT'};
-    my $BINNAME = quotemeta $0;
-    $SETTINGS->{'DROOT_IGNORE'} = qr/^$droot\/(?:(?:\..*)|(?:$BINNAME))/;
-}
-$SETTINGS->{'BIN'} = abs_path(__FILE__);
 $SETTINGS->{'XSEND'} //= 0;
 $SETTINGS->{'HOST'} ||= "127.0.0.1";
 $SETTINGS->{'PORT'} ||= 8000;
@@ -3586,11 +3578,6 @@ my @routes = (
            ($requestfile !~ /^$droot/)){
             $request->Send404;            
         }
-        # forbidden file? remove?
-        elsif($requestfile =~ $SETTINGS->{'DROOT_IGNORE'}) {
-            say $requestfile . ' is forbidden';
-            $request->Send404;
-        }
         # is regular file          
         elsif (-f $requestfile) {
             $request->SendFile($requestfile);
@@ -3603,7 +3590,6 @@ my @routes = (
             }
             # redirect to slash path
             else {
-                #$request->Send301($request->{'path'}{'unescapepath'}.'/');
                 $request->Send301($request->{'path'}{'basename'}.'/');
             }            
         }
