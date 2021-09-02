@@ -2287,8 +2287,8 @@ package MusicLibrary {
     HTTP::BS::Server::Util->import();
     BEGIN {
         if( ! (eval "use JSON; 1")) {
-            eval "use JSON::PP; 1" or die "No implementation of JSON available, see .doc/dependencies.txt";
-            warn "plugin(MusicLibrary): Using PurePerl version of JSON (JSON::PP), see .doc/dependencies.txt about installing faster version";
+            eval "use JSON::PP; 1" or die "No implementation of JSON available, see doc/dependencies.txt";
+            warn "plugin(MusicLibrary): Using PurePerl version of JSON (JSON::PP), see doc/dependencies.txt about installing faster version";
         }
     }
     use Encode qw(decode encode);
@@ -2392,7 +2392,7 @@ package MusicLibrary {
         my $port = $source->{'port'};
         my $folder = $source->{'folder'};
           
-        my $buf = shell_stdout('ssh', $userhost, '-p', $port, 'MHFS/.bin/aslibrary.pl', 'MHFS/server.pl', $folder);
+        my $buf = shell_stdout('ssh', $userhost, '-p', $port, $source->{'aslibrary.pl'}, $source->{'server.pl'}, $folder);
         if(! $buf) {
             say "failed to read";
             return undef;
@@ -3075,8 +3075,8 @@ package Youtube {
     HTTP::BS::Server::Util->import();
     BEGIN {
         if( ! (eval "use JSON; 1")) {
-            eval "use JSON::PP; 1" or die "No implementation of JSON available, see .doc/dependencies.txt";
-            warn "plugin(Youtube): Using PurePerl version of JSON (JSON::PP), see .doc/dependencies.txt about installing faster version";
+            eval "use JSON::PP; 1" or die "No implementation of JSON available, see doc/dependencies.txt";
+            warn "plugin(Youtube): Using PurePerl version of JSON (JSON::PP), see doc/dependencies.txt about installing faster version";
         }
     }
 
@@ -3436,8 +3436,8 @@ use Errno qw(EINTR EIO :POSIX);
 use Fcntl qw(:seek :mode);
 BEGIN {
     if( ! (eval "use JSON; 1")) {
-        eval "use JSON::PP; 1" or die "No implementation of JSON available, see .doc/dependencies.txt";
-        warn "Using PurePerl version of JSON (JSON::PP), see .doc/dependencies.txt about installing faster version";
+        eval "use JSON::PP; 1" or die "No implementation of JSON available, see doc/dependencies.txt";
+        warn "Using PurePerl version of JSON (JSON::PP), see doc/dependencies.txt about installing faster version";
     }
 }
 use IPC::Open3;
@@ -3496,9 +3496,8 @@ $SETTINGS->{'VIDEO_TMPDIR'} ||= $SETTINGS->{'TMPDIR'};
 $SETTINGS->{'MEDIALIBRARIES'}{'movies'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/movies", 
 $SETTINGS->{'MEDIALIBRARIES'}{'tv'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/tv", 
 $SETTINGS->{'MEDIALIBRARIES'}{'music'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/music", 
-$SETTINGS->{'BINDIR'} ||= $APPDIR . '/.bin';
-$SETTINGS->{'TOOLDIR'} ||= $APPDIR . '/.tool';
-$SETTINGS->{'DOCDIR'} ||= $APPDIR . '/.doc';
+$SETTINGS->{'BINDIR'} ||= $APPDIR . '/bin';
+$SETTINGS->{'DOCDIR'} ||= $APPDIR . '/doc';
 $SETTINGS->{'CFGDIR'} ||= $CFGDIR;
 
 if( ! defined $SETTINGS->{'MusicLibrary'}) {
