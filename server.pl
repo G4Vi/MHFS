@@ -1312,17 +1312,20 @@ package HTTP::BS::Server::Client::Request {
     
     sub SendAsTar {
         my ($self, $requestfile) = @_;
-        my $tarsize = $self->{'client'}{'server'}{'settings'}{'BINDIR'} . '/tarsize/tarsize.sh';
         say "tarsize $requestfile";
-        my @taropt = ('-C', dirname($requestfile), basename($requestfile), '-c', '--owner=0', '--group=0');
-        $self->{'process'} =  HTTP::BS::Server::Process->new([$tarsize, @taropt], $self->{'client'}{'server'}{'evp'}, { 
+        # HACK, use LD_PRELOAD to hook tar to calculate the size quickly
+        my $oldldpreload = $ENV{'LD_PRELOAD'};
+        say "old ldpreload: $oldldpreload" if($oldldpreload);
+        $ENV{'LD_PRELOAD'} = $self->{'client'}{'server'}{'settings'}{'BINDIR'}.'/tarsize/tarsize.so';
+        my @tarcmd = ('tar', '-C', dirname($requestfile), basename($requestfile), '-c', '--owner=0', '--group=0');
+        $self->{'process'} =  HTTP::BS::Server::Process->new(\@tarcmd, $self->{'client'}{'server'}{'evp'}, { 
             'SIGCHLD' => sub {
                 my $out = $self->{'process'}{'fd'}{'stdout'}{'fd'};
                 my $size;
                 read($out, $size, 50);
                 chomp $size;                
-                say "size: $size";
-                $self->{'process'} = HTTP::BS::Server::Process->new(['tar', @taropt], $self->{'client'}{'server'}{'evp'}, { 
+                say "size: $size";                
+                $self->{'process'} = HTTP::BS::Server::Process->new(\@tarcmd, $self->{'client'}{'server'}{'evp'}, { 
                     'STDOUT' => sub {
                         my($out) = @_;
                         say "tar sending response";
@@ -1333,13 +1336,15 @@ package HTTP::BS::Server::Client::Request {
                         $header .= "Connection: keep-alive\r\n";
                         $header .= 'Content-Disposition: inline; filename="' . basename($requestfile) . ".tar\"\r\n";
                         $header .= "\r\n";
-                        my %fileitem = ('fh' => $out, 'buf' => $header);
+                        my %fileitem = ('fh' => $out, 'buf' => $header, 'get_current_length' => sub { return undef });
                         $self->_SendResponse(\%fileitem); 
                         return 0;
                     }                
                 });
             },                      
-        });   
+        });
+        # reset LD_PRELOAD
+        $ENV{'LD_PRELOAD'} = $oldldpreload;   
     }
     
     sub PUTBuf_old {
