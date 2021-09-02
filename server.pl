@@ -1314,9 +1314,6 @@ package HTTP::BS::Server::Client::Request {
         my ($self, $requestfile) = @_;
         say "tarsize $requestfile";
         # HACK, use LD_PRELOAD to hook tar to calculate the size quickly
-        my $oldldpreload = $ENV{'LD_PRELOAD'};
-        say "old ldpreload: $oldldpreload" if($oldldpreload);
-        $ENV{'LD_PRELOAD'} = $self->{'client'}{'server'}{'settings'}{'BINDIR'}.'/tarsize/tarsize.so';
         my @tarcmd = ('tar', '-C', dirname($requestfile), basename($requestfile), '-c', '--owner=0', '--group=0');
         $self->{'process'} =  HTTP::BS::Server::Process->new(\@tarcmd, $self->{'client'}{'server'}{'evp'}, { 
             'SIGCHLD' => sub {
@@ -1342,9 +1339,11 @@ package HTTP::BS::Server::Client::Request {
                     }                
                 });
             },                      
+        },        
+        undef, # fd settings
+        {
+            'LD_PRELOAD' => $self->{'client'}{'server'}{'settings'}{'APPDIR'}.'/tarsize/tarsize.so'
         });
-        # reset LD_PRELOAD
-        $ENV{'LD_PRELOAD'} = $oldldpreload;   
     }
     
     sub PUTBuf_old {
@@ -1873,11 +1872,35 @@ package HTTP::BS::Server::Process {
     }    
     
     sub new {
-        my ($class, $torun, $evp, $fddispatch, $handlesettings) = @_;        
-        my %self = ('time' => clock_gettime(CLOCK_MONOTONIC), 'evp' => $evp);             
+        my ($class, $torun, $evp, $fddispatch, $handlesettings, $env) = @_;        
+        my %self = ('time' => clock_gettime(CLOCK_MONOTONIC), 'evp' => $evp);
+
+        
+        my %oldenvvars;
+        if($env) {            
+            foreach my $key(keys %{$env}) {
+                # save current value
+                $oldenvvars{$key} = $ENV{$key};
+                # set new value
+                $ENV{$key} = $env->{$key};
+                my $oldval = $oldenvvars{$key} // '{undef}';
+                my $newval = $env->{$key}  // '{undef}';
+                say "Changed \$ENV{$key} from $oldval to $newval";
+            }           
+        }
+
         my $pid = open3(my $in, my $out, my $err = gensym, @$torun) or die "BAD process";        
         $self{'pid'} = $pid;
         say 'PID '. $pid . ' NEW PROCESS: ' . $torun->[0];
+        if($env) {
+            # restore environment
+            foreach my $key(keys %oldenvvars) {
+                $ENV{$key} = $oldenvvars{$key};
+                my $oldval = $env->{$key} // '{undef}';
+                my $newval = $oldenvvars{$key} // '{undef}';
+                say "Restored \$ENV{$key} from $oldval to $newval";
+            }
+        }
         _setup_handlers(\%self, $in, $out, $err, $fddispatch, $handlesettings);               
         return bless \%self, $class;
     }
