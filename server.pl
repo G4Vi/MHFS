@@ -3448,7 +3448,7 @@ use File::Copy;
 use POSIX;
 use Encode qw(decode encode find_encoding);
 use URI::Escape;
-use Scalar::Util qw(looks_like_number weaken);
+use Scalar::Util qw(looks_like_number weaken reftype);
 use Encode;
 use Devel::Peek;
 use Symbol 'gensym';
@@ -3473,20 +3473,109 @@ if(scalar(@ARGV) >= 1 ) {
 my $SCRIPTDIR = dirname(abs_path(__FILE__));
 my $APPDIR = $SCRIPTDIR;
 
-my $CFGDIR = $APPDIR . '/.conf';
+# set the settings dir to the first that exists of $XDG_DATA_DIRS/mhfs
+# if none exist and $APPDIR/.conf use that, otherwise use $XDG_CONFIG_HOME
+# https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
+my $XDG_CONFIG_HOME = $ENV{'XDG_CONFIG_HOME'} || ($ENV{'HOME'} . '/.config');
+my @configdirs = ($XDG_CONFIG_HOME);
+my $XDG_CONFIG_DIRS = $ENV{'XDG_CONFIG_DIRS'} || '/etc/xdg';
+push @configdirs, split(':', $XDG_CONFIG_DIRS);
+my $CFGDIR;
+foreach my $cfgdir (@configdirs) {
+    if(-d "$cfgdir/mhfs") {
+        $CFGDIR = "$cfgdir/mhfs";
+        last;
+    }
+}
+my $appdirconfig = $APPDIR . '/.conf';
+my $useappdirconfig = -d $appdirconfig;
+$CFGDIR ||= ($useappdirconfig ? $appdirconfig : ($XDG_CONFIG_HOME.'/mhfs'));
+
+# load the settings
 my $SETTINGS_FILE = $CFGDIR . '/settings.pl';
 my $SETTINGS = do ($SETTINGS_FILE);
 if(! $SETTINGS) {
     warn("No settings file found, using default settings");
     $SETTINGS = {};
 }
-$SETTINGS->{'APPDIR'} = $APPDIR;
+# defaults that should be saved if there wasn't a settings file
+$SETTINGS->{'HOST'} ||= "127.0.0.1";
+$SETTINGS->{'PORT'} ||= 8000;
+if(! -f $SETTINGS_FILE) {
+    my $indentcnst = 4;
+    my $indentspace = '';
+    my $settingscontents = "#!/usr/bin/perl\nuse strict; use warnings;\n\nmy \$SETTINGS = ";
+    my @values = ($SETTINGS);
+    while(@values) {
+        my $value = shift @values;
+        say "value: $value";
+        my $type = reftype($value);
+        if(! defined $type) {
+            if(defined $value) {
+                if($value eq '__raw') {
+                    $value =  shift @values;
+                    $settingscontents .= $indentspace.$value;
+                }
+                elsif($value eq '__indent-') {
+                    substr($indentspace, -4, 4, '');
+                }
+                elsif($value eq '__noindent') {
+                    $value =  shift @values;
+                    $settingscontents .= "$value,\n";
+                }
+                else {
+                    $settingscontents .= $indentspace."$value,\n";
+                }
+            }
+            else {
+                $settingscontents .= $indentspace."undef,\n";
+            }
+        }
+        elsif($type eq 'HASH') {
+            $settingscontents .= $indentspace."{\n";
+            $indentspace .= (' ' x $indentcnst);
+            my @toprepend;
+            foreach my $key (keys %{$value}) {
+                push @toprepend, '__raw', "'$key' => ", '__noindent', $value->{$key};
+            }
+            push @toprepend, '__indent-', "}";
+            print Dumper(\@toprepend);
+            unshift(@values, @toprepend);
+        }
+        elsif($type eq 'ARRAY') {
+            $settingscontents .= $indentspace."[\n";
+            $indentspace .= (' ' x $indentcnst);
+            my @toprepend = @{$value};
+            push @toprepend, '__indent-', "]";
+            unshift(@values, @toprepend);
+        }
+        else {
+            die("Unknown type: $type");
+        }
+    }
+    chop $settingscontents;
+    chop $settingscontents;
+    $settingscontents .= ";\n\n\$SETTINGS;\n";
+    write_file($SETTINGS_FILE,  $settingscontents);
+}
+
+# $APPDIR in $SETTINGS takes precedence over previous value
+if($SETTINGS->{'APPDIR'}) {
+    if($useappdirconfig && ($APPDIR ne $SETTINGS->{'APPDIR'})) {
+        warn('Using $APPDIR different from config path');
+        warn("was $APPDIR, changing to $SETTINGS->{'APPDIR'}");
+    }
+    $APPDIR = $SETTINGS->{'APPDIR'};
+}
+else {
+    $SETTINGS->{'APPDIR'} = $APPDIR;
+}
+
+
 if( ! $SETTINGS->{'DOCUMENTROOT'}) {
     $SETTINGS->{'DOCUMENTROOT'} = "$APPDIR/public_html";
 }
 $SETTINGS->{'XSEND'} //= 0;
-$SETTINGS->{'HOST'} ||= "127.0.0.1";
-$SETTINGS->{'PORT'} ||= 8000;
 $SETTINGS->{'ABSURL'}   ||= 'http://' . $SETTINGS->{'HOST'} . ':' . $SETTINGS->{'PORT'};
 # an absolute url must be written to the m3u8
 $SETTINGS->{'M3U8_URL'} ||= $SETTINGS->{'ABSURL_HTTP'} || $SETTINGS->{'ABSURL'};
