@@ -53,8 +53,10 @@ Build the XS module (from the root of the project)
 `make XS`
 
 ### Add settings
+Settings are loaded from [$XDG_CONFIG_DIRS](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html)`/mhfs`, by default `$HOME/.config/mhfs`. If `settings.pl` is not found, it is created. Fill in your settings as needed.
 
-TODO
+`HOST` - IP address to bind too, i.e. `'127.0.0.1'` for localhost or `'0.0.0.0'` for all interfaces.
+
 
 ## Development
 
