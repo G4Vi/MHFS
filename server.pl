@@ -3692,14 +3692,6 @@ foreach my $plugin(@plugins) {
 # web server routes
 my @routes = (
     [
-        '', sub {
-            my ($request) = @_;
-            my $droot = $SETTINGS->{'DOCUMENTROOT'};
-            say $droot . "/static/index.html";
-            $request->SendLocalFile("$droot/static/index.html");
-        }
-    ],
-    [
         '/get_video', \&get_video
     ],
     [
