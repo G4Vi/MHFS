@@ -787,12 +787,6 @@ package HTTP::BS::Server::Client::Request {
                 #transformations
                 $path = uri_unescape($path);
                 my %pathStruct = ( 'unescapepath' => $path );
-                if(defined $self->{'client'}{'server'}{'settings'}{'WEBPATH'}) {
-                    say "stripping webpath: " . $self->{'client'}{'server'}{'settings'}{'WEBPATH'};
-                    my $webpath = quotemeta $self->{'client'}{'server'}{'settings'}{'WEBPATH'};
-                    $path =~ s/^$webpath\/?/\//;
-                }
-                
                 $path =~ s/(?:\/|\\)+$//;
                 print "path: $path ";                    
                 say "querystring: $querystring";                     
