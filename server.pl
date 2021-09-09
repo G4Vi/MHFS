@@ -3699,14 +3699,60 @@ my @routes = (
             my ($request) = @_;
             $request->SendLocalBuf("Trucks Passing Trucks - - x m a s \x{2744} 2 \x{5343} 17 - - - x m a s \x{2744} 2 \x{5343} 19 - - 01 t h i s \x{1f384} x m a s.flac", 'text/html; charset=utf-8');
         }
-    ],    
-    # otherwise attempt to send a file from droot
+    ],   
     sub {
         my ($request) = @_;
+
+       
+        
+
+        # otherwise attempt to send a file from droot
         my $droot = $SETTINGS->{'DOCUMENTROOT'};
-        my $requestfile = $request->{'path'}{'requestfile'};    
+        my $requestfile = $request->{'path'}{'requestfile'};
+
+        # TODO, rework this, directory listing
+
+        my $tvdir = "/video/tv";
+        if(index($request->{'path'}{'unsafepath'}, $tvdir) == 0) {            
+            my $urf = $SETTINGS->{'MEDIALIBRARIES'}{'tv'} .'/'.substr($request->{'path'}{'unsafepath'}, length($tvdir));
+            $requestfile = abs_path($urf);
+            my $ml = $SETTINGS->{'MEDIALIBRARIES'}{'tv'};
+            say "rf $requestfile ";
+            if (( ! defined $requestfile) || ($requestfile !~ /^$ml/)){
+                $request->Send404;            
+            }
+            else {
+                if(-f $requestfile) {
+                    $request->SendFile($requestfile);
+                }
+                elsif(-d $requestfile) {
+                    # ends with slash
+                    if((substr $request->{'path'}{'unescapepath'}, -1) eq '/') {
+                        opendir ( my $dh, $requestfile ) or die "Error in opening dir $requestfile\n";
+                        my $buf;
+                        my $filename;
+                        while( ($filename = readdir($dh))) {
+                           next if(($filename eq '.') || ($filename eq '..'));
+                           next if(!(-s "$requestfile/$filename"));
+                           my $url = uri_escape_utf8($filename);
+                           $url .= '/' if(-d "$requestfile/$filename");
+                           $buf .= '<a href="' . $url .'">'.${escape_html_noquote($filename)} .'</a><br><br>';
+                        }
+                        closedir($dh);
+                        $request->SendLocalBuf($buf, 'text/html');
+                    }
+                    # redirect to slash path
+                    else {
+                        $request->Send301(basename($requestfile).'/');
+                    }
+                }
+                else {
+                    $request->Send404;  
+                }
+            }
+        }    
         # not a file or is outside of the document root
-        if(( ! defined $requestfile) ||
+        elsif(( ! defined $requestfile) ||
            ($requestfile !~ /^$droot/)){
             $request->Send404;            
         }
