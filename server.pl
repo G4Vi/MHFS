@@ -1350,6 +1350,47 @@ package HTTP::BS::Server::Client::Request {
             'LD_PRELOAD' => $self->{'client'}{'server'}{'settings'}{'APPDIR'}.'/tarsize/tarsize.so'
         });
     }
+
+    sub SendOpenDirectory {
+        my ($self, $absdir, $urldir) = @_;
+        my $urf = $absdir .'/'.substr($self->{'path'}{'unsafepath'}, length($urldir));
+        my $requestfile = abs_path($urf);
+        my $ml = $absdir;
+        say "rf $requestfile ";
+        if (( ! defined $requestfile) || (rindex($requestfile, $ml, 0) != 0)){
+            $self->Send404;
+            return;
+        }
+
+        if(-f $requestfile) {
+            $self->SendFile($requestfile);
+            return;
+        }
+        elsif(-d _) {
+            # ends with slash
+            if((substr $self->{'path'}{'unescapepath'}, -1) eq '/') {
+                opendir ( my $dh, $requestfile ) or die "Error in opening dir $requestfile\n";
+                my $buf;
+                my $filename;
+                while( ($filename = readdir($dh))) {
+                   next if(($filename eq '.') || ($filename eq '..'));
+                   next if(!(-s "$requestfile/$filename"));
+                   my $url = uri_escape_utf8($filename);
+                   $url .= '/' if(-d _);
+                   $buf .= '<a href="' . $url .'">'.${escape_html_noquote($filename)} .'</a><br><br>';
+                }
+                closedir($dh);
+                $self->SendLocalBuf($buf, 'text/html');
+                return;
+            }
+            # redirect to slash path
+            else {
+                $self->Send301(basename($requestfile).'/');
+                return;
+            }
+        }
+        $self->Send404;
+    }
     
     sub PUTBuf_old {
         my ($self, $handler) = @_;
@@ -3709,146 +3750,19 @@ my @routes = (
     [
         '/video/*', sub {
             my ($request) = @_;
-            my $rawdir = "/video/tv";
-            my $kodidir = "/video/kodi/tv";
-            if(rindex($request->{'path'}{'unsafepath'}, $rawdir, 0) == 0) {
-                my $urf = $SETTINGS->{'MEDIALIBRARIES'}{'tv'} .'/'.substr($request->{'path'}{'unsafepath'}, length($rawdir));
-                my $requestfile = abs_path($urf);
-                my $ml = $SETTINGS->{'MEDIALIBRARIES'}{'tv'};
-                say "rf $requestfile ";
-                if (( ! defined $requestfile) || (rindex($requestfile, $ml, 0) != 0)){
-                    $request->Send404;
-                    return;
-                }
-
-                if(-f $requestfile) {
-                    $request->SendFile($requestfile);
-                    return;
-                }
-                elsif(-d _) {
-                    # ends with slash
-                    if((substr $request->{'path'}{'unescapepath'}, -1) eq '/') {
-                        opendir ( my $dh, $requestfile ) or die "Error in opening dir $requestfile\n";
-                        my $buf;
-                        my $filename;
-                        while( ($filename = readdir($dh))) {
-                           next if(($filename eq '.') || ($filename eq '..'));
-                           next if(!(-s "$requestfile/$filename"));
-                           my $url = uri_escape_utf8($filename);
-                           $url .= '/' if(-d _);
-                           $buf .= '<a href="' . $url .'">'.${escape_html_noquote($filename)} .'</a><br><br>';
-                        }
-                        closedir($dh);
-                        $request->SendLocalBuf($buf, 'text/html');
-                        return;
-                    }
-                    # redirect to slash path
-                    else {
-                        $request->Send301(basename($requestfile).'/');
-                        return;
-                    }
-                }
-                # default to 404
+            my $tvdir = "/video/tv";
+            my $koditvdir = "/video/kodi/tv";
+            my $moviedir = "/video/movies";
+            if(rindex($request->{'path'}{'unsafepath'}, $tvdir, 0) == 0) {
+                $request->SendOpenDirectory($SETTINGS->{'MEDIALIBRARIES'}{'tv'}, $tvdir);
+                return;
             }
-            elsif(rindex($request->{'path'}{'unsafepath'}, $kodidir, 0) == 0) {
-
-                # read in the shows
-                my $tvdir = abs_path($SETTINGS->{'MEDIALIBRARIES'}{'tv'});
-                opendir ( my $dh, $tvdir ) or die "Error in opening dir $tvdir\n";
-                my %shows = ();
-                my @diritems;
-                while( (my $filename = readdir($dh))) {
-                    next if(($filename eq '.') || ($filename eq '..'));
-                    next if(!(-s "$tvdir/$filename"));
-                    # extract the showname
-                    next if($filename !~ /^(.+)[\.\s]+S\d+/);
-                    my $showname = $1;
-                    if($showname) {
-                        $showname =~ s/\./ /g;
-                        if(! $shows{$showname}) {
-                            $shows{$showname} = [];
-                            push @diritems, {'item' => $showname, 'isdir' => 1}
-                        }                      
-                        push @{$shows{$showname}}, "$tvdir/$filename";
-                    }                                             
-                }
-                closedir($dh);
-
-                # locate the content
-                if($request->{'path'}{'unsafepath'} ne $kodidir) {
-                    my $fullshowname = substr($request->{'path'}{'unsafepath'}, length($kodidir)+1);
-                    say "fullshowname $fullshowname";
-                    my $slash = index($fullshowname, '/');
-                    @diritems = ();
-                    my $showname = ($slash != -1) ? substr($fullshowname, 0, $slash) : $fullshowname;
-                    my $showfilename = ($slash != -1) ? substr($fullshowname, $slash+1) : undef;
-                    say "showname $showname";
-
-                    my $showitems = $shows{$showname};
-                    if(!$showitems) {
-                        $request->Send404;
-                        return;
-                    }
-                    my @initems = @{$showitems};
-                    my @outitems;
-                    # TODO replace basename usage?
-                    while(@initems) {
-                        my $item = shift @initems;
-                        $item = abs_path($item);
-                        if(! $item) {
-                            say "bad item";
-                        }
-                        elsif(rindex($item, $tvdir, 0) != 0) {
-                            say "bad item, path traversal?";
-                        }
-                        elsif(-f $item) {
-                            my $filebasename = basename($item);
-                            if(!$showfilename) {
-                                push @diritems, {'item' => $filebasename, 'isdir' => 0};
-                            }
-                            elsif($showfilename eq $filebasename) {
-                                say "found show filename";
-                                $request->SendFile($item);
-                                return;
-                            }
-                        }
-                        elsif(-d _) {
-                            opendir(my $dh, $item) or die('failed to open dir');
-                            my @newitems;
-                            while(my $newitem = readdir($dh)) {
-                                next if(($newitem eq '.') || ($newitem eq '..'));
-                                push @newitems, "$item/$newitem";
-                            }
-                            closedir($dh);                            
-                            unshift @initems, @newitems;
-                        }
-                        else {
-                            say "bad item unkown filetype " . $item;
-                        }                        
-                    }                                                       
-                }                
-
-                # stop if we didn't find anything useful
-                if(scalar(@diritems) == 0){
-                    $request->Send404;
-                    return;
-                }
-
-                # redirect if the slash wasn't there
-                if(index($request->{'path'}{'unescapepath'}, '/', length($request->{'path'}{'unescapepath'})-1) == -1) {
-                    $request->Send301(substr($request->{'path'}{'unescapepath'}, rindex($request->{'path'}{'unescapepath'}, '/')+1).'/');
-                    return;
-                }
-
-                # generate the directory html
-                my $buf = '';
-                foreach my $show (@diritems) {
-                    my $showname = $show->{'item'};
-                    my $url = uri_escape_utf8($showname);
-                    $url .= '/' if($show->{'isdir'});
-                    $buf .= '<a href="' . $url .'">'.${escape_html_noquote($showname)} .'</a><br><br>';
-                }
-                $request->SendLocalBuf($buf, 'text/html');
+            elsif(rindex($request->{'path'}{'unsafepath'}, $koditvdir, 0) == 0) {
+                kodi_tv($request, $SETTINGS->{'MEDIALIBRARIES'}{'tv'}, $koditvdir);
+                return;
+            }
+            elsif(rindex($request->{'path'}{'unsafepath'}, $moviedir, 0) == 0) {
+                $request->SendOpenDirectory($SETTINGS->{'MEDIALIBRARIES'}{'movies'}, $moviedir);
                 return;
             }
             $request->Send404;
@@ -3905,6 +3819,109 @@ my @routes = (
 
 # finally start the server   
 my $server = HTTP::BS::Server->new($SETTINGS, \@routes, \@plugins);
+
+
+# format tv library for kodi http
+sub kodi_tv {
+    my ($request, $absdir, $kodidir) = @_;
+    # read in the shows
+    my $tvdir = abs_path($absdir);
+    opendir ( my $dh, $tvdir ) or die "Error in opening dir $tvdir\n";
+    my %shows = ();
+    my @diritems;
+    while( (my $filename = readdir($dh))) {
+        next if(($filename eq '.') || ($filename eq '..'));
+        next if(!(-s "$tvdir/$filename"));
+        # extract the showname
+        next if($filename !~ /^(.+)[\.\s]+S\d+/);
+        my $showname = $1;
+        if($showname) {
+            $showname =~ s/\./ /g;
+            if(! $shows{$showname}) {
+                $shows{$showname} = [];
+                push @diritems, {'item' => $showname, 'isdir' => 1}
+            }
+            push @{$shows{$showname}}, "$tvdir/$filename";
+        }
+    }
+    closedir($dh);
+
+    # locate the content
+    if($request->{'path'}{'unsafepath'} ne $kodidir) {
+        my $fullshowname = substr($request->{'path'}{'unsafepath'}, length($kodidir)+1);
+        say "fullshowname $fullshowname";
+        my $slash = index($fullshowname, '/');
+        @diritems = ();
+        my $showname = ($slash != -1) ? substr($fullshowname, 0, $slash) : $fullshowname;
+        my $showfilename = ($slash != -1) ? substr($fullshowname, $slash+1) : undef;
+        say "showname $showname";
+
+        my $showitems = $shows{$showname};
+        if(!$showitems) {
+            $request->Send404;
+            return;
+        }
+        my @initems = @{$showitems};
+        my @outitems;
+        # TODO replace basename usage?
+        while(@initems) {
+            my $item = shift @initems;
+            $item = abs_path($item);
+            if(! $item) {
+                say "bad item";
+            }
+            elsif(rindex($item, $tvdir, 0) != 0) {
+                say "bad item, path traversal?";
+            }
+            elsif(-f $item) {
+                my $filebasename = basename($item);
+                if(!$showfilename) {
+                    push @diritems, {'item' => $filebasename, 'isdir' => 0};
+                }
+                elsif($showfilename eq $filebasename) {
+                    say "found show filename";
+                    $request->SendFile($item);
+                    return;
+                }
+            }
+            elsif(-d _) {
+                opendir(my $dh, $item) or die('failed to open dir');
+                my @newitems;
+                while(my $newitem = readdir($dh)) {
+                    next if(($newitem eq '.') || ($newitem eq '..'));
+                    push @newitems, "$item/$newitem";
+                }
+                closedir($dh);
+                unshift @initems, @newitems;
+            }
+            else {
+                say "bad item unknown filetype " . $item;
+            }
+        }
+    }
+
+    # stop if we didn't find anything useful
+    if(scalar(@diritems) == 0){
+        $request->Send404;
+        return;
+    }
+
+    # redirect if the slash wasn't there
+    if(index($request->{'path'}{'unescapepath'}, '/', length($request->{'path'}{'unescapepath'})-1) == -1) {
+        $request->Send301(substr($request->{'path'}{'unescapepath'}, rindex($request->{'path'}{'unescapepath'}, '/')+1).'/');
+        return;
+    }
+
+    # generate the directory html
+    my $buf = '';
+    foreach my $show (@diritems) {
+        my $showname = $show->{'item'};
+        my $url = uri_escape_utf8($showname);
+        $url .= '/' if($show->{'isdir'});
+        $buf .= '<a href="' . $url .'">'.${escape_html_noquote($showname)} .'</a><br><br>';
+    }
+    $request->SendLocalBuf($buf, 'text/html');
+}
 
 # really acquire media file (with search) and convert
 sub get_video {
