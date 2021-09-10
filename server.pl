@@ -315,7 +315,7 @@ package HTTP::BS::Server {
     sub new {
         my ($class, $settings, $routes, $plugins) = @_;
         
-        my $sock = IO::Socket::INET->new(Listen => 50, LocalAddr => $settings->{'HOST'}, LocalPort => $settings->{'PORT'}, Proto => 'tcp', Reuse => 1, Blocking => 0);
+        my $sock = IO::Socket::INET->new(Listen => 10000, LocalAddr => $settings->{'HOST'}, LocalPort => $settings->{'PORT'}, Proto => 'tcp', Reuse => 1, Blocking => 0);
         if(! $sock) {
             say "server: Cannot create self socket";
             return undef;
@@ -3761,10 +3761,10 @@ my @routes = (
                     next if(($filename eq '.') || ($filename eq '..'));
                     next if(!(-s "$requestfile/$filename"));
                     # also broken
-                    next if($filename !~ /^(.+)[\.\s]+S(?:\d+)|(?:eason)/);
+                    next if($filename !~ /^(.+)[\.\s]+S\d+/);
                     my $showname = $1;
                     if($showname) {
-                        say "show: $showname";
+                        $showname =~ s/\./ /g;
                         if(! $shows{$showname}) {
                             $shows{$showname} = [];
                             push @diritems, {'item' => $showname, 'isdir' => 1}
@@ -3781,15 +3781,37 @@ my @routes = (
                     my $slash = index($fullshowname, '/');
                     @diritems = ();
                     my $showname = ($slash != -1) ? substr($fullshowname, 0, $slash) : $fullshowname;
+                    my $showfilename = ($slash != -1) ? substr($fullshowname, $slash+1) : undef;
                     my @outitems;
                     say "showname $showname";
-                    my @initems = @{$shows{$showname}};
-                    # todo, items as virtpath, realpath, replace basename usage
+                    my $showitems = $shows{$showname};
+                    if(!$showitems) {
+                        $request->Send404;
+                        return;
+                    }
+                    my @initems = @{$showitems};
+
+                    # TODO replace basename usage
                     while(@initems) {
                         my $item = shift @initems;
-                        if(-f $item) {
-                            say "out item";
-                            push @outitems, $item;
+                        $item = abs_path($item);
+                        if(! $item) {
+                            say "bad item";
+                        }
+                        elsif(rindex($item, $requestfile, 0) != 0) {
+                            say "bad item, path traversal?";
+                        }
+                        elsif(-f $item) {
+                            my $filebasename = basename($item);
+                            if(!$showfilename) {
+                                push @diritems, {'item' => $filebasename, 'isdir' => 0};
+                            }
+                            elsif($showfilename eq $filebasename) {
+                                say "found show filename";
+                                $requestfile = $item;
+                                $isdir = 0;
+                                last;
+                            }
                         }
                         elsif(-d $item) {
                             opendir(my $dh, $item) or die('failed to open dir');
@@ -3802,36 +3824,17 @@ my @routes = (
                             unshift @initems, @newitems;
                         }
                         else {
-                            say "bad item " . $item;
+                            say "bad item unkown filetype " . $item;
                         }                        
-                    }
-                    if($slash == -1) {
-                        $isdir = 1;
-                        my @items;
-                        foreach my $item (@outitems) {
-                            push @items, basename($item);                            
-                        }
-                        my @newitems = uniq @items;
-                        foreach my $item (@newitems) {
-                            push @diritems, {'item' => $item, 'isdir' => 0};
-                        }
-                    }
-                    else {
-                        $isdir = 0;
-                        my $showbasename = substr($fullshowname, index($fullshowname, '/')+1);
-                        say "showbasename $showbasename";
-                        foreach my $item (@outitems) {
-                            if($showbasename eq basename($item)) {
-                                $requestfile = $item;
-                                last;
-                            }
-                        }
-                    }                  
+                    }                                                       
                 }                
 
                 # build the response
                 if(!$isdir && -f $requestfile) {
                     $request->SendFile($requestfile);
+                }
+                elsif(scalar(@diritems) == 0) {
+                    $request->Send404;
                 }
                 elsif($isdir) {
                     if((substr $request->{'path'}{'unescapepath'}, -1) ne '/') {                        
@@ -3839,7 +3842,7 @@ my @routes = (
                     }
                     else {
                         my $buf = '';
-                        foreach my $show (uniq @diritems) {
+                        foreach my $show (@diritems) {
                             my $showname = $show->{'item'};
                             my $url = uri_escape_utf8($showname);
                             $url .= '/' if($show->{'isdir'});
