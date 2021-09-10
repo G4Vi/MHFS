@@ -783,23 +783,16 @@ package HTTP::BS::Server::Client::Request {
                 }
                 my ($path, $querystring) = ($self->{'uri'} =~ /^([^\?]+)(?:\?)?(.*)$/g);             
                 say("raw path: $path\nraw querystring: $querystring");
-                my $serversettings = $self->{'client'}{'server'}{'settings'};
-                #transformations
+
+                # transformations
+                ## Path
                 $path = uri_unescape($path);
                 my %pathStruct = ( 'unescapepath' => $path );
                 $path =~ s/(?:\/|\\)+$//;
-                print "path: $path ";                    
-                say "querystring: $querystring";                     
-                #parse path                     
+                say "evaluated path: $path ";
                 $pathStruct{'unsafepath'} = $path;
-                my $abspath = abs_path($serversettings->{'DOCUMENTROOT'} . $path);                  
-                if (defined $abspath) {
-                   print "abs: " . $abspath;
-                   $pathStruct{'requestfile'} = $abspath;
-                   $pathStruct{'basename'} = basename( $pathStruct{'requestfile'}); 
-                }
-                print "\n";                    
-                #parse querystring
+
+                ## Querystring
                 my %qsStruct = ( 'querystring' => $querystring);
                 my @qsPairs = split('&', $querystring);
                 foreach my $pair (@qsPairs) {
@@ -808,10 +801,9 @@ package HTTP::BS::Server::Client::Request {
                         $qsStruct{$key} = uri_unescape($value);
                     }                                      
                 }
+
                 $self->{'path'} = \%pathStruct;
                 $self->{'qs'} = \%qsStruct;
-
-
                 $self->{'on_read_ready'} = \&want_headers;
                 #return want_headers($self);
                 goto &want_headers;
@@ -948,7 +940,6 @@ package HTTP::BS::Server::Client::Request {
         
         my $mime     = $opt->{'mime'};
         my $filename = $opt->{'filename'};
-        my $fullpath = $opt->{'fullname'};
         my %lookup = (
             200 => "HTTP/1.1 200 OK\r\n",
             206 => "HTTP/1.1 206 Partial Content\r\n",
@@ -972,16 +963,10 @@ package HTTP::BS::Server::Client::Request {
         $self->{'outheaders'}{'Connection'} //= 'keep-alive';
         
         # SharedArrayBuffer
-        if($fullpath) {
-            my @SABpaths = ('static/music_worklet/index.html', 'static/music_worklet_inprogress/index.html');
-            foreach my $sabpath (@SABpaths) {
-                if($fullpath =~ /\Q$sabpath\E$/) {
-                    say "sending SAB headers";
-                    $self->{'outheaders'}{'Cross-Origin-Opener-Policy'} =  'same-origin';
-                    $self->{'outheaders'}{'Cross-Origin-Embedder-Policy'} = 'require-corp';
-                    last;
-                }
-            }           
+        if($opt->{'allowSAB'}) {
+            say "sending SAB headers";
+            $self->{'outheaders'}{'Cross-Origin-Opener-Policy'} =  'same-origin';
+            $self->{'outheaders'}{'Cross-Origin-Embedder-Policy'} = 'require-corp';
         }        
 
         # serialize the outgoing headers
@@ -1102,85 +1087,104 @@ package HTTP::BS::Server::Client::Request {
         my $start =  $self->{'header'}{'_RangeStart'};                 
         my $client = $self->{'client'};
         
+        # open the file and get the size
         my %fileitem = ('requestfile' => $requestfile);
-        my $FH;          
-        if(! open($FH, "<", $requestfile)) {
-            $self->Send404;
-            return;
+        my $currentsize;
+        if($self->{'method'} ne 'HEAD') {
+            my $FH;
+            if(! open($FH, "<", $requestfile)) {
+                $self->Send404;
+                return;
+            }
+            binmode($FH);
+            my $st = stat($FH);
+            if(! $st) {
+                $self->Send404();
+                return;
+            }
+            $currentsize = $st->size;
+            $fileitem{'fh'} = $FH;
         }
-        
-        binmode($FH);
-        my $st = stat($FH);
-        if(! $st) {
-            $self->Send404();
-            return;
+        else {
+            $currentsize = (-s $requestfile);
         }
-        my $currentsize = $st->size;
+
         # seek if a start is specified
         if(defined $start) {
             if($start >= $currentsize) {
                 $self->Send416($currentsize);
                 return;
             }
-            seek($FH, $start, 0); 
-        }            
-        $fileitem{'fh'} = $FH;
-            
+            elsif($fileitem{'fh'}) {
+                seek($fileitem{'fh'}, $start, 0);
+            }
+        }
 
-   
+        # get the maximumly possible file size. 99999999999 signfies unknown
+        my $get_current_size = sub {
+            return $currentsize;
+        };
+        my $done;
         my $ts;
-        my $get_file_size_locked = sub {
-            if(! defined $ts) {
-                my $locksz = LOCK_GET_LOCKDATA($requestfile);
-                if(defined $locksz) { 
-                    #say "get_current_length locksize: $locksz";
-                    return ($locksz || 0);
-                }                
-                my $ist = stat($FH);
-                $ts = $ist ? $ist->size : 0;
-                say "no longer locked: $ts";
+        my $get_max_size = sub {
+            my $locksz = LOCK_GET_LOCKDATA($requestfile);
+            if($done) {
+                return $ts;
             }
-            return $ts;            
-        };       
-        
-        my $get_read_filesize = sub {
-            my $maxsize = $get_file_size_locked->();
-            if(defined $self->{'header'}{'_RangeEnd'}) {
-                my $rangesize = $self->{'header'}{'_RangeEnd'}+1;
-                return $rangesize if($rangesize <= $maxsize);                 
+            if(defined($locksz)) {
+                $ts = ($locksz || 0);
             }
-            return $maxsize;            
-        };        
-        
-        my $filelength = $get_file_size_locked->();
-        
-        # truncate the end to the read filesize        
+            else {
+                $done = 1;
+                $ts = ($get_current_size->() || 0);
+            }
+        };
+        my $filelength = $get_max_size->();
+
+        # truncate to the [potentially] satisfiable end
         if(defined $self->{'header'}{'_RangeEnd'}) {
             $self->{'header'}{'_RangeEnd'} = min($filelength-1,  $self->{'header'}{'_RangeEnd'});           
         }
+
+        # setup callback for retrieving current file size if we are following the file
+        if($fileitem{'fh'}) {
+            if(! $done) {
+                $get_current_size = sub {
+                    return stat($fileitem{'fh'})
+                };
+            }
+
+            my $get_read_filesize = sub {
+                my $maxsize = $get_max_size->();
+                if(defined $self->{'header'}{'_RangeEnd'}) {
+                    my $rangesize = $self->{'header'}{'_RangeEnd'}+1;
+                    return $rangesize if($rangesize <= $maxsize);
+                }
+                return $maxsize;
+            };
+            $fileitem{'get_current_length'} = $get_read_filesize;
+        }
+
+        # flag to add SharedArrayBuffer headers
+        my @SABwhitelist = ('static/music_worklet_inprogress/index.html');
+        my $allowSAB;
+        foreach my $allowed (@SABwhitelist) {
+            if(index($requestfile, $allowed, length($requestfile)-length($allowed)) != -1) {
+                $allowSAB = 1;
+                last;
+            }
+        }
         
-        # set function to retrieve the read filesize
-        $fileitem{'get_current_length'} = $get_read_filesize;
-        
-        # set file length
+        # finally build headers and send
         if($filelength == 99999999999) {
             $filelength = undef;        
         }
-        
-        # Get the file size if possible
-        #my $filelength = LOCK_GET_LOCKDATA($requestfile);        
-        #$filelength //= $currentsize;
-        ## set how far we're going to read        
-        #$fileitem{'length'} = $self->_ReqDataLength($filelength);
-               
-         
-        # build the header based on whether we are sending a full response or range request    
         my $mime = getMIME($requestfile);
         $self->_SendDataItem(\%fileitem, {
            'size'     => $filelength, 
            'mime'     => $mime,
            'filename' => basename($requestfile),
-           'fullname'    => $requestfile,          
+           'allowSAB' => $allowSAB
         });       
     }
 
@@ -3707,60 +3711,56 @@ my @routes = (
             my ($request) = @_;
             my $rawdir = "/video/tv";
             my $kodidir = "/video/kodi/tv";
-            my $tvdir;
-            if(index($request->{'path'}{'unsafepath'}, $rawdir) == 0) {
-                $tvdir = $rawdir;
-                my $urf = $SETTINGS->{'MEDIALIBRARIES'}{'tv'} .'/'.substr($request->{'path'}{'unsafepath'}, length($tvdir));
+            if(rindex($request->{'path'}{'unsafepath'}, $rawdir, 0) == 0) {
+                my $urf = $SETTINGS->{'MEDIALIBRARIES'}{'tv'} .'/'.substr($request->{'path'}{'unsafepath'}, length($rawdir));
                 my $requestfile = abs_path($urf);
                 my $ml = $SETTINGS->{'MEDIALIBRARIES'}{'tv'};
                 say "rf $requestfile ";
-                if (( ! defined $requestfile) || ($requestfile !~ /^$ml/)){
-                    $request->Send404;            
+                if (( ! defined $requestfile) || (rindex($requestfile, $ml, 0) != 0)){
+                    $request->Send404;
+                    return;
                 }
-                else {
-                    if(-f $requestfile) {
-                        $request->SendFile($requestfile);
-                    }
-                    elsif(-d $requestfile) {
-                        # ends with slash
-                        if((substr $request->{'path'}{'unescapepath'}, -1) eq '/') {
-                            opendir ( my $dh, $requestfile ) or die "Error in opening dir $requestfile\n";
-                            my $buf;
-                            my $filename;
-                            while( ($filename = readdir($dh))) {
-                               next if(($filename eq '.') || ($filename eq '..'));
-                               next if(!(-s "$requestfile/$filename"));
-                               my $url = uri_escape_utf8($filename);
-                               $url .= '/' if(-d "$requestfile/$filename");
-                               $buf .= '<a href="' . $url .'">'.${escape_html_noquote($filename)} .'</a><br><br>';
-                            }
-                            closedir($dh);
-                            $request->SendLocalBuf($buf, 'text/html');
+
+                if(-f $requestfile) {
+                    $request->SendFile($requestfile);
+                    return;
+                }
+                elsif(-d _) {
+                    # ends with slash
+                    if((substr $request->{'path'}{'unescapepath'}, -1) eq '/') {
+                        opendir ( my $dh, $requestfile ) or die "Error in opening dir $requestfile\n";
+                        my $buf;
+                        my $filename;
+                        while( ($filename = readdir($dh))) {
+                           next if(($filename eq '.') || ($filename eq '..'));
+                           next if(!(-s "$requestfile/$filename"));
+                           my $url = uri_escape_utf8($filename);
+                           $url .= '/' if(-d _);
+                           $buf .= '<a href="' . $url .'">'.${escape_html_noquote($filename)} .'</a><br><br>';
                         }
-                        # redirect to slash path
-                        else {
-                            $request->Send301(basename($requestfile).'/');
-                        }
+                        closedir($dh);
+                        $request->SendLocalBuf($buf, 'text/html');
+                        return;
                     }
+                    # redirect to slash path
                     else {
-                        $request->Send404;  
+                        $request->Send301(basename($requestfile).'/');
+                        return;
                     }
                 }
+                # default to 404
             }
-            elsif(index($request->{'path'}{'unsafepath'}, $kodidir) == 0) {
-                $tvdir = $kodidir;
+            elsif(rindex($request->{'path'}{'unsafepath'}, $kodidir, 0) == 0) {
 
                 # read in the shows
-                my $isdir = 1;
-                my $requestfile = abs_path($SETTINGS->{'MEDIALIBRARIES'}{'tv'});
-                opendir ( my $dh, $requestfile ) or die "Error in opening dir $requestfile\n";                       
+                my $tvdir = abs_path($SETTINGS->{'MEDIALIBRARIES'}{'tv'});
+                opendir ( my $dh, $tvdir ) or die "Error in opening dir $tvdir\n";
                 my %shows = ();
                 my @diritems;
-                my $filename;
-                while( ($filename = readdir($dh))) {
+                while( (my $filename = readdir($dh))) {
                     next if(($filename eq '.') || ($filename eq '..'));
-                    next if(!(-s "$requestfile/$filename"));
-                    # also broken
+                    next if(!(-s "$tvdir/$filename"));
+                    # extract the showname
                     next if($filename !~ /^(.+)[\.\s]+S\d+/);
                     my $showname = $1;
                     if($showname) {
@@ -3769,36 +3769,36 @@ my @routes = (
                             $shows{$showname} = [];
                             push @diritems, {'item' => $showname, 'isdir' => 1}
                         }                      
-                        push @{$shows{$showname}}, "$requestfile/$filename";                        
+                        push @{$shows{$showname}}, "$tvdir/$filename";
                     }                                             
                 }
                 closedir($dh);
 
                 # locate the content
-                if($request->{'path'}{'unsafepath'} ne $tvdir) {
+                if($request->{'path'}{'unsafepath'} ne $kodidir) {
                     my $fullshowname = substr($request->{'path'}{'unsafepath'}, length($kodidir)+1);
                     say "fullshowname $fullshowname";
                     my $slash = index($fullshowname, '/');
                     @diritems = ();
                     my $showname = ($slash != -1) ? substr($fullshowname, 0, $slash) : $fullshowname;
                     my $showfilename = ($slash != -1) ? substr($fullshowname, $slash+1) : undef;
-                    my @outitems;
                     say "showname $showname";
+
                     my $showitems = $shows{$showname};
                     if(!$showitems) {
                         $request->Send404;
                         return;
                     }
                     my @initems = @{$showitems};
-
-                    # TODO replace basename usage
+                    my @outitems;
+                    # TODO replace basename usage?
                     while(@initems) {
                         my $item = shift @initems;
                         $item = abs_path($item);
                         if(! $item) {
                             say "bad item";
                         }
-                        elsif(rindex($item, $requestfile, 0) != 0) {
+                        elsif(rindex($item, $tvdir, 0) != 0) {
                             say "bad item, path traversal?";
                         }
                         elsif(-f $item) {
@@ -3808,12 +3808,11 @@ my @routes = (
                             }
                             elsif($showfilename eq $filebasename) {
                                 say "found show filename";
-                                $requestfile = $item;
-                                $isdir = 0;
-                                last;
+                                $request->SendFile($item);
+                                return;
                             }
                         }
-                        elsif(-d $item) {
+                        elsif(-d _) {
                             opendir(my $dh, $item) or die('failed to open dir');
                             my @newitems;
                             while(my $newitem = readdir($dh)) {
@@ -3829,35 +3828,30 @@ my @routes = (
                     }                                                       
                 }                
 
-                # build the response
-                if(!$isdir && -f $requestfile) {
-                    $request->SendFile($requestfile);
-                }
-                elsif(scalar(@diritems) == 0) {
+                # stop if we didn't find anything useful
+                if(scalar(@diritems) == 0){
                     $request->Send404;
+                    return;
                 }
-                elsif($isdir) {
-                    if((substr $request->{'path'}{'unescapepath'}, -1) ne '/') {                        
-                        $request->Send301(substr($request->{'path'}{'unescapepath'}, rindex($request->{'path'}{'unescapepath'}, '/')+1).'/');
-                    }
-                    else {
-                        my $buf = '';
-                        foreach my $show (@diritems) {
-                            my $showname = $show->{'item'};
-                            my $url = uri_escape_utf8($showname);
-                            $url .= '/' if($show->{'isdir'});
-                            $buf .= '<a href="' . $url .'">'.${escape_html_noquote($showname)} .'</a><br><br>';
-                        }
-                        $request->SendLocalBuf($buf, 'text/html');
-                    }
+
+                # redirect if the slash wasn't there
+                if(index($request->{'path'}{'unescapepath'}, '/', length($request->{'path'}{'unescapepath'})-1) == -1) {
+                    $request->Send301(substr($request->{'path'}{'unescapepath'}, rindex($request->{'path'}{'unescapepath'}, '/')+1).'/');
+                    return;
                 }
-                else {
-                    $request->Send404;  
-                }                
+
+                # generate the directory html
+                my $buf = '';
+                foreach my $show (@diritems) {
+                    my $showname = $show->{'item'};
+                    my $url = uri_escape_utf8($showname);
+                    $url .= '/' if($show->{'isdir'});
+                    $buf .= '<a href="' . $url .'">'.${escape_html_noquote($showname)} .'</a><br><br>';
+                }
+                $request->SendLocalBuf($buf, 'text/html');
+                return;
             }
-            else {
-                $request->Send404;
-            }
+            $request->Send404;
         }
     ],
     [
@@ -3874,27 +3868,34 @@ my @routes = (
 
         # otherwise attempt to send a file from droot
         my $droot = $SETTINGS->{'DOCUMENTROOT'};
-        my $requestfile = $request->{'path'}{'requestfile'};
+        my $requestfile = abs_path($droot . $request->{'path'}{'unsafepath'});
+        say "abs requestfile: $requestfile";
            
         # not a file or is outside of the document root
         if(( ! defined $requestfile) ||
-           ($requestfile !~ /^$droot/)){
+        (rindex($requestfile, $droot, 0) != 0)){
             $request->Send404;            
         }
         # is regular file          
         elsif (-f $requestfile) {
             $request->SendFile($requestfile);
         }
-        # is directory and directory has index.html
-        elsif (-d $requestfile && -f $requestfile.'/index.html') {
+        # is directory
+        elsif (-d _) {
             # ends with slash
-            if((substr $request->{'path'}{'unescapepath'}, -1) eq '/') {
-                $request->SendFile($requestfile.'/index.html');
+            if(index($request->{'path'}{'unescapepath'}, '/', length($request->{'path'}{'unescapepath'})-1) != -1) {
+                my $index = $requestfile.'/index.html';
+                if(-f $index) {
+                    $request->SendFile($index);
+                    return;
+                }
+                $request->Send404;
             }
-            # redirect to slash path
             else {
-                $request->Send301($request->{'path'}{'basename'}.'/');
-            }            
+                # redirect to slash path
+                my $bn = basename($requestfile);
+                $request->Send301($bn.'/');
+            }
         }
         else {
             $request->Send404;
