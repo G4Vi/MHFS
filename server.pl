@@ -1503,8 +1503,75 @@ package HTTP::BS::Server::Client {
     }
     
     use constant {
-         RECV_SIZE => 65536     
-    }; 
+        RECV_SIZE => 65536,
+        CT_YIELD => 1,
+        CT_DONE  => undef,
+        #CT_READ => 1,
+        #CT_PROCESS = 2,
+        #CT_WRITE => 3     
+    };
+
+    sub client_thread {
+        my ($self, $action) = @_;
+        goto $action;
+
+        while(1) {
+            CT_READ:
+            my $tempdata; 
+            if(!defined($self->{'sock'}->recv($tempdata, RECV_SIZE))) {
+                if(! $!{EAGAIN}) {                
+                    print ("HTTP::BS::Server::Client onReadReady RECV errno: $!\n");
+                    return CT_DONE;          
+                }
+                return CT_YIELD;
+            }
+            if(length($tempdata) == 0) {                
+                say 'Server::Client read 0 bytes, client read closed';
+                return CT_DONE;
+            }
+            $self->{'inbuf'} .= $tempdata;
+
+            CT_PROCESS:
+            $self->{'request'} //= HTTP::BS::Server::Client::Request->new($self);
+            if(!defined($self->{'request'}{'on_read_ready'})) {
+                die("went into CT_PROCESS in bad state");
+                return CT_YIELD;
+            }
+            my $res = $self->{'request'}{'on_read_ready'}->($self->{'request'});
+            if(!$res) {
+                return $res;
+            }
+            if(defined $self->{'request'}{'response'}) {
+                goto CT_WRITE;
+            }
+            elsif(defined $self->{'request'}{'on_read_ready'}) {
+                goto CT_READ;
+            }
+            return $res;
+            
+            CT_WRITE:
+            if(!defined $self->{'request'}{'response'}) {
+                die("went into CT_WRITE in bad state");
+                return CT_YIELD;
+            }
+            # TODO only TrySendResponse if there is data in buf or to be read           
+            my $tsrRet = $self->TrySendResponse;
+            if(!defined($tsrRet)) {
+                say "-------------------------------------------------";                               
+                return CT_DONE;
+            }            
+            elsif($tsrRet ne '') {
+                if($self->{'request'}{'outheaders'}{'Connection'} && ($self->{'request'}{'outheaders'}{'Connection'} eq 'close')) {
+                    say "Connection close header set closing conn";
+                    say "-------------------------------------------------";                               
+                    return undef;              
+                }
+                
+                goto CT_PROCESS;              
+            }
+            return CT_YIELD; 
+        }
+    } 
 
     sub do_on_data {
         my ($self) = @_;
