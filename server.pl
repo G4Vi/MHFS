@@ -1497,6 +1497,13 @@ package HTTP::BS::Server::Client {
         return \%self;
     }
 
+    sub ResetTimeout {
+        my ($self) = @_;
+        $self->{'time'} = clock_gettime(CLOCK_MONOTONIC);
+        my ($package, $filename, $line) = caller;
+        say "X-MHFS-CONN-ID: " . $self->{'outheaders'}{'X-MHFS-CONN-ID'} . "$package:L$line ResetTimeout";
+    }
+
     sub SetEvents {
         my ($self, $events) = @_;
         $self->{'server'}{'evp'}->set($self->{'sock'}, $self, $events);            
@@ -1511,67 +1518,87 @@ package HTTP::BS::Server::Client {
         #CT_WRITE => 3     
     };
 
-    sub client_thread {
-        my ($self, $action) = @_;
-        goto $action;
+    # The "client_thread" consists of 5 states, CT_READ, CT_PROCESS, CT_WRITE, CT_YIELD, and CT_DONE
+    # CT_READ reads input data from the socket
+    ##    on data read transitions to CT_PROCESS
+    ##    on error transitions to CT_DONE
+    ##    otherwise CT_YIELD
 
-        while(1) {
-            CT_READ:
-            my $tempdata; 
-            if(!defined($self->{'sock'}->recv($tempdata, RECV_SIZE))) {
-                if(! $!{EAGAIN}) {                
-                    print ("HTTP::BS::Server::Client onReadReady RECV errno: $!\n");
-                    return CT_DONE;          
-                }
-                return CT_YIELD;
-            }
-            if(length($tempdata) == 0) {                
-                say 'Server::Client read 0 bytes, client read closed';
+    # CT_PROCESS processes the input data
+    ##    on processing done, switches to CT_WRITE or CT_READ to read more data to process
+    ##    on error transitions to CT_DONE
+    ##    otherwise CT_YIELD
+
+    # CT_WRITE outputs data to the socket
+    ##   on all data written transitions to CT_PROCESS unless Connection: close is set.
+    ##   on error transitions to CT_DONE
+    ##   otherwise CT_YIELD
+
+    # CT_YIELD just returns control to the poll loop to wait for IO or allow another client thread to run
+
+    # CT_DONE also returns control to the poll loop, it is called on error or when the client connection should be closed or is closed
+
+    sub CT_READ {
+        my ($self) = @_;
+        my $tempdata;
+        if(!defined($self->{'sock'}->recv($tempdata, RECV_SIZE))) {
+            if(! $!{EAGAIN}) {
+                print ("CT_READ RECV errno: $!\n");
                 return CT_DONE;
             }
-            $self->{'inbuf'} .= $tempdata;
+            return CT_YIELD;
+        }
+        if(length($tempdata) == 0) {
+            say 'Server::Client read 0 bytes, client read closed';
+            return CT_DONE;
+        }
+        $self->{'inbuf'} .= $tempdata;
+        goto &CT_PROCESS;
+    }
 
-            CT_PROCESS:
-            $self->{'request'} //= HTTP::BS::Server::Client::Request->new($self);
-            if(!defined($self->{'request'}{'on_read_ready'})) {
-                die("went into CT_PROCESS in bad state");
-                return CT_YIELD;
-            }
-            my $res = $self->{'request'}{'on_read_ready'}->($self->{'request'});
-            if(!$res) {
-                return $res;
-            }
-            if(defined $self->{'request'}{'response'}) {
-                goto CT_WRITE;
-            }
-            elsif(defined $self->{'request'}{'on_read_ready'}) {
-                goto CT_READ;
-            }
+    sub CT_PROCESS {
+        my ($self) = @_;
+        $self->{'request'} //= HTTP::BS::Server::Client::Request->new($self);
+        if(!defined($self->{'request'}{'on_read_ready'})) {
+            die("went into CT_PROCESS in bad state");
+            return CT_YIELD;
+        }
+        my $res = $self->{'request'}{'on_read_ready'}->($self->{'request'});
+        if(!$res) {
             return $res;
-            
-            CT_WRITE:
-            if(!defined $self->{'request'}{'response'}) {
-                die("went into CT_WRITE in bad state");
-                return CT_YIELD;
-            }
-            # TODO only TrySendResponse if there is data in buf or to be read           
-            my $tsrRet = $self->TrySendResponse;
-            if(!defined($tsrRet)) {
+        }
+        if(defined $self->{'request'}{'response'}) {
+            goto &CT_WRITE;
+        }
+        elsif(defined $self->{'request'}{'on_read_ready'}) {
+            goto &CT_READ;
+        }
+        return $res;
+    }
+
+    sub CT_WRITE {
+        my ($self) = @_;
+        if(!defined $self->{'request'}{'response'}) {
+            die("went into CT_WRITE in bad state");
+            return CT_YIELD;
+        }
+        # TODO only TrySendResponse if there is data in buf or to be read
+        my $tsrRet = $self->TrySendResponse;
+        if(!defined($tsrRet)) {
+            say "-------------------------------------------------";
+            return CT_DONE;
+        }
+        elsif($tsrRet ne '') {
+            if($self->{'request'}{'outheaders'}{'Connection'} && ($self->{'request'}{'outheaders'}{'Connection'} eq 'close')) {
+                say "Connection close header set closing conn";
                 say "-------------------------------------------------";                               
                 return CT_DONE;
-            }            
-            elsif($tsrRet ne '') {
-                if($self->{'request'}{'outheaders'}{'Connection'} && ($self->{'request'}{'outheaders'}{'Connection'} eq 'close')) {
-                    say "Connection close header set closing conn";
-                    say "-------------------------------------------------";                               
-                    return undef;              
-                }
-                
-                goto CT_PROCESS;              
             }
-            return CT_YIELD; 
+            $self->{'request'} = undef;
+            goto &CT_PROCESS;
         }
-    } 
+        return CT_YIELD;
+    }
 
     sub do_on_data {
         my ($self) = @_;
@@ -1596,8 +1623,9 @@ package HTTP::BS::Server::Client {
     }
 
      
-    sub onReadReady {        
-        my ($self) = @_;             
+    sub onReadReady {
+        goto &CT_READ;
+        my ($self) = @_;
         my $tempdata;        
         if(defined($self->{'sock'}->recv($tempdata, RECV_SIZE))) {
             if(length($tempdata) == 0) {                
@@ -1615,8 +1643,8 @@ package HTTP::BS::Server::Client {
     }   
     
     sub onWriteReady {
+        goto &CT_WRITE;
         my ($client) = @_;
-
         # send the response        
         if(defined $client->{'request'}{'response'}) {
             # TODO only TrySendResponse if there is data in buf or to be read           
@@ -1677,7 +1705,7 @@ package HTTP::BS::Server::Client {
                 
                 # only update the time if we actually sent some data
                 if($remdata ne $buf) {
-                    $client->{'time'} = clock_gettime(CLOCK_MONOTONIC);
+                    $client->ResetTimeout();
                 }
                 # eagain or not all data sent
                 if($remdata ne '') {
@@ -2326,11 +2354,7 @@ package GDRIVE {
                     return undef;
                 }                                       
                 if(! -e $gdrivefile) {
-                    my $current_time = clock_gettime(CLOCK_MONOTONIC);                                              
-                    if(($current_time - $request->{'client'}{'time'}) < 6) {
-                        say "extending time for gdrive";                    
-                        $request->{'client'}{'time'} -= 6;
-                    }
+                    $request->{'client'}->ResetTimeout();
                     return 1;
                 }                
                 say "gdrivefile found";
@@ -2815,7 +2839,7 @@ package MusicLibrary {
                 $request->{'process'} = HTTP::BS::Server::Process->new(\@cmd, $evp, {
                 'SIGCHLD' => sub {
                     # HACK
-                    $request->{'client'}{'time'} = clock_gettime(CLOCK_MONOTONIC);
+                    $request->{'client'}->ResetTimeout();
                     SendLocalTrack($request,$tlossy);                
                 },                    
                 'STDERR' => sub {
@@ -2900,16 +2924,14 @@ package MusicLibrary {
         my @cmd = ('sox', $file, '-G', '-b', $bitdepth, $outfile, 'rate', '-v', '-L', $desiredrate, 'dither');
         say "cmd: " . join(' ', @cmd);
         # HACK
-        say "client time was: " . $request->{'client'}{'time'};
-        $request->{'client'}{'time'} += 30;
-        say "HACK client time extended to " . $request->{'client'}{'time'};
+        $request->{'client'}->ResetTimeout();
         $request->{'process'} = HTTP::BS::Server::Process->new(\@cmd, $evp, {
         'SIGCHLD' => sub {
             # BUG
             # files isn't necessarily flushed to disk on SIGCHLD. filesize can be wrong
 
             # HACK
-            $request->{'client'}{'time'} = clock_gettime(CLOCK_MONOTONIC); 
+            $request->{'client'}->ResetTimeout();
             SendTrack($request, $outfile);                                      
         },                    
         'STDERR' => sub {
