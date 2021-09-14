@@ -23,6 +23,7 @@ package EventLoop::Poll::Linux::Timer {
     sub new {
         my ($class, $evp) = @_;
         say 'timerfd_create ' . SYS_timerfd_create();
+        say "timerfd_settime " . SYS_timerfd_settime();
         my $timerfd = syscall(SYS_timerfd_create(), _clock_MONOTONIC, $TFD_NONBLOCK | $TFD_CLOEXEC);       
         $timerfd != -1 or die("failed to create timerfd: $!");
         my $timerhandle = IO::Handle->new_from_fd($timerfd, "r");
@@ -41,7 +42,7 @@ package EventLoop::Poll::Linux::Timer {
        my $it_interval_nsec = floor(($times->{'it_interval'} - $it_interval_sec) * 1000000000);
        my $it_value_sec = int($times->{'it_value'});
        my $it_value_nsec = floor(($times->{'it_value'} - $it_value_sec) * 1000000000);
-       say "packing $it_interval_sec, $it_interval_nsec, $it_value_sec, $it_value_nsec";
+       #say "packing $it_interval_sec, $it_interval_nsec, $it_value_sec, $it_value_nsec";
        return pack 'qqqq', $it_interval_sec, $it_interval_nsec, $it_value_sec, $it_value_nsec;
    }
 
@@ -49,8 +50,7 @@ package EventLoop::Poll::Linux::Timer {
         my ($self, $start, $interval) = @_;
         # assume start 0 is supposed to run immediately not try to cancel a timer
         $start = ($start > 0.000000001) ? $start : 0.000000001;
-        my $new_value = packitimerspec({'it_interval' => $interval, 'it_value' => $start});       
-        say "timerfd_settime " . SYS_timerfd_settime();
+        my $new_value = packitimerspec({'it_interval' => $interval, 'it_value' => $start});
         my $settime_success = syscall(SYS_timerfd_settime(), $self->{'timerfd'}, 0, $new_value,0);
         ($settime_success == 0) or die("timerfd_settime failed: $!");
     }
@@ -136,7 +136,7 @@ package EventLoop::Poll {
         my $desired = $current_time + $start;
         my $timer = { 'desired' => $desired, 'interval' => $interval, 'callback' => $callback };
         $timer->{'id'} = $id if(defined $id);
-        return _insert_timer($self, $timer);        
+        return _insert_timer($self, $timer);
     }
 
     sub remove_timer_by_id {
@@ -145,15 +145,13 @@ package EventLoop::Poll {
         for my $i (0 .. $lastindex) {
             next if(! defined $self->{'timers'}[$i]{'id'});
             if($self->{'timers'}[$i]{'id'} == $id) {
-                say "Removing timer with id: $id";
+                #say "Removing timer with id: $id";
                 splice(@{$self->{'timers'}}, $i, 1);
                 return;
             }
         }
         say "unable to remove timer $id, not found";
     }
-
-    
     
     sub requeue_timers {
         my ($self, $timers, $current_time) = @_;
@@ -170,7 +168,6 @@ package EventLoop::Poll {
         my $current_time =  clock_gettime(CLOCK_MONOTONIC);            
         while(my $timer = shift (@{$self->{'timers'}})  ) {                
             if($current_time >= $timer->{'desired'}) {
-                say "running timer";
                 $timerhit = 1;
                 if(defined $timer->{'callback'}->($timer, $current_time, $self)) { # callback may change interval
                     push @requeue_timers, $timer;                    
@@ -181,9 +178,7 @@ package EventLoop::Poll {
                 last;
             }                
         }
-        if($timerhit) {
-            $self->requeue_timers(\@requeue_timers, $current_time); 
-        } 
+        $self->requeue_timers(\@requeue_timers, $current_time);
     }
 
     sub do_poll {
@@ -284,7 +279,7 @@ package EventLoop::Poll {
                     my $start = $self->{'timers'}[0]{'desired'} - $current_time;
                     say "requeue_timers, updating linux timer to $start";
                     $self->{'evp_timer'}->settime_linux($start, 0);
-                }                                   
+                }
             };
     
             *run = sub {
@@ -407,33 +402,8 @@ package HTTP::BS::Server {
         }        
         
         say "-------------------------------------------------";
-        say "NEW CONN " . $peerhost . ':' . $peerport;        
-        my $MAX_TIME_WITHOUT_SEND = 30;
-        #my $MAX_TIME_WITHOUT_SEND = 5;
-        #my $MAX_TIME_WITHOUT_SEND = 600;
+        say "NEW CONN " . $peerhost . ':' . $peerport;
         my $cref = HTTP::BS::Server::Client->new($csock, $server);
-               
-        #$server->{'evp'}->set($csock, $cref, POLLIN | $EventLoop::Poll::ALWAYSMASK);    
-
-        weaken($cref); #don't allow this timer to keep the client object alive
-        $server->{'evp'}->add_timer($MAX_TIME_WITHOUT_SEND, 0, sub {
-            my ($timer, $current_time) = @_;
-            if(! defined $cref) {                
-                return undef;            
-            }
-            
-            my $time_elapsed = $current_time - $cref->{'time'};
-            if($time_elapsed > $MAX_TIME_WITHOUT_SEND) {
-                say "\$MAX_TIME_WITHOUT_SEND ($MAX_TIME_WITHOUT_SEND) exceeded, closing CONN";
-                say "-------------------------------------------------";               
-                $server->{'evp'}->remove($cref->{'sock'});
-                say "poll has " . scalar ( $server->{'evp'}{'poll'}->handles) . " handles";                             
-                return undef;                
-            }
-            $timer->{'interval'} = $MAX_TIME_WITHOUT_SEND - $time_elapsed;
-            return 1;            
-        });
-        
         return 1;    
     }    
     
@@ -774,7 +744,8 @@ package HTTP::BS::Server::Client::Request {
         $self{'outheaders'}{'X-MHFS-CONN-ID'} = $client->{'outheaders'}{'X-MHFS-CONN-ID'};      
         $self{'rl'} = 0;
         # we want the request
-        $client->SetEvents(POLLIN | $EventLoop::Poll::ALWAYSMASK );        
+        $client->SetEvents(POLLIN | $EventLoop::Poll::ALWAYSMASK );
+        $self{'recvrequesttimerid'} = $client->AddClientCloseTimer($client->{'server'}{'settings'}{'recvrequestimeout'}, $client->{'CONN-ID'});
         return \%self;
     }
 
@@ -788,8 +759,9 @@ package HTTP::BS::Server::Client::Request {
                 my $rl = $1;
                 $self->{'method'}    = $2;                
                 $self->{'uri'}       = $3;
-                $self->{'httpproto'} = $4;                                
-                $self->{'outheaders'}{'X-MHFS-REQUEST-ID'} = clock_gettime(CLOCK_MONOTONIC) * rand(); # BAD UID
+                $self->{'httpproto'} = $4;
+                my $rid = int(clock_gettime(CLOCK_MONOTONIC) * rand()); # insecure uid
+                $self->{'outheaders'}{'X-MHFS-REQUEST-ID'} = sprintf("%X", $rid);
                 say "X-MHFS-CONN-ID: " . $self->{'outheaders'}{'X-MHFS-CONN-ID'} . " X-MHFS-REQUEST-ID: " . $self->{'outheaders'}{'X-MHFS-REQUEST-ID'};
                 say "RECV: $rl";
                 if(($self->{'method'} ne 'GET') && ($self->{'method'} ne 'HEAD') && ($self->{'method'} ne 'PUT')) {
@@ -862,9 +834,11 @@ package HTTP::BS::Server::Client::Request {
         }
         substr($self->{'client'}{'inbuf'}, 0, 2, '');
         $self->{'on_read_ready'} = undef;
-        $self->{'client'}->SetEvents($EventLoop::Poll::ALWAYSMASK );  
+        $self->{'client'}->SetEvents($EventLoop::Poll::ALWAYSMASK );
+        $self->{'client'}->KillClientCloseTimer($self->{'recvrequesttimerid'});
+        $self->{'recvrequesttimerid'} = undef;
+
         # finally handle the request
-        #_Handle($self);  
         foreach my $route (@{$self->{'client'}{'server'}{'routes'}}) {                        
             if($self->{'path'}{'unsafepath'} eq $route->[0]) {
                 $route->[1]($self);
@@ -878,20 +852,8 @@ package HTTP::BS::Server::Client::Request {
                 return 1;
             }
         }
-        $self->{'client'}{'server'}{'route_default'}($self);     
+        $self->{'client'}{'server'}{'route_default'}($self);
         return 1;
-    }   
-
-    sub _Handle {
-        my ($self) = @_;
-        my $routes = $self->{'client'}{'server'}{'routes'};        
-        foreach my $route (@$routes) {                        
-            if($self->{'path'}{'unsafepath'} eq $route->[0]) {
-                $route->[1]($self);
-                return;
-            }
-        }
-        $self->{'client'}{'server'}{'route_default'}($self);        
     }
 
     sub _ReqDataLength {
@@ -1506,17 +1468,39 @@ package HTTP::BS::Server::Client {
         my ($class, $sock, $server) = @_;
         $sock->blocking(0);
         my %self = ('sock' => $sock, 'server' => $server, 'time' => clock_gettime(CLOCK_MONOTONIC), 'inbuf' => '');
-        $self{'outheaders'}{'X-MHFS-CONN-ID'} = $self{'time'} * rand(); # BAD UID
+        $self{'CONN-ID'} = int($self{'time'} * rand()); # insecure uid
+        $self{'outheaders'}{'X-MHFS-CONN-ID'} = sprintf("%X", $self{'CONN-ID'});
         bless \%self, $class;
         $self{'request'} = HTTP::BS::Server::Client::Request->new(\%self);      
         return \%self;
     }
 
-    sub ResetTimeout {
-        my ($self) = @_;
-        $self->{'time'} = clock_gettime(CLOCK_MONOTONIC);
-        my ($package, $filename, $line) = caller;
-        say "X-MHFS-CONN-ID: " . $self->{'outheaders'}{'X-MHFS-CONN-ID'} . "$package:L$line ResetTimeout";
+    # add a connection timeout timer
+    sub AddClientCloseTimer {
+        my ($self, $timelength, $id) = @_;
+        weaken($self); #don't allow this timer to keep the client object alive
+        my $server = $self->{'server'};
+        say "CCT | add timer: $id";
+        $server->{'evp'}->add_timer($timelength, 0, sub {
+            if(! defined $self) {
+                say "CCT | $id self undef";
+                return undef;
+            }
+            #(defined $self) or return undef;
+            say "CCT | \$timelength ($timelength) exceeded, closing CONN $id";
+            say "-------------------------------------------------";
+            $server->{'evp'}->remove($self->{'sock'});
+            say "poll has " . scalar ( $server->{'evp'}{'poll'}->handles) . " handles";
+            return undef;
+        }, $id);
+        return $id;
+    }
+
+    sub KillClientCloseTimer {
+        my ($self, $id) = @_;
+        my $server = $self->{'server'};
+        say "CCT | removing timer: $id";
+        $server->{'evp'}->remove_timer_by_id($id);
     }
 
     sub SetEvents {
@@ -1706,7 +1690,9 @@ package HTTP::BS::Server::Client {
         my $sentthiscall = 0;
         do {
             # Try to send the buf if set
-            if(defined $buf) {            
+            if(defined $buf) {
+                # there's data to send start the send timer
+                $client->{'sendresponsetimerid'} //= $client->AddClientCloseTimer($client->{'server'}{'settings'}{'sendresponsetimeout'}, $client->{'CONN-ID'});
                 my $remdata = TrySendItem($csock, $buf, $bytesToSend);                     
                 
                 # critical conn error
@@ -1718,12 +1704,16 @@ package HTTP::BS::Server::Client {
                 # update the number of bytes sent
                 $sentthiscall += $bytesToSend - length($remdata); 
                 
-                # only update the time if we actually sent some data
+                # if we sent data, kill the send timer
                 if($remdata ne $buf) {
-                    $client->ResetTimeout();
+                    if(defined $client->{'sendresponsetimerid'}) {
+                        $client->KillClientCloseTimer($client->{'sendresponsetimerid'});
+                        $client->{'sendresponsetimerid'} = undef;
+                    }
                 }
                 # eagain or not all data sent
                 if($remdata ne '') {
+                    $client->{'sendresponsetimerid'} //= $client->AddClientCloseTimer($client->{'server'}{'settings'}{'sendresponsetimeout'}, $client->{'CONN-ID'});
                     $dataitem->{'buf'} = $remdata;
                     _TSRReturnPrint($sentthiscall);                                        
                     return '';
@@ -2369,7 +2359,6 @@ package GDRIVE {
                     return undef;
                 }                                       
                 if(! -e $gdrivefile) {
-                    $request->{'client'}->ResetTimeout();
                     return 1;
                 }                
                 say "gdrivefile found";
@@ -2853,8 +2842,6 @@ package MusicLibrary {
                 my $buf;
                 $request->{'process'} = HTTP::BS::Server::Process->new(\@cmd, $evp, {
                 'SIGCHLD' => sub {
-                    # HACK
-                    $request->{'client'}->ResetTimeout();
                     SendLocalTrack($request,$tlossy);                
                 },                    
                 'STDERR' => sub {
@@ -2938,15 +2925,11 @@ package MusicLibrary {
         my $outfile = $tmpfileloc . $bitdepth . '_' . $desiredrate . '_' . $filebase;
         my @cmd = ('sox', $file, '-G', '-b', $bitdepth, $outfile, 'rate', '-v', '-L', $desiredrate, 'dither');
         say "cmd: " . join(' ', @cmd);
-        # HACK
-        $request->{'client'}->ResetTimeout();
+
         $request->{'process'} = HTTP::BS::Server::Process->new(\@cmd, $evp, {
         'SIGCHLD' => sub {
             # BUG
             # files isn't necessarily flushed to disk on SIGCHLD. filesize can be wrong
-
-            # HACK
-            $request->{'client'}->ResetTimeout();
             SendTrack($request, $outfile);                                      
         },                    
         'STDERR' => sub {
@@ -3128,9 +3111,8 @@ package MusicLibrary {
                 }
             }
 
-            print STDERR "MusicLibrary: UpdateLibrariesAsync:freezing\n";
+            # serialize and output
             my $pipedata = freeze(\@updates);
-            print STDERR "MusicLibrary: UpdateLibrariesAsync: outputting on pipe\n";  
             print $datachannel $pipedata;
             exit 0;
         }, sub {
@@ -3712,6 +3694,13 @@ package MHFS::Settings {
         $SETTINGS->{'DOCDIR'} ||= $APPDIR . '/doc';
         $SETTINGS->{'CFGDIR'} ||= $CFGDIR;
         
+        # specify timeouts in seconds
+        $SETTINGS->{'TIMEOUT'} ||= 75;
+        # time to recieve the requestline and headers before closing the conn
+        $SETTINGS->{'recvrequestimeout'} ||= $SETTINGS->{'TIMEOUT'};
+        # maximum time allowed between sends
+        $SETTINGS->{'sendresponsetimeout'} ||= $SETTINGS->{'TIMEOUT'};
+
         if( ! defined $SETTINGS->{'MusicLibrary'}) {
             my $folder = $SETTINGS->{'DOCUMENTROOT'} . "/media/music";
             if(-d $folder) {
@@ -3887,7 +3876,7 @@ my @routes = (
         # otherwise attempt to send a file from droot
         my $droot = $SETTINGS->{'DOCUMENTROOT'};
         my $requestfile = abs_path($droot . $request->{'path'}{'unsafepath'});
-        say "abs requestfile: $requestfile";
+        say "abs requestfile: $requestfile" if(defined $requestfile);
            
         # not a file or is outside of the document root
         if(( ! defined $requestfile) ||
