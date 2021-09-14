@@ -131,11 +131,26 @@ package EventLoop::Poll {
     # all times are relative, is 0 is set as the interval, it will be run every main loop iteration
     # return undef in the callback to delete the timer
     sub add_timer {
-        my ($self, $start, $interval, $callback) = @_;        
+        my ($self, $start, $interval, $callback, $id) = @_;
         my $current_time = clock_gettime(CLOCK_MONOTONIC);
         my $desired = $current_time + $start;
-        my $timer = { 'desired' => $desired, 'interval' => $interval, 'callback' => $callback };    
+        my $timer = { 'desired' => $desired, 'interval' => $interval, 'callback' => $callback };
+        $timer->{'id'} = $id if(defined $id);
         return _insert_timer($self, $timer);        
+    }
+
+    sub remove_timer_by_id {
+        my ($self, $id) = @_;
+        my $lastindex = scalar(@{$self->{'timers'}}) - 1;
+        for my $i (0 .. $lastindex) {
+            next if(! defined $self->{'timers'}[$i]{'id'});
+            if($self->{'timers'}[$i]{'id'} == $id) {
+                say "Removing timer with id: $id";
+                splice(@{$self->{'timers'}}, $i, 1);
+                return;
+            }
+        }
+        say "unable to remove timer $id, not found";
     }
 
     
@@ -253,10 +268,10 @@ package EventLoop::Poll {
             };
             
             my $add_timer_ = \&add_timer;
-            *add_timer = sub {                
-                my ($self, $start, $interval, $cb) = @_;
-                if($add_timer_->($self, $start, $interval, $cb) == 0) {                   
-                    say "add_timer, updating linux timer to $start";                
+            *add_timer = sub {
+                my ($self, $start) = @_;
+                if(&$add_timer_ == 0) {
+                    say "add_timer, updating linux timer to $start";
                     $self->{'evp_timer'}->settime_linux($start, 0);
                 }
             };
