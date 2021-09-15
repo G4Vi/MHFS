@@ -781,9 +781,11 @@ package HTTP::BS::Server::Client::Request {
                 say "collapsed: $path";
                 $pathStruct{'unsafecollapse'} = $path;
 
-                # remove trailing slashes
-                $path =~ s/(?:\/|\\)+$//;
-                say "evaluated path: $path ";
+                # without trailing slash
+                if(index($pathStruct{'unsafecollapse'}, '/', length($pathStruct{'unsafecollapse'})-1) != -1) {
+                    chop($path);
+                    say "no slash path: $path ";
+                }
                 $pathStruct{'unsafepath'} = $path;
 
                 ## Querystring
@@ -847,14 +849,14 @@ package HTTP::BS::Server::Client::Request {
 
         # finally handle the request
         foreach my $route (@{$self->{'client'}{'server'}{'routes'}}) {                        
-            if($self->{'path'}{'unsafepath'} eq $route->[0]) {
+            if($self->{'path'}{'unsafecollapse'} eq $route->[0]) {
                 $route->[1]($self);
                 return 1;
             }
             else {
                 # wildcard ending
-                next if(rindex($route->[0], '*') != (length($route->[0])-1));
-                next if(rindex($self->{'path'}{'unsafepath'}, substr($route->[0], 0, -1)) != 0);
+                next if(index($route->[0], '*', length($route->[0])-1) == -1);
+                next if(rindex($self->{'path'}{'unsafecollapse'}, substr($route->[0], 0, -1), 0) != 0);
                 $route->[1]($self);
                 return 1;
             }
@@ -1340,14 +1342,19 @@ package HTTP::BS::Server::Client::Request {
         my $urf = $absdir .'/'.substr($self->{'path'}{'unsafepath'}, length($urldir));
         my $requestfile = abs_path($urf);
         my $ml = $absdir;
-        say "rf $requestfile ";
+        say "rf $requestfile " if(defined $requestfile);
         if (( ! defined $requestfile) || (rindex($requestfile, $ml, 0) != 0)){
             $self->Send404;
             return;
         }
 
         if(-f $requestfile) {
-            $self->SendFile($requestfile);
+            if(index($self->{'path'}{'unsafecollapse'}, '/', length($self->{'path'}{'unsafecollapse'})-1) == -1) {
+                $self->SendFile($requestfile);
+            }
+            else {
+                $self->Send404;
+            }
             return;
         }
         elsif(-d _) {
@@ -3931,7 +3938,16 @@ sub kodi_tv {
     my ($request, $absdir, $kodidir) = @_;
     # read in the shows
     my $tvdir = abs_path($absdir);
-    opendir ( my $dh, $tvdir ) or die "Error in opening dir $tvdir\n";
+    if(! defined $tvdir) {
+        $request->Send404;
+        return;
+    }
+    my $dh;
+    if(! opendir ( $dh, $tvdir )) {
+        warn "Error in opening dir $tvdir\n";
+        $request->Send404;
+        return;
+    }
     my %shows = ();
     my @diritems;
     while( (my $filename = readdir($dh))) {
@@ -3984,8 +4000,13 @@ sub kodi_tv {
                     push @diritems, {'item' => $filebasename, 'isdir' => 0};
                 }
                 elsif($showfilename eq $filebasename) {
-                    say "found show filename";
-                    $request->SendFile($item);
+                    if(index($request->{'path'}{'unsafecollapse'}, '/', length($request->{'path'}{'unsafecollapse'})-1) == -1) {
+                        say "found show filename";
+                        $request->SendFile($item);
+                    }
+                    else {
+                        $request->Send404;
+                    }
                     return;
                 }
             }
