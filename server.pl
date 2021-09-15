@@ -343,7 +343,7 @@ package HTTP::BS::Server {
         #$SERVER->setsockopt(IPPROTO_TCP, $TCP_KEEPINTVL, 1) or die;   
         #$SERVER->setsockopt(IPPROTO_TCP, $TCP_KEEPCNT, 10) or die;
         #$SERVER->setsockopt(IPPROTO_TCP, $TCP_USER_TIMEOUT, 10000) or die; #doesn't work?
-        #$SERVER->setsockopt(SOL_SOCKET, SO_LINGER, pack("II",1,0)) or die; #to stop last ack bullshit
+        #$SERVER->setsockopt(SOL_SOCKET, SO_LINGER, pack("II",1,0)) or die; #to stop last ack
         
         # leaving Nagle's algorithm enabled for now as sometimes headers are sent without data
         #$sock->setsockopt(IPPROTO_TCP, TCP_NODELAY, 1) or die("Failed to set TCP_NODELAY");
@@ -3860,6 +3860,7 @@ my @routes = (
             my $tvdir = "/video/tv";
             my $koditvdir = "/video/kodi/tv";
             my $moviedir = "/video/movies";
+            my $kodimoviedir = "/video/kodi/movies";
             if(rindex($request->{'path'}{'unsafepath'}, $tvdir, 0) == 0) {
                 $request->SendOpenDirectory($SETTINGS->{'MEDIALIBRARIES'}{'tv'}, $tvdir);
                 return;
@@ -3870,6 +3871,10 @@ my @routes = (
             }
             elsif(rindex($request->{'path'}{'unsafepath'}, $moviedir, 0) == 0) {
                 $request->SendOpenDirectory($SETTINGS->{'MEDIALIBRARIES'}{'movies'}, $moviedir);
+                return;
+            }
+            elsif(rindex($request->{'path'}{'unsafepath'}, $kodimoviedir, 0) == 0) {
+                kodi_movies($request, $SETTINGS->{'MEDIALIBRARIES'}{'movies'}, $kodimoviedir);
                 return;
             }
             $request->Send404;
@@ -3992,6 +3997,141 @@ sub kodi_tv {
                 say "bad item";
             }
             elsif(rindex($item, $tvdir, 0) != 0) {
+                say "bad item, path traversal?";
+            }
+            elsif(-f $item) {
+                my $filebasename = basename($item);
+                if(!$showfilename) {
+                    push @diritems, {'item' => $filebasename, 'isdir' => 0};
+                }
+                elsif($showfilename eq $filebasename) {
+                    if(index($request->{'path'}{'unsafecollapse'}, '/', length($request->{'path'}{'unsafecollapse'})-1) == -1) {
+                        say "found show filename";
+                        $request->SendFile($item);
+                    }
+                    else {
+                        $request->Send404;
+                    }
+                    return;
+                }
+            }
+            elsif(-d _) {
+                opendir(my $dh, $item) or die('failed to open dir');
+                my @newitems;
+                while(my $newitem = readdir($dh)) {
+                    next if(($newitem eq '.') || ($newitem eq '..'));
+                    push @newitems, "$item/$newitem";
+                }
+                closedir($dh);
+                unshift @initems, @newitems;
+            }
+            else {
+                say "bad item unknown filetype " . $item;
+            }
+        }
+    }
+
+    # stop if we didn't find anything useful
+    if(scalar(@diritems) == 0){
+        $request->Send404;
+        return;
+    }
+
+    # redirect if the slash wasn't there
+    if(index($request->{'path'}{'unescapepath'}, '/', length($request->{'path'}{'unescapepath'})-1) == -1) {
+        $request->Send301(substr($request->{'path'}{'unescapepath'}, rindex($request->{'path'}{'unescapepath'}, '/')+1).'/');
+        return;
+    }
+
+    # generate the directory html
+    my $buf = '';
+    foreach my $show (@diritems) {
+        my $showname = $show->{'item'};
+        my $url = uri_escape_utf8($showname);
+        $url .= '/' if($show->{'isdir'});
+        $buf .= '<a href="' . $url .'">'.${escape_html_noquote($showname)} .'</a><br><br>';
+    }
+    $request->SendLocalBuf($buf, 'text/html');
+}
+
+# format movies library for kodi http
+sub kodi_movies {
+    my ($request, $absdir, $kodidir) = @_;
+    # read in the shows
+    my $moviedir = abs_path($absdir);
+    if(! defined $moviedir) {
+        $request->Send404;
+        return;
+    }
+    my $dh;
+    if(! opendir ( $dh, $moviedir )) {
+        warn "Error in opening dir $moviedir\n";
+        $request->Send404;
+        return;
+    }
+    my %shows = ();
+    my @diritems;
+    while( (my $filename = readdir($dh))) {
+        next if(($filename eq '.') || ($filename eq '..'));
+        next if(!(-s "$moviedir/$filename"));
+        my $showname;
+        # extract the showname
+        if($filename =~ /^(.+)[\.\s]+\(?(\d{4})([^p]|$)/) {
+            $showname = "$1 ($2)";
+        }
+        elsif($filename =~ /^(.+)(\.DVDRip)\.[a-zA-Z]{3,4}$/) {
+            $showname = $1;
+        }
+        elsif($filename =~ /^(.+)\.VHS/) {
+            $showname = $1;
+        }
+        elsif($filename =~ /^(.+)[\.\s]+\d{3,4}p\.[a-zA-Z]{3,4}$/) {
+            $showname = $1;
+        }
+        elsif($filename =~ /^(.+)\.[a-zA-Z]{3,4}$/) {
+            $showname = $1;
+        }
+        else{
+            #say "unable to match: $filename";
+            #next;
+            $showname = $filename;
+        }
+        if($showname) {
+            $showname =~ s/\./ /g;
+            if(! $shows{$showname}) {
+                $shows{$showname} = [];
+                push @diritems, {'item' => $showname, 'isdir' => 1}
+            }
+            push @{$shows{$showname}}, "$moviedir/$filename";
+        }
+    }
+    closedir($dh);
+
+    # locate the content
+    if($request->{'path'}{'unsafepath'} ne $kodidir) {
+        my $fullshowname = substr($request->{'path'}{'unsafepath'}, length($kodidir)+1);
+        say "fullshowname $fullshowname";
+        my $slash = index($fullshowname, '/');
+        @diritems = ();
+        my $showname = ($slash != -1) ? substr($fullshowname, 0, $slash) : $fullshowname;
+        my $showfilename = ($slash != -1) ? substr($fullshowname, $slash+1) : undef;
+        say "showname $showname";
+
+        my $showitems = $shows{$showname};
+        if(!$showitems) {
+            $request->Send404;
+            return;
+        }
+        my @initems = @{$showitems};
+        my @outitems;
+        # TODO replace basename usage?
+        while(@initems) {
+            my $item = shift @initems;
+            $item = abs_path($item);
+            if(! $item) {
+                say "bad item";
+            }
+            elsif(rindex($item, $moviedir, 0) != 0) {
                 say "bad item, path traversal?";
             }
             elsif(-f $item) {
