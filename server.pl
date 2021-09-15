@@ -775,6 +775,13 @@ package HTTP::BS::Server::Client::Request {
                 ## Path
                 $path = uri_unescape($path);
                 my %pathStruct = ( 'unescapepath' => $path );
+
+                # collapse slashes
+                $path =~ s/\/{2,}/\//g;
+                say "collapsed: $path";
+                $pathStruct{'unsafecollapse'} = $path;
+
+                # remove trailing slashes
                 $path =~ s/(?:\/|\\)+$//;
                 say "evaluated path: $path ";
                 $pathStruct{'unsafepath'} = $path;
@@ -3875,7 +3882,7 @@ my @routes = (
 
         # otherwise attempt to send a file from droot
         my $droot = $SETTINGS->{'DOCUMENTROOT'};
-        my $requestfile = abs_path($droot . $request->{'path'}{'unsafepath'});
+        my $requestfile = abs_path($droot . $request->{'path'}{'unsafecollapse'});
         say "abs requestfile: $requestfile" if(defined $requestfile);
            
         # not a file or is outside of the document root
@@ -3885,7 +3892,12 @@ my @routes = (
         }
         # is regular file          
         elsif (-f $requestfile) {
-            $request->SendFile($requestfile);
+            if(index($request->{'path'}{'unsafecollapse'}, '/', length($request->{'path'}{'unsafecollapse'})-1) == -1) {
+                $request->SendFile($requestfile);
+            }
+            else {
+                $request->Send404;
+            }
         }
         # is directory
         elsif (-d _) {
