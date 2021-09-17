@@ -3678,6 +3678,30 @@ package MHFS::Settings {
         if(! -f $SETTINGS_FILE) {
             write_settings_file($SETTINGS, $SETTINGS_FILE);
         }
+
+        # determine the allowed remoteip host combos. only ipv4 now sorry
+        $SETTINGS->{'ALLOWED_REMOTEIP_HOSTS'} ||= [
+            ['127.0.0.1'],
+        ];
+        $SETTINGS->{'ARIPHOSTS_PARSED'} = [];
+        foreach my $rule (@{$SETTINGS->{'ALLOWED_REMOTEIP_HOSTS'}}) {
+            my @values = $rule->[0] =~ /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?:\/(\d{1,2}))?$/;
+            scalar(@values) >= 4 or die("Invalid rule: " . $rule->[0]);
+            foreach my $i (0..3) {
+                ($values[$i] >= 0) && ($values[$i] <= 255) or die("Invalid rule: " . $rule->[0]);
+            }
+            my $ip = ($values[0] << 24) | ($values[1] << 16) | ($values[2] << 8) | ($values[3]);
+            my $cidr = $values[4] // 32;
+            $cidr >= 0 && $cidr <= 32  or die("Invalid rule: " . $rule->[0]);
+            my $mask = (0xFFFFFFFF << (32-$cidr)) & 0xFFFFFFFF;
+            say "ip: $ip cidr: $cidr subnetmask $mask";
+            my %ariphost = (
+                'ip' => $ip,
+                'subnetmask' => $mask
+            );
+            $ariphost{'reqhostname'} = $rule->[1] if($rule->[1]);
+            push @{ $SETTINGS->{'ARIPHOSTS_PARSED'}}, \%ariphost;
+        }
         
         # $APPDIR in $SETTINGS takes precedence over previous value
         if($SETTINGS->{'APPDIR'}) {
