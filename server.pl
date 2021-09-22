@@ -427,7 +427,7 @@ package HTTP::BS::Server {
         
         say "-------------------------------------------------";
         say "NEW CONN " . $peerhost . ':' . $peerport;
-        my $cref = HTTP::BS::Server::Client->new($csock, $server, $ah->{'reqhostname'});
+        my $cref = HTTP::BS::Server::Client->new($csock, $server, $ah->{'reqhostname'}, $ah->{'absurl'});
         return 1;    
     }    
     
@@ -860,16 +860,9 @@ package HTTP::BS::Server::Client::Request {
                 return undef;
             }        
         }
-        # when $ipos is 0 we recieved the end of the headers: \r\n\r\n
-        if((defined $self->{'header'}{'Range'}) &&  ($self->{'header'}{'Range'} =~ /^bytes=([0-9]+)\-([0-9]*)$/)) {            
-            $self->{'header'}{'_RangeStart'} = $1;
-            $self->{'header'}{'_RangeEnd'} = ($2 ne  '') ? $2 : undef;      
-        }
-        substr($self->{'client'}{'inbuf'}, 0, 2, '');
-        $self->{'on_read_ready'} = undef;
-        $self->{'client'}->SetEvents($EventLoop::Poll::ALWAYSMASK );
-        $self->{'client'}->KillClientCloseTimer($self->{'recvrequesttimerid'});
-        $self->{'recvrequesttimerid'} = undef;
+        # when $ipos is 0 we recieved the end of the headers: \r\n\r\n        
+        
+        # verify correct host is specified when required
         if($self->{'client'}{'reqhostname'}) {
             if((! $self->{'header'}{'Host'}) ||
             ($self->{'header'}{'Host'} ne $self->{'client'}{'reqhostname'})) {
@@ -878,6 +871,17 @@ package HTTP::BS::Server::Client::Request {
                 return undef;
             }
         }
+
+        # remove the final \r\n 
+        substr($self->{'client'}{'inbuf'}, 0, 2, '');
+        if((defined $self->{'header'}{'Range'}) &&  ($self->{'header'}{'Range'} =~ /^bytes=([0-9]+)\-([0-9]*)$/)) {            
+            $self->{'header'}{'_RangeStart'} = $1;
+            $self->{'header'}{'_RangeEnd'} = ($2 ne  '') ? $2 : undef;      
+        }        
+        $self->{'on_read_ready'} = undef;
+        $self->{'client'}->SetEvents($EventLoop::Poll::ALWAYSMASK );
+        $self->{'client'}->KillClientCloseTimer($self->{'recvrequesttimerid'});
+        $self->{'recvrequesttimerid'} = undef;
 
         # finally handle the request
         foreach my $route (@{$self->{'client'}{'server'}{'routes'}}) {                        
@@ -895,6 +899,12 @@ package HTTP::BS::Server::Client::Request {
         }
         $self->{'client'}{'server'}{'route_default'}($self);
         return 1;
+    }
+
+    # unfortunately the absolute url of the server is required for stuff like m3u playlist generation
+    sub getAbsoluteURL {
+        my ($self) = @_;
+        return $self->{'client'}{'absurl'} // (defined($self->{'header'}{'Host'}) ? 'http://'.$self->{'header'}{'Host'} : undef);
     }
 
     sub _ReqDataLength {
@@ -1511,9 +1521,9 @@ package HTTP::BS::Server::Client {
     $SIG{ __DIE__ } = sub { Carp::confess( @_ ) };
 
     sub new {
-        my ($class, $sock, $server, $reqhostname) = @_;
+        my ($class, $sock, $server, $reqhostname, $absurl) = @_;
         $sock->blocking(0);
-        my %self = ('sock' => $sock, 'server' => $server, 'time' => clock_gettime(CLOCK_MONOTONIC), 'inbuf' => '', 'reqhostname' => $reqhostname);
+        my %self = ('sock' => $sock, 'server' => $server, 'time' => clock_gettime(CLOCK_MONOTONIC), 'inbuf' => '', 'reqhostname' => $reqhostname, 'absurl' => $absurl);
         $self{'CONN-ID'} = int($self{'time'} * rand()); # insecure uid
         $self{'outheaders'}{'X-MHFS-CONN-ID'} = sprintf("%X", $self{'CONN-ID'});
         bless \%self, $class;
@@ -3732,6 +3742,11 @@ package MHFS::Settings {
                 'subnetmask' => $mask
             );
             $ariphost{'reqhostname'} = $rule->[1] if($rule->[1]);
+            if($rule->[2]) {
+                my $absurl = $rule->[2];
+                chop $absurl if(index($absurl, '/', length($absurl)-1) != -1);
+                $ariphost{'absurl'} = $absurl;
+            }
             push @{ $SETTINGS->{'ARIPHOSTS_PARSED'}}, \%ariphost;
         }
         
@@ -3751,10 +3766,7 @@ package MHFS::Settings {
         if( ! $SETTINGS->{'DOCUMENTROOT'}) {
             $SETTINGS->{'DOCUMENTROOT'} = "$APPDIR/public_html";
         }
-        $SETTINGS->{'XSEND'} //= 0;
-        $SETTINGS->{'ABSURL'}   ||= 'http://' . $SETTINGS->{'HOST'} . ':' . $SETTINGS->{'PORT'};
-        # an absolute urls must be used in m3u8 playlists
-        $SETTINGS->{'M3U8_URL'} ||= $SETTINGS->{'ABSURL_HTTP'} || $SETTINGS->{'ABSURL'};        
+        $SETTINGS->{'XSEND'} //= 0;  
         $SETTINGS->{'TMPDIR'} ||= $SETTINGS->{'DOCUMENTROOT'} . '/tmp';
         $SETTINGS->{'VIDEO_TMPDIR'} ||= $SETTINGS->{'TMPDIR'};
         $SETTINGS->{'MEDIALIBRARIES'}{'movies'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/movies", 
@@ -4282,7 +4294,13 @@ sub get_video {
 
         $video{'out_base'} = $video{'src_file'}{'name'};
         if($video{'out_fmt'} eq 'm3u8') {
-            my $m3u8 = video_get_m3u8(\%video, $SETTINGS->{'M3U8_URL'} . $request->{'path'}{'unsafepath'} . '?name=');
+            my $absurl = $request->getAbsoluteURL;
+            if(! $absurl) {
+                say 'unable to $request->getAbsoluteURL';
+                $request->Send404;
+                return undef;                
+            }
+            my $m3u8 = video_get_m3u8(\%video,  $absurl . $request->{'path'}{'unsafepath'} . '?name=');
             #$request->{'outheaders'}{'Icy-Name'} = $video{'fullname'};
             $video{'src_file'}{'ext'} = $video{'src_file'}{'ext'} ? '.'. $video{'src_file'}{'ext'} : '';
             $request->SendLocalBuf($$m3u8, 'application/x-mpegURL', {'filename' => $video{'src_file'}{'name'} . $video{'src_file'}{'ext'} . '.m3u8'});

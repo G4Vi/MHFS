@@ -13,7 +13,5 @@ RewriteEngine On
 RewriteRule ^/stream$ stream/ [R,L]
 <Location "/stream/">
   AddOutputFilterByType DEFLATE application/json
-  ProxyPreserveHost On
-  #ProxyPass "http://127.0.0.1:8000/stream/"
   ProxyPass "http://127.0.0.1:8000/"
 </Location>
