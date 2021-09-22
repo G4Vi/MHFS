@@ -55,8 +55,16 @@ Build the XS module (from the root of the project)
 ### Add settings
 Settings are loaded from [$XDG_CONFIG_DIRS](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html)`/mhfs`, by default `$HOME/.config/mhfs`. If `settings.pl` is not found, it is created. Fill in your settings as needed.
 
-`HOST` - IP address to bind too, i.e. `'127.0.0.1'` for localhost or `'0.0.0.0'` for all interfaces.
+`HOST` - address to bind too, i.e. `'127.0.0.1'` for localhost or `'0.0.0.0'` for all interfaces.
 
+`ALLOWED_REMOTEIP_HOSTS` - array of allowed remote ip and host header values. [CIDR](https://datatracker.ietf.org/doc/html/rfc4632#section-3.1) notation is supported to allow multiple addresses.
+```perl
+'ALLOWED_REMOTEIP_HOSTS' => [
+    ['127.0.0.1'],      # localhost connections for reverse proxy
+    ['192.168.1.0/24'], # anyone on our LAN
+    ['0.0.0.0/0', 'domain.net:8000'] # direct connections with the correct Host header
+],
+```
 
 ## Development
 

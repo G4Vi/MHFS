@@ -390,11 +390,35 @@ package HTTP::BS::Server {
             say "server: cannot accept client";
             return 1;        
         }
+
+        # check the remote ip
         my $peerhost = $csock->peerhost();
         if(! $peerhost) {
             say "server: no peerhost";
             return 1;        
         }
+        my @values = $peerhost =~ /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+        if(scalar(@values) != 4) {
+            say "using 0.0.0.0 as remote ip";
+            @values = (0,0,0,0);
+        }
+        foreach my $i (0..3) {
+            ($values[$i] >= 0) && ($values[$i] <= 255) or die("Invalid remote ip");
+        }
+        my $remoteip = ($values[0] << 24) | ($values[1] << 16) | ($values[2] << 8) | ($values[3]);
+        my $ah;
+        foreach my $allowedHost (@{$server->{'settings'}{'ARIPHOSTS_PARSED'}}) {
+            #say "testing " . $allowedHost->{'ip'};
+            if(($remoteip & $allowedHost->{'subnetmask'}) == $allowedHost->{'ip'}) {
+                $ah = $allowedHost;
+                last;
+            }
+        }
+        if(!$ah) {
+            say "server: $peerhost not allowed";
+            return 1;
+        }
+
         my $peerport = $csock->peerport();
         if(! $peerport) {
             say "server: no peerport";
@@ -403,7 +427,7 @@ package HTTP::BS::Server {
         
         say "-------------------------------------------------";
         say "NEW CONN " . $peerhost . ':' . $peerport;
-        my $cref = HTTP::BS::Server::Client->new($csock, $server);
+        my $cref = HTTP::BS::Server::Client->new($csock, $server, $ah->{'reqhostname'});
         return 1;    
     }    
     
@@ -846,6 +870,14 @@ package HTTP::BS::Server::Client::Request {
         $self->{'client'}->SetEvents($EventLoop::Poll::ALWAYSMASK );
         $self->{'client'}->KillClientCloseTimer($self->{'recvrequesttimerid'});
         $self->{'recvrequesttimerid'} = undef;
+        if($self->{'client'}{'reqhostname'}) {
+            if((! $self->{'header'}{'Host'}) ||
+            ($self->{'header'}{'Host'} ne $self->{'client'}{'reqhostname'})) {
+                my $printhostname = $self->{'header'}{'Host'} // '';
+                say "Host: $printhostname does not match ". $self->{'client'}{'reqhostname'};
+                return undef;
+            }
+        }
 
         # finally handle the request
         foreach my $route (@{$self->{'client'}{'server'}{'routes'}}) {                        
@@ -1479,9 +1511,9 @@ package HTTP::BS::Server::Client {
     $SIG{ __DIE__ } = sub { Carp::confess( @_ ) };
 
     sub new {
-        my ($class, $sock, $server) = @_;
+        my ($class, $sock, $server, $reqhostname) = @_;
         $sock->blocking(0);
-        my %self = ('sock' => $sock, 'server' => $server, 'time' => clock_gettime(CLOCK_MONOTONIC), 'inbuf' => '');
+        my %self = ('sock' => $sock, 'server' => $server, 'time' => clock_gettime(CLOCK_MONOTONIC), 'inbuf' => '', 'reqhostname' => $reqhostname);
         $self{'CONN-ID'} = int($self{'time'} * rand()); # insecure uid
         $self{'outheaders'}{'X-MHFS-CONN-ID'} = sprintf("%X", $self{'CONN-ID'});
         bless \%self, $class;
