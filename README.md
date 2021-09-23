@@ -62,7 +62,8 @@ Settings are loaded from [$XDG_CONFIG_DIRS](https://specifications.freedesktop.o
 `ALLOWED_REMOTEIP_HOSTS` - whitelist to specify allowed remote ip addresses, an optional required `Host` header value, and an absolute url override if desired. By default the absolute url is derived from the `Host` header. [CIDR](https://datatracker.ietf.org/doc/html/rfc4632#section-3.1) notation is supported to allow remote ip address ranges in a single item.
 ```perl
 'ALLOWED_REMOTEIP_HOSTS' => [
-    ['127.0.0.1', undef, 'https://domain.net/mhfs'], # localhost connections for reverse proxy, use https://domain.net/mhfs to build absolute urls
+    # localhost connections for reverse proxy, use https://domain.net/mhfs to build absolute urls
+    ['127.0.0.1', undef, 'https://domain.net/mhfs'],
     ['192.168.1.0/24'], # anyone on our LAN
     ['0.0.0.0/0', 'domain.net:8000'] # direct connections with the correct Host header
 ],
