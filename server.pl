@@ -3620,13 +3620,16 @@ package MHFS::Settings {
         my $indentcnst = 4;
         my $indentspace = '';
         my $settingscontents = "#!/usr/bin/perl\nuse strict; use warnings;\n\nmy \$SETTINGS = ";
+
+        # we only encode SCALARS. Loop through expanding HASH and ARRAY refs into SCALARS
         my @values = ($SETTINGS);
         while(@values) {
             my $value = shift @values;
             my $type = reftype($value);
+            say "value: $value type: " . ($type // 'undef');
+            my $raw;
+            my $noindent;
             if(! defined $type) {
-                my $raw;
-                my $noindent;               
                 if(defined $value) {
                     # process lead control code if provided
                     $raw = ($value eq '__raw');
@@ -3635,41 +3638,55 @@ package MHFS::Settings {
                         $value = shift @values;
                     }                                                          
                 }
-                # encode the value if needed
+
                 if(! defined $value) {
+                    $raw = 1;
                     $value = 'undef';
+                    $type = 'SCALAR';
                 }
                 elsif($value eq '__indent-') {
                     substr($indentspace, -4, 4, '');
                     # don't actually encode anything
                     $value = '';
-                    $raw = 1;
-                    $noindent = 1;
+                    $type = 'NOP';
                 }
-                elsif(! $raw) {
+                else {
+                    $type = reftype($value) // 'SCALAR';
+                }
+            }
+
+            say "v2: $value type $type";
+            if($type eq 'NOP') {
+                next;
+            }
+
+            $settingscontents .= $indentspace if(! $noindent);
+            if($type eq 'SCALAR') {
+                # encode the value
+                if(! $raw) {
                     $value =~ s/'/\\'/g;
-                    $value = "'".$value."'";                    
+                    $value = "'".$value."'";
                 }
+
                 # add the value to the buffer
-                $settingscontents .= $indentspace if(! $noindent);
                 $settingscontents .= $value;
                 $settingscontents .= ",\n" if(! $raw);                
             }
             elsif($type eq 'HASH') {
-                $settingscontents .= $indentspace."{\n";
+                $settingscontents .= "{\n";
                 $indentspace .= (' ' x $indentcnst);
                 my @toprepend;
                 foreach my $key (keys %{$value}) {
                     push @toprepend, '__raw', "'$key' => ", '__noindent', $value->{$key};
                 }
-                push @toprepend, '__indent-', '__raw', "}\n,";
+                push @toprepend, '__indent-', '__raw', "},\n";
                 unshift(@values, @toprepend);
             }
             elsif($type eq 'ARRAY') {
-                $settingscontents .= $indentspace."[\n";
+                $settingscontents .= "[\n";
                 $indentspace .= (' ' x $indentcnst);
                 my @toprepend = @{$value};
-                push @toprepend, '__indent-', '__raw', "]\n,";
+                push @toprepend, '__indent-', '__raw', "],\n";
                 unshift(@values, @toprepend);
             }
             else {
@@ -3710,21 +3727,25 @@ package MHFS::Settings {
         my $SETTINGS_FILE = $CFGDIR . '/settings.pl';
         my $SETTINGS = do ($SETTINGS_FILE);
         if(! $SETTINGS) {
+            die "Error parsing settingsfile: $@" if($@);
+            die "Cannot read settingsfile: $!" if(-e $SETTINGS_FILE);
             warn("No settings file found, using default settings");
             $SETTINGS = {};
         }
         # load defaults for unset values
         $SETTINGS->{'HOST'} ||= "127.0.0.1";
         $SETTINGS->{'PORT'} ||= 8000;
-        # write a settings file
+
+        $SETTINGS->{'ALLOWED_REMOTEIP_HOSTS'} ||= [
+            ['127.0.0.1'],
+        ];
+
+        # write the default settings
         if(! -f $SETTINGS_FILE) {
             write_settings_file($SETTINGS, $SETTINGS_FILE);
         }
 
         # determine the allowed remoteip host combos. only ipv4 now sorry
-        $SETTINGS->{'ALLOWED_REMOTEIP_HOSTS'} ||= [
-            ['127.0.0.1'],
-        ];
         $SETTINGS->{'ARIPHOSTS_PARSED'} = [];
         foreach my $rule (@{$SETTINGS->{'ALLOWED_REMOTEIP_HOSTS'}}) {
             my @values = $rule->[0] =~ /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?:\/(\d{1,2}))?$/;
@@ -5837,6 +5858,7 @@ sub player_video {
     my $fmt = video_get_format($qs->{'fmt'});
     foreach my $library (@libraries) {
         my $dir = $SETTINGS->{'MEDIALIBRARIES'}{$library};
+        defined($dir) or next;
         (-d $dir) or next;
         $buf .= "<h1>" . $libraryprint{$library} . "</h1>\n";        
         $temp = video_library_html($dir, {'fmt' => $fmt});

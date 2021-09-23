@@ -57,13 +57,35 @@ Settings are loaded from [$XDG_CONFIG_DIRS](https://specifications.freedesktop.o
 
 `HOST` - address to bind too, i.e. `'127.0.0.1'` for localhost or `'0.0.0.0'` for all interfaces.
 
-`ALLOWED_REMOTEIP_HOSTS` - array of allowed remote ip and host header values. [CIDR](https://datatracker.ietf.org/doc/html/rfc4632#section-3.1) notation is supported to allow multiple addresses.
+`PORT` - port to bind too, i.e. `8000`.
+
+`ALLOWED_REMOTEIP_HOSTS` - whitelist to specify allowed remote ip addresses, an optional required `Host` header value, and an absolute url override if desired. By default the absolute url is derived from the `Host` header. [CIDR](https://datatracker.ietf.org/doc/html/rfc4632#section-3.1) notation is supported to allow remote ip address ranges in a single item.
 ```perl
 'ALLOWED_REMOTEIP_HOSTS' => [
-    ['127.0.0.1'],      # localhost connections for reverse proxy
+    ['127.0.0.1', undef, 'https://domain.net/mhfs'], # localhost connections for reverse proxy, use https://domain.net/mhfs to build absolute urls
     ['192.168.1.0/24'], # anyone on our LAN
     ['0.0.0.0/0', 'domain.net:8000'] # direct connections with the correct Host header
 ],
+```
+
+`MEDIALIBRARIES` - hash of library to folder path mapping. The libraries `movies` and `tv` are used by the video subsystem.
+```perl
+'MEDIALIBRARIES' => {
+    'movies' => "/path/to/movies",
+    'tv'     => "/path/to/tv",
+    'music' => "/path/to/music",
+}
+```
+
+`MusicLibrary` - Music subsystem / plugin settings
+```perl
+'MusicLibrary' => {
+    'enabled' => 1,
+    # multiple sources may be specified
+	'sources' => [
+        { 'type' => 'local', 'folder' => '/path/to/music'},
+	]
+}
 ```
 
 ## Development
@@ -111,5 +133,13 @@ The video player is accessed with `/video`.
 
 For convenience `M3U` playlist files are provided to ease streaming outside of the browser in software such as vlc. Note, this may only work well on LAN.
 
+#### Kodi / XBMC
+
+The video subsystem is accessible via http sources in kodi. MHFS attempts to provide your libraries with kodi's desired naming structures, so that it will be organized with metadata accurately.
+
+`/video/kodi/movies/` - Kodi formatted *Movies* directory listing
+
+`/video/kodi/tv/` - Kodi formatted *TV* directory listing
+
 ## License
-Unless otherwise noted GPL v2.0, see LICENSE. Just ask if you need something different (email is in `git log`).
+Unless otherwise noted GPL v2.0, see LICENSE. Contact me if you need something different (email is in `git log`).
