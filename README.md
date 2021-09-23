@@ -82,9 +82,9 @@ Settings are loaded from [$XDG_CONFIG_DIRS](https://specifications.freedesktop.o
 'MusicLibrary' => {
     'enabled' => 1,
     # multiple sources may be specified
-	'sources' => [
+    'sources' => [
         { 'type' => 'local', 'folder' => '/path/to/music'},
-	]
+    ]
 }
 ```
 
