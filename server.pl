@@ -2891,19 +2891,35 @@ package MusicLibrary {
             if(-e $tlossy ) {
                 $is_flac = 1;
                 $file = $tlossy;
+
+                if(defined LOCK_GET_LOCKDATA($tlossy)) {
+                     # unlikely
+                    say "SendLocalTrack: lossy flac exists and is locked 503";
+                    $request->Send503;
+                    return;
+                }
             }
             else {    
                 make_path($tmpfileloc, {chmod => 0755});
                 my @cmd = ('ffmpeg', '-i', $file, '-c:a', 'flac', '-sample_fmt', 's16', $tlossy);
                 my $buf;
-                $request->{'process'} = HTTP::BS::Server::Process->new(\@cmd, $evp, {
-                'SIGCHLD' => sub {
-                    SendLocalTrack($request,$tlossy);                
-                },                    
-                'STDERR' => sub {
-                    my ($terr) = @_;
-                    read($terr, $buf, 4096);                                     
-                }}); 
+                if(LOCK_WRITE($tlossy)) {
+                    $request->{'process'} = HTTP::BS::Server::Process->new(\@cmd, $evp, {
+                    'SIGCHLD' => sub {
+                        UNLOCK_WRITE($tlossy);
+                        SendLocalTrack($request,$tlossy);
+                    },
+                    'STDERR' => sub {
+                        my ($terr) = @_;
+                        read($terr, $buf, 4096);
+                    }});
+                }
+                else {
+                    # unlikely
+                    say "SendLocalTrack: lossy flac is locked 503";
+                    $request->Send503;
+                }
+
                 return;
             }            
         }
@@ -2982,17 +2998,24 @@ package MusicLibrary {
         my @cmd = ('sox', $file, '-G', '-b', $bitdepth, $outfile, 'rate', '-v', '-L', $desiredrate, 'dither');
         say "cmd: " . join(' ', @cmd);
 
-        $request->{'process'} = HTTP::BS::Server::Process->new(\@cmd, $evp, {
-        'SIGCHLD' => sub {
-            # BUG
-            # files isn't necessarily flushed to disk on SIGCHLD. filesize can be wrong
-            SendTrack($request, $outfile);                                      
-        },                    
-        'STDERR' => sub {
-            my ($terr) = @_;
-            my $buf;
-            read($terr, $buf, 4096);                                     
-        }});  
+        if(LOCK_WRITE($outfile)) {
+            $request->{'process'} = HTTP::BS::Server::Process->new(\@cmd, $evp, {
+            'SIGCHLD' => sub {
+                UNLOCK_WRITE($outfile);
+                # BUG? files isn't necessarily flushed to disk on SIGCHLD. filesize can be wrong
+                SendTrack($request, $outfile);
+            },
+            'STDERR' => sub {
+                my ($terr) = @_;
+                my $buf;
+                read($terr, $buf, 4096);
+            }});
+        }
+        else {
+            # unlikely
+            say "SendLocalTrack: sox is locked 503";
+            $request->Send503;
+        }
         return;
     }    
    
