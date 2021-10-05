@@ -7,7 +7,7 @@
 
 `git clone https://github.com/G4Vi/MHFS.git && cd MHFS`
 
-### Setup perl distribution
+### Setup perl
 Using system perl is possible, but not recommended.
 <details>
 <summary>Setup perlbrew distribution</summary>
@@ -23,7 +23,7 @@ Using system perl is possible, but not recommended.
 `cd /usr/include/x86_64-linux-gnu/ && h2ph -r -l . && cd sys && h2ph syscall.h && cd ABSPATHTOREPO` where `/usr/include/x86_64-linux-gnu` is the kernel header files and `ABSPATHTOREPO` is the absolute path to the repo used before.
 
 </details>
-OR
+OR<br>
 <details>
 <summary>Setup local::lib [TODO]</summary>
 </details>
@@ -33,10 +33,10 @@ OR
 
 `cpanm --installdeps .`
 
-### Install XS module (for server-side decoding and encoding) [optional]
+[Optional] Install ffmpeg, sox, and youtube-dl binaries.
 
-`libflac` is required to build the XS module for server-side decoding and encoding.
-
+<details>
+<summary>[Optional] Install libflac with headers [needed for server-side audio decoding and encoding] </summary> 
 <details>
 <summary>Build and install libflac inside MHFS::XS</summary>
 Download, configure, and make it:<br>
@@ -45,14 +45,20 @@ Download, configure, and make it:<br>
 
 `tar xvf flac-1.3.3.tar.xz && cd flac-1.3.3 && ./configure --enable-ogg=no && make`
 </details>
-OR
+OR<br>
+Install from your package manager i.e <code>apt-get install libflac-dev</code>.
+</details>
 
-Install from your package manager i.e `apt-get install libflac-dev`.
+### [Optional] Build XS module (for server-side decoding and encoding) [libflac required]
+
+`libflac` is required to build the XS module for server-side decoding and encoding. [See install info under *Install dependencies*]
 
 Build the XS module (from the root of the project)
 `make XS`
 
-### Add settings
+### Configure settings
+Start the server, `perl server.pl` to create the setting file [`settings.pl`].
+
 Settings are loaded from [$XDG_CONFIG_DIRS](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html)`/mhfs`, by default `$HOME/.config/mhfs`. If `settings.pl` is not found, it is created. Fill in your settings as needed.
 
 `HOST` - address to bind too, i.e. `'127.0.0.1'` for localhost or `'0.0.0.0'` for all interfaces.
@@ -88,14 +94,20 @@ Settings are loaded from [$XDG_CONFIG_DIRS](https://specifications.freedesktop.o
     ]
 }
 ```
+Timeouts are used to boot idle or non-responsive connections.
 
-## Development
+`recvrequestimeout` - maximum time [in seconds] to recieve an http request line and headers. Starts when no request is active on connection. default value: `TIMEOUT`
 
-emscripten is required to build wasm.  A full build is done with `make -j4`. A build without the XS extension can be done with `make -j4 noxs`
+`sendresponsetimeout` - maximum time [in seconds] allowed between `send`'s when sending an http response. default value: `TIMEOUT`
+
+`TIMEOUT` - the default timeout value [in seconds] for the timeouts. default value: `75`
 
 ## Run
 
 `perl server.pl`
+
+### Headless setup
+TODO: See `doc/mhfs.service.skel`
 
 ## Usage
 
@@ -141,6 +153,12 @@ The video subsystem is accessible via http sources in kodi. MHFS attempts to pro
 `/video/kodi/movies/` - Kodi formatted *Movies* directory listing
 
 `/video/kodi/tv/` - Kodi formatted *TV* directory listing
+
+## Development Info
+
+emscripten is required to build wasm.  A full build is done with `make -j4`. A build without the XS extension can be done with `make -j4 noxs`
+
+`./debug.pl` is provided to kill instances of MHFS, build MHFS [including emscripten and XS], and launch `server.pl`.
 
 ## License
 Unless otherwise noted GPL v2.0, see LICENSE. Contact me if you need something different (email is in `git log`).
