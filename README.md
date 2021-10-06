@@ -8,7 +8,7 @@
 `git clone https://github.com/G4Vi/MHFS.git && cd MHFS`
 
 ### Setup perl
-Using system perl is possible, but not recommended.
+Installing packages under system perl is not recommended. `perlbrew` installs perl completely seperately from system perl. `local::lib` still uses system perl, but allows libraries to be installed seperately. 
 <details>
 <summary>Setup perlbrew distribution</summary>
 
@@ -25,7 +25,11 @@ Using system perl is possible, but not recommended.
 </details>
 OR<br>
 <details>
-<summary>Setup local::lib [TODO]</summary>
+<summary>Setup local::lib</summary>
+<code>wget https://cpan.metacpan.org/authors/id/H/HA/HAARG/local-lib-2.000024.tar.gz && tar xvf local-lib-2.000024.tar.gz`</code><br>
+<code>cd local-lib-2.000024 && perl Makefile.PL --bootstrap</code><br>
+<code>eval $(perl -I$HOME/perl5/lib/perl5 -Mlocal::lib)</code><br>
+<code>curl -L https://cpanmin.us | perl - App::cpanminus</code>
 </details>
 
 
@@ -33,7 +37,12 @@ OR<br>
 
 `cpanm --installdeps .`
 
-[Optional] Install ffmpeg, sox, and youtube-dl binaries.
+[Optional] Install `ffmpeg` and `sox` somewhere into path. i.e. `apt-get install ffmpeg sox`
+- `ffmpeg` is used for transcoding in the MusicLibrary subsystem and for videos in the video subsystem.
+- `sox` is used for resampling in the MusicLibrary subsystem
+
+[Optional] Install `youtube-dl` to the MHFS bin dir `cd MHFS/bin && wget https://yt-dl.org/downloads/latest/youtube-dl`   
+- used for Youtube subsystem
 
 <details>
 <summary>[Optional] Install libflac with headers [needed for server-side audio decoding and encoding] </summary> 
