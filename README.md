@@ -1,5 +1,13 @@
 # MHFS - Media HTTP File Server
 #### Stream your own music and video library via your browser and standard media players.
+- HTTP/1.1 server [keepalive, byte serving, chunked encoding, and more]
+- server-side audio and video transcoding
+- Gapless streaming web audio player using AudioWorklet and [dr_flac](https://github.com/mackron/dr_libs/blob/master/dr_flac.h) with fallback players for older browsers
+- Kodi open directory interface for playing from kodi as http source [video only currently]
+- M3U8 playlist interface for easy streaming in video players such as vlc
+- [Incomplete] web video players to stream your movies and tv shows in the browser
+- automatic media library scanning
+- `youtube-dl` web interface
 
 ## Setup
 
@@ -28,6 +36,7 @@ OR<br>
 <summary>Setup local::lib</summary>
 <code>wget https://cpan.metacpan.org/authors/id/H/HA/HAARG/local-lib-2.000024.tar.gz && tar xvf local-lib-2.000024.tar.gz`</code><br>
 <code>cd local-lib-2.000024 && perl Makefile.PL --bootstrap</code><br>
+<code>make test && make install</code><br>
 <code>eval $(perl -I$HOME/perl5/lib/perl5 -Mlocal::lib)</code><br>
 <code>curl -L https://cpanmin.us | perl - App::cpanminus</code>
 </details>
@@ -41,7 +50,7 @@ OR<br>
 - `ffmpeg` is used for transcoding in the MusicLibrary subsystem and for videos in the video subsystem.
 - `sox` is used for resampling in the MusicLibrary subsystem
 
-[Optional] Install `youtube-dl` to the MHFS bin dir `cd MHFS/bin && wget https://yt-dl.org/downloads/latest/youtube-dl`   
+[Optional] Install `youtube-dl` to the MHFS bin dir `cd MHFS/bin && wget https://yt-dl.org/downloads/latest/youtube-dl && chmod +x youtube-dl`
 - used for Youtube subsystem
 
 <details>
@@ -115,7 +124,40 @@ Timeouts are used to boot idle or non-responsive connections.
 
 `perl server.pl`
 
-### Headless setup
+### Advanced Setup / Running as a service
+
+#### Reverse Proxy
+To add TLS and allows access without entering a port in the URL, reverse proxying is recommended. Instructions for `apache2`, but it's similar for nginx:
+Setup [Let's Encrypt certbot](https://certbot.eff.org/instructions) to manage TLS if not already setup. Add the following to your site config i.e. `/etc/apache2/sites-available/000-default-le-ssl.conf` replacing `mhfs` with the name you want on your site. Keep the trailing slashes [or absense of] the same.
+```apache2
+RewriteEngine On
+RewriteRule ^/mhfs$ mhfs/ [R,L]
+<Location "/mhfs/">
+  AddOutputFilterByType DEFLATE application/json
+  ProxyPass "http://127.0.0.1:8000/"
+</Location>
+```
+Reload apache2 `# service apache2 reload`
+
+#### Setup account to run MHFS
+`# adduser --system mhfs` - create the daemon user and home directory
+
+`# chown -R YOURUSERNAME:YOURUSERNAME /home/mhfs` - allow your account to manage mhfs
+
+Setup mhfs using YOUR account (NOT the mhfs acc or root) inside of `/home/mhfs`.
+
+For `local::lib`:
+use `perl Makefile.PL --bootstrap=/home/mhfs/perl5` for the local lib build command and `eval "$(perl -I/home/mhfs/perl5/lib/perl5 -Mlocal::lib=/home/mhfs/perl5)"` to activate.
+
+Run MHFS, move config under `mhfs` user, and configure as needed.
+`perl server.pl`, Control-C. `mkdir -p /home/mhfs/.config && mv ~/.config/mhfs /home/mhfs/.config`
+
+Allow MHFS to write temp files and update youtube-dl. `# chown -R mhfs:nogroup /home/mhfs/MHFS/public_html/tmp /home/mhfs/MHFS/bin/youtube-dl`
+
+Switch to the mhfs user: `su - mhfs -s /bin/bash`. Run mhfs: `perl server.pl`.  Verify it works in a browser.
+
+#### Setup as systemd service
+
 TODO: See `doc/mhfs.service.skel`
 
 ## Usage

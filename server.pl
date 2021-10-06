@@ -3719,6 +3719,7 @@ package MHFS::Settings {
         chop $settingscontents;
         chop $settingscontents;
         $settingscontents .= ";\n\n\$SETTINGS;\n";
+        system('mkdir', '-p', dirname($filepath)) == 0 or die("failed to make settings folder");
         write_file($filepath,  $settingscontents);
     }
 

@@ -10,6 +10,7 @@ all: CFLAGS += -O3
 all: $(TARGET)
 
 $(TARGET): $(SRCDIR)/drflac_cache.c
+	mkdir -p $(OUTDIR)
 	$(CC) $(CFLAGS) -o $@ $^
 
 debug: CFLAGS += -O0 -g4 --source-map-base ./src/ -s SAFE_HEAP=1
