@@ -3847,6 +3847,7 @@ package MHFS::Settings {
 };
 
 package App::MHFS; #Media Http File Server
+use version; our $VERSION = version->declare("v0.0.0");
 unless (caller) {
 use strict; use warnings;
 use feature 'say';

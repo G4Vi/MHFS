@@ -157,8 +157,14 @@ Allow MHFS to write temp files and update youtube-dl. `# chown -R mhfs:nogroup /
 Switch to the mhfs user: `su - mhfs -s /bin/bash`. Run mhfs: `perl server.pl`.  Verify it works in a browser.
 
 #### Setup as systemd service
+A sample service set to use the local::lib is provided.
 
-TODO: See `doc/mhfs.service.skel`
+```bash
+cp doc/mhfs.service.skel /etc/systemd/system/mhfs.service
+systemctl daemon-reload
+systemctl enable mhfs.service
+systemctl start mhfs.service
+```
 
 ## Usage
 
