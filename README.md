@@ -11,12 +11,26 @@
 
 ## Setup
 
-### Grab the repo 
+### Download MHFS
 
-`git clone https://github.com/G4Vi/MHFS.git && cd MHFS`
+Download from [releases](https://github.com/G4Vi/MHFS/releases) (compiled wasm included).<br>
+or<br>
+Clone `git clone https://github.com/G4Vi/MHFS.git` (emscripten required to build web audio player wasm).
+
+Both options require a c compiler to build perl XS modules and `tarsize`.
 
 ### Setup perl
-Installing packages under system perl is not recommended. `perlbrew` installs perl completely seperately from system perl. `local::lib` still uses system perl, but allows libraries to be installed seperately. 
+Installing packages under system perl is not recommended. `local::lib` still uses system perl, but allows libraries to be installed seperately. The instructions here will use `local::lib`, but `perlbrew` can be used instead to install with it's own  perl.
+<details>
+<summary>Setup local::lib</summary>
+NOTE: if installing to run as another user, see <a href="#setup-account-to-run-mhfs">Advanced Setup/Setup account</a> <code>local::lib</code> info.
+<code>wget https://cpan.metacpan.org/authors/id/H/HA/HAARG/local-lib-2.000024.tar.gz && tar xvf local-lib-2.000024.tar.gz`</code><br>
+<code>cd local-lib-2.000024 && perl Makefile.PL --bootstrap</code><br>
+<code>make test && make install</code><br>
+<code>eval $(perl -I$HOME/perl5/lib/perl5 -Mlocal::lib)</code><br>
+<code>curl -L https://cpanmin.us | perl - App::cpanminus</code>
+</details>
+or<br>
 <details>
 <summary>Setup perlbrew distribution</summary>
 
@@ -30,15 +44,6 @@ Installing packages under system perl is not recommended. `perlbrew` installs pe
 
 `cd /usr/include/x86_64-linux-gnu/ && h2ph -r -l . && cd sys && h2ph syscall.h && cd ABSPATHTOREPO` where `/usr/include/x86_64-linux-gnu` is the kernel header files and `ABSPATHTOREPO` is the absolute path to the repo used before.
 
-</details>
-OR<br>
-<details>
-<summary>Setup local::lib</summary>
-<code>wget https://cpan.metacpan.org/authors/id/H/HA/HAARG/local-lib-2.000024.tar.gz && tar xvf local-lib-2.000024.tar.gz`</code><br>
-<code>cd local-lib-2.000024 && perl Makefile.PL --bootstrap</code><br>
-<code>make test && make install</code><br>
-<code>eval $(perl -I$HOME/perl5/lib/perl5 -Mlocal::lib)</code><br>
-<code>curl -L https://cpanmin.us | perl - App::cpanminus</code>
 </details>
 
 

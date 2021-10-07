@@ -10,22 +10,21 @@ my $include = '';
 my $link_libFLAC = '-lFLAC';
 my $myextlib = '';
 
-
-my $useselflibflac = 1;
-if($useselflibflac) {
-    $include   = "-Ithirdparty/flac-1.3.3/include $include";
-    
-    #$link_libFLAC = '-Lthirdparty/flac-1.3.3/src/libFLAC/.libs -l:libFLAC-static.a'
-    
-    #$link_libFLAC = '-l:libFLAC-static.a';
-    #$lddlflags = '-L'. abs_path(dirname($0)).'/thirdparty/flac-1.3.3/src/libFLAC/.libs ' . $lddlflags;
-
+# check for libflac inside of MHFS::XS otherwise attempt to use system libflac
+my $selfLibFLACInclude = 'thirdparty/flac-1.3.3/include';
+my $selfLibFLACStaticLib = 'thirdparty/flac-1.3.3/src/libFLAC/.libs/libFLAC-static.a';
+my $usingSelfLibFLAC = 0; # change to 1 to force trying to use self libFLAC
+if(! -d $selfLibFLACInclude) {
+    die("Cannot find \$selfLibFLACInclude: $selfLibFLACInclude") if($usingSelfLibFLAC);
+    print "Using system libFLAC\n";
+}
+else {
+    die("Cannot find \$selfLibFLACStaticLib: $selfLibFLACStaticLib") if(! -f $selfLibFLACStaticLib);
+    $usingSelfLibFLAC = 1;
+    print "Using self libFLAC\n";
+    $include   = "-I$selfLibFLACInclude $include";
     $link_libFLAC = '';
-    $myextlib = 'thirdparty/flac-1.3.3/src/libFLAC/.libs/libFLAC-static.a';
-
-    #$lddlflags = '-Lthirdparty/flac-1.3.3/src/libFLAC/.libs -Wl,-Bstatic -lFLAC ' . $lddlflags;
-
-    #$lddlflags = '-Wl,-rpath=' . abs_path(dirname($0)).'/thirdparty/flac-1.3.3/src/libFLAC/.libs '. $lddlflags;
+    $myextlib = $selfLibFLACStaticLib;
 }
 
 WriteMakefile(
