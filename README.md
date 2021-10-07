@@ -80,18 +80,10 @@ Install from your package manager i.e <code>apt-get install libflac-dev</code>.
 `make -j4` - To build everything including the wasm for the web audio players. [emscripten required] [Highly recommended if you cloned]
 
 `make` targets:
-- `XS` module - [Optional] used for server-side decoding and encoding
+- `XS` module - [Optional] used for server-side decoding and encoding [libflac with headers required]
 - `tarsize` - used to quickly compute the size of a tar before it's built in order to provide an accurate `Content-Length` of a tar download.
 - `music_worklet` - AudioWorklet based gapless web audio player [emscripten required]
 - `music_inc` - fallback web audio player [emscripten required]
-
-
-
- so
- to build optional XS module and tarsize library. XS module is used for server-side decoding and encoding. `tarsize` is used to quickly compute the size of a tar before it's built in order to provide an accurate `Content-Length` of a tar download.
-
-If you cloned, the wasm needs to be built for the web audio players. emscripten is required to build it.
-`make -j4`
 
 ### Configure settings
 Start the server, `perl server.pl` to create the setting file [`settings.pl`].
