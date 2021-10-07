@@ -19,7 +19,7 @@ cd ..
 
 RELNAME="MHFS-$1"
 
-mv MHFS "$RELNAME"
+#mv MHFS "$RELNAME"
 
-tar -czf "$RELNAME.tar.gz" "$RELNAME"
+tar -czf "$RELNAME.tar.gz" "MHFS" --owner=0 --group=0
 

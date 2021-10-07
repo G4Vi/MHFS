@@ -13,7 +13,7 @@
 
 ### Download MHFS
 
-Download from [releases](https://github.com/G4Vi/MHFS/releases) (compiled wasm included).<br>
+Download from [releases](https://github.com/G4Vi/MHFS/releases) (compiled wasm included) and extract.<br>
 or<br>
 Clone `git clone https://github.com/G4Vi/MHFS.git` (emscripten required to build web audio player wasm).
 
@@ -23,12 +23,13 @@ Both options require a c compiler to build perl XS modules and `tarsize`.
 Installing packages under system perl is not recommended. `local::lib` still uses system perl, but allows libraries to be installed seperately. The instructions here will use `local::lib`, but `perlbrew` can be used instead to install with it's own  perl.
 <details>
 <summary>Setup local::lib</summary>
-NOTE: if installing to run as another user, see <a href="#setup-account-to-run-mhfs">Advanced Setup/Setup account</a> <code>local::lib</code> info.
-<code>wget https://cpan.metacpan.org/authors/id/H/HA/HAARG/local-lib-2.000024.tar.gz && tar xvf local-lib-2.000024.tar.gz`</code><br>
-<code>cd local-lib-2.000024 && perl Makefile.PL --bootstrap</code><br>
-<code>make test && make install</code><br>
-<code>eval $(perl -I$HOME/perl5/lib/perl5 -Mlocal::lib)</code><br>
-<code>curl -L https://cpanmin.us | perl - App::cpanminus</code>
+NOTE: If installing to run as another user, see <a href="#setup-account-to-run-mhfs">Advanced Setup/Setup account</a> <code>local::lib</code> info.
+
+`wget https://cpan.metacpan.org/authors/id/H/HA/HAARG/local-lib-2.000024.tar.gz && tar xvf local-lib-2.000024.tar.gz`<br>
+`cd local-lib-2.000024 && perl Makefile.PL --bootstrap`<br>
+`make test && make install`<br>
+`eval $(perl -I$HOME/perl5/lib/perl5 -Mlocal::lib)`<br>
+`curl -L https://cpanmin.us | perl - App::cpanminus`
 </details>
 or<br>
 <details>
@@ -72,12 +73,25 @@ OR<br>
 Install from your package manager i.e <code>apt-get install libflac-dev</code>.
 </details>
 
-### [Optional] Build XS module (for server-side decoding and encoding) [libflac required]
+### Compile C code
 
-`libflac` is required to build the XS module for server-side decoding and encoding. [See install info under *Install dependencies*]
+`make XS tarsize` - If you downloaded a release tarball as the wasm is already compiled.
 
-Build the XS module (from the root of the project)
-`make XS`
+`make -j4` - To build everything including the wasm for the web audio players. [emscripten required] [Highly recommended if you cloned]
+
+`make` targets:
+- `XS` module - [Optional] used for server-side decoding and encoding
+- `tarsize` - used to quickly compute the size of a tar before it's built in order to provide an accurate `Content-Length` of a tar download.
+- `music_worklet` - AudioWorklet based gapless web audio player [emscripten required]
+- `music_inc` - fallback web audio player [emscripten required]
+
+
+
+ so
+ to build optional XS module and tarsize library. XS module is used for server-side decoding and encoding. `tarsize` is used to quickly compute the size of a tar before it's built in order to provide an accurate `Content-Length` of a tar download.
+
+If you cloned, the wasm needs to be built for the web audio players. emscripten is required to build it.
+`make -j4`
 
 ### Configure settings
 Start the server, `perl server.pl` to create the setting file [`settings.pl`].
@@ -221,6 +235,9 @@ The video subsystem is accessible via http sources in kodi. MHFS attempts to pro
 emscripten is required to build wasm.  A full build is done with `make -j4`. A build without the XS extension can be done with `make -j4 noxs`
 
 `./debug.pl` is provided to kill instances of MHFS, build MHFS [including emscripten and XS], and launch `server.pl`.
+
+## Thanks
+[Tejas Rao](https://github.com/trao1011) for source code review early on. [mackron](https://github.com/mackron) for great audio libraries and answering questions.
 
 ## License
 Unless otherwise noted GPL v2.0, see LICENSE. Contact me if you need something different (email is in `git log`).
