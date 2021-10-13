@@ -3991,6 +3991,10 @@ my @routes = (
                 kodi_movies($request, $SETTINGS->{'MEDIALIBRARIES'}{'movies'}, $kodimoviedir);
                 return;
             }
+            elsif(rindex($request->{'path'}{'unsafepath'}, '/video/hls', 0) == 0) {
+                hls($request);
+                return;
+            }
             $request->Send404;
         }
     ],
@@ -4051,6 +4055,111 @@ my @routes = (
 # finally start the server   
 my $server = HTTP::BS::Server->new($SETTINGS, \@routes, \@plugins);
 
+# hls on demand
+sub hls {
+    my ($request) = @_;
+
+    my $extpos = rindex($request->{'path'}{'unsafecollapse'}, '/');
+    if($extpos == -1) {
+        $request->Send404;
+        return;
+    }
+
+    # find the video file it refers to
+    my $withoutlastext = substr($request->{'path'}{'unsafecollapse'}, 0, $extpos);
+    say "withoutext: $withoutlastext";
+    my %libraries = (
+        "/video/hls/tv/" => $SETTINGS->{'MEDIALIBRARIES'}{'tv'},
+        "/video/hls/movies/" => $SETTINGS->{'MEDIALIBRARIES'}{'movies'}
+    );
+    my $fileabspath;
+    foreach my $lib (keys %libraries) {
+        next if(rindex($withoutlastext, $lib, length($lib)) == -1);
+        my $tocheck = $libraries{$lib} .'/'. substr($withoutlastext, length($lib));
+        say "tocheck $tocheck";
+        my $abspath = abs_path($tocheck);
+        last if(! $abspath);
+        last if(rindex($abspath, $libraries{$lib}, 0) != 0);
+        $fileabspath = $abspath;
+    }
+    if(! $fileabspath) {
+        $request->Send404;
+        return;
+    }
+
+    # only mkv supported right now
+    if(index($fileabspath, '.mkv', length($fileabspath)-4) == -1) {
+        $request->Send404;
+        return;
+    }
+    my $fileinfo = { 'fileabspath' => $fileabspath, 'segmentlength' => 5};
+
+    if(index($request->{'path'}{'unsafecollapse'}, '.m3u8', length($request->{'path'}{'unsafecollapse'})-5) != -1) {
+        hls_m3u8($request, $fileinfo);
+        return;
+    }
+    elsif($request->{'path'}{'unsafecollapse'} =~ /(\d{3})\.ts$/) {
+        $fileinfo->{'segmentnumber'} = $1;
+        hls_ts($request, $fileinfo);
+        return;
+    }
+
+
+    $request->Send404;
+    return;
+}
+
+sub hls_ts {
+    my ($request, $fileinfo) = @_;
+    my $seg = $fileinfo->{'segmentnumber'};
+    my $seconds = $seg * $fileinfo->{'segmentlength'};
+    say "seg: $seg seconds: $seconds";
+
+    my $hours = int($seconds / 3600);
+    $seconds -= ($hours * 3600);
+    my $minutes = int($seconds / 60);
+    $seconds -= ($minutes*60);
+    my $timestring = sprintf "%02d:%02d:%02d", $hours, $minutes, $seconds;
+    say "timestring $timestring";
+    my @command = ('ffmpeg', '-ss', $timestring, '-i', $fileinfo->{'fileabspath'}, '-t', $fileinfo->{'segmentlength'}, '-c:a', 'copy', '-c:v', 'libx264', '-f', 'mpegts', '-mpegts_copyts', '1', '-');
+    my $evp = $request->{'client'}{'server'}{'evp'};
+    $request->{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
+    HTTP::BS::Server::Process->new_output_process($evp, \@command, sub {
+        my ($output, $error) = @_;
+        $request->SendLocalBuf($output, 'video/mp2t');
+    });
+}
+
+sub hls_m3u8 {
+    my ($request, $fileinfo) = @_;
+    my $fileabspath = $fileinfo->{'fileabspath'};
+    my $segmentlength = $fileinfo->{'segmentlength'};
+
+    my $duration = matroska_get_duration($fileabspath);
+    if(! $duration) {
+        $request->Send404;
+    }
+
+
+
+    my $m3u8 =
+'#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:'.$segmentlength.'
+#EXT-X-MEDIA-SEQUENCE:0
+'   ;
+
+    my $i = 0;
+    while($duration > 0) {
+        my $time = ($duration > $segmentlength) ? $segmentlength : $duration;
+        $m3u8 .= sprintf "#EXTINF:%.6f,\n%03d.ts\n", $time, $i;
+        $duration -= $segmentlength;
+        $i++;
+    }
+    $m3u8 .= "#EXT-X-ENDLIST\n";
+    $request->{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
+    $request->SendLocalBuf($m3u8, 'application/x-mpegURL');
+}
 
 # format tv library for kodi http
 sub kodi_tv {
@@ -4525,7 +4634,7 @@ sub read_and_parse_vint_from_buf {
 
     my $width;
     my $value = read_vint_from_buf($bufref, \$width);
-    defined($value) or return undef;    
+    defined($value) or return undef;
 
     my $andval = 0xFF >> $width;
     for(my $wcopy = $width; $wcopy > 1; $wcopy--) {
@@ -4848,6 +4957,93 @@ sub flac_read_to_audio {
         last if($done);
     }
     return {'streaminfo' => $streaminfo, 'buf' => \$buf};
+}
+
+sub parse_uinteger_str {
+    my ($str) = @_;
+    my @values = unpack('C'x length($str), $str);
+    my $value = 0;
+    my $shift = 0;
+    while(@values) {
+        $value |= ((pop @values) << $shift);
+        $shift += 8;
+    }
+    return $value;
+}
+
+sub parse_float_str {
+    my ($str) = @_;
+    return 0 if(length($str) == 0);
+
+    return unpack('f>', $str) if(length($str) == 4);
+
+    return unpack('d>', $str) if(length($str) == 8);
+
+    return undef;
+}
+
+sub matroska_get_duration {
+    my ($videofile) = @_;
+    my $ebml = ebml_open($videofile);
+    if(! $ebml) {
+        return undef;
+    }
+
+    # find segment
+    my $foundsegment = ebml_find_id($ebml, EBMLID_Segment);
+    if(!$foundsegment) {
+        return undef;
+    }
+    say "Found segment";
+    my %segment = (id => EBMLID_Segment, 'infsize' => 1, 'elms' => []);
+
+    # find segment info
+    my $foundsegmentinfo = ebml_find_id($ebml, EBMLID_SegmentInfo);
+    if(!$foundsegmentinfo) {
+        return undef;
+    }
+    say "Found segment info";
+    my %segmentinfo = (id => EBMLID_SegmentInfo, elms => []);
+
+    # find TimestampScale
+    my $tselm = ebml_find_id($ebml, EBMLID_TimestampScale);
+    if(!$tselm) {
+        return undef;
+    }
+    say "Found ts elm";
+    my $tsbinary;
+    if(!ebml_read($ebml, $tsbinary, $tselm->{'size'})) {
+        return undef;
+    }
+
+    Dump($tsbinary);
+    my $tsval = parse_uinteger_str($tsbinary);
+    defined($tsval) or return undef;
+    say "tsval: $tsval";
+
+    if(!ebml_skip($ebml)) {
+        return undef;
+    }
+    push @{$segmentinfo{'elms'}}, {id => EBMLID_TimestampScale, data => $tsbinary};
+
+    # find Duration
+    my $durationelm = ebml_find_id($ebml, EBMLID_Duration);
+    if(!$durationelm) {
+        return undef;
+    }
+    say "Found duration elm";
+    my $durbin;
+    if(!ebml_read($ebml, $durbin, $durationelm->{'size'})) {
+        return undef;
+    }
+    Dump($durbin);
+    my $scaledduration = parse_float_str($durbin);
+
+    say "scaledduration $scaledduration";
+
+    my $duration = ($tsval * $scaledduration)/1000000000;
+    say "duration: $duration";
+    return $duration;
 }
 
 sub video_matroska {
