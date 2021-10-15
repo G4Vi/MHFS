@@ -4121,7 +4121,9 @@ sub hls_ts {
     $seconds -= ($minutes*60);
     my $timestring = sprintf "%02d:%02d:%02d", $hours, $minutes, $seconds;
     say "timestring $timestring";
-    my @command = ('ffmpeg', '-ss', $timestring, '-i', $fileinfo->{'fileabspath'}, '-t', $fileinfo->{'segmentlength'}, '-c:a', 'copy', '-c:v', 'libx264', '-f', 'mpegts', '-mpegts_copyts', '1', '-');
+    # '-muxpreload', '10', '-muxdelay', '10',
+    # TODO attempt to use ffmpeg to adjust start timestamps
+    my @command = ('ffmpeg', '-ss', $timestring, '-i', $fileinfo->{'fileabspath'}, '-t', $fileinfo->{'segmentlength'}, '-an', '-c:v', 'libx264', '-f', 'mpegts', '-mpegts_copyts', '1', '-');
     my $evp = $request->{'client'}{'server'}{'evp'};
     $request->{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
     HTTP::BS::Server::Process->new_output_process($evp, \@command, sub {
