@@ -4109,12 +4109,13 @@ sub hls {
     return;
 }
 
+# ffmpeg -i ABC.mkv  -map v:0 -c:v libx264 -map a:0 -c:a aac -b:a 128k -ac 2 -f hls -hls_time 5 -master_pl_name master.m3u8 -var_stream_map "a:0,agroup:audio128 v:0,agroup:audio128" stream_%v.m3u8
 sub hls_ts {
     my ($request, $fileinfo) = @_;
     my $seg = $fileinfo->{'segmentnumber'};
     my $seconds = $seg * $fileinfo->{'segmentlength'};
     say "seg: $seg seconds: $seconds";
-
+    my $ogseconds = $seconds;
     my $hours = int($seconds / 3600);
     $seconds -= ($hours * 3600);
     my $minutes = int($seconds / 60);
@@ -4123,7 +4124,7 @@ sub hls_ts {
     say "timestring $timestring";
     # '-muxpreload', '10', '-muxdelay', '10',
     # TODO attempt to use ffmpeg to adjust start timestamps
-    my @command = ('ffmpeg', '-ss', $timestring, '-i', $fileinfo->{'fileabspath'}, '-t', $fileinfo->{'segmentlength'}, '-an', '-c:v', 'libx264', '-f', 'mpegts', '-mpegts_copyts', '1', '-');
+    my @command = ('ffmpeg', '-ss', $timestring, '-i', $fileinfo->{'fileabspath'}, '-t', $fileinfo->{'segmentlength'}, '-an', '-c:v', 'libx264', '-f', 'mpegts', '-avoid_negative_ts', 'disabled', '-output_ts_offset',  $ogseconds, '-');
     my $evp = $request->{'client'}{'server'}{'evp'};
     $request->{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
     HTTP::BS::Server::Process->new_output_process($evp, \@command, sub {
