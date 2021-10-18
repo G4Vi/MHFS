@@ -4073,14 +4073,17 @@ sub hls {
         "/video/hls/movies/" => $SETTINGS->{'MEDIALIBRARIES'}{'movies'}
     );
     my $fileabspath;
+    my $tmpname;
     foreach my $lib (keys %libraries) {
         next if(rindex($withoutlastext, $lib, length($lib)) == -1);
-        my $tocheck = $libraries{$lib} .'/'. substr($withoutlastext, length($lib));
+        my $tname = substr($withoutlastext, length($lib));
+        my $tocheck = $libraries{$lib} .'/'. $tname;
         say "tocheck $tocheck";
         my $abspath = abs_path($tocheck);
         last if(! $abspath);
         last if(rindex($abspath, $libraries{$lib}, 0) != 0);
         $fileabspath = $abspath;
+        $tmpname = $tname;
     }
     if(! $fileabspath) {
         $request->Send404;
@@ -4092,24 +4095,30 @@ sub hls {
         $request->Send404;
         return;
     }
-    my $fileinfo = { 'fileabspath' => $fileabspath, 'segmentlength' => 5};
+    my $fileinfo = { 'fileabspath' => $fileabspath, 'segmentlength' => 5, 'tmpname' => $tmpname};
 
     if(index($request->{'path'}{'unsafecollapse'}, '.m3u8', length($request->{'path'}{'unsafecollapse'})-5) != -1) {
         hls_m3u8($request, $fileinfo);
         return;
     }
-    elsif($request->{'path'}{'unsafecollapse'} =~ /(\d{3})\.ts$/) {
+    elsif($request->{'path'}{'unsafecollapse'} =~ /\/(\d{3})\.ts$/) {
         $fileinfo->{'segmentnumber'} = $1;
         hls_ts($request, $fileinfo);
         return;
     }
-
+    elsif($request->{'path'}{'unsafecollapse'} =~ /\/(audio\d+\.ts)$/) {
+        my $pfile = $request->{'client'}{'server'}{'settings'}{'TMPDIR'} . '/'.$fileinfo->{'tmpname'} . '/'.$1;
+        say "pfile $pfile";
+        $request->{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
+        $request->SendLocalFile($pfile, 'audio/mp2t');
+        return;
+    }
 
     $request->Send404;
     return;
 }
 
-# ffmpeg -i ABC.mkv  -map v:0 -c:v libx264 -map a:0 -c:a aac -b:a 128k -ac 2 -f hls -hls_time 5 -master_pl_name master.m3u8 -var_stream_map "a:0,agroup:audio128 v:0,agroup:audio128" stream_%v.m3u8
+# ffmpeg -i ABC.mkv  -map v:0 -c:v libx264 -map a:0 -c:a aac -b:a 128k -ac 2 -f hls -hls_time 5 -hls_list_size 0 -master_pl_name master.m3u8 -var_stream_map "a:0,agroup:audio128 v:0,agroup:audio128" stream_%v.m3u8
 sub hls_ts {
     my ($request, $fileinfo) = @_;
     my $seg = $fileinfo->{'segmentnumber'};
@@ -4133,8 +4142,67 @@ sub hls_ts {
     });
 }
 
+
+##EXT-X-STREAM-INF:BANDWIDTH=14000000,AUDIO="group_audio128"
+#audio.m3u8
+sub hls_master_m3u8 {
+    my ($request, $fileinfo) = @_;
+    my $m3u8 =
+'#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="group_audio128",NAME="audio_0",DEFAULT=YES,URI="audio.m3u8"
+
+
+#EXT-X-STREAM-INF:BANDWIDTH=14000000,AUDIO="group_audio128"
+video.m3u8
+'   ;
+    $request->{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
+    $request->SendLocalBuf($m3u8, 'application/x-mpegURL');
+}
+
+sub hls_audio_m3u8 {
+    my ($request, $fileinfo) = @_;
+    $request->{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
+    my $pdir = $request->{'client'}{'server'}{'settings'}{'TMPDIR'} . '/'.$fileinfo->{'tmpname'};
+    my $pfile = $pdir.'/audio.m3u8';
+    say "pfile $pfile";
+    if(! -f $pfile) {
+        system('mkdir', '-p', $pdir) == 0 or die('unable to make destdir');
+        my @command = ('ffmpeg', '-i', $fileinfo->{'fileabspath'}, '-vn', '-c', 'copy', '-f', 'hls', '-hls_time', '5', '-hls_list_size', '0', $pfile);
+        my $evp = $request->{'client'}{'server'}{'evp'};
+
+        HTTP::BS::Server::Process->new_output_process($evp, \@command, sub {
+            my ($output, $error) = @_;
+            $request->SendLocalFile($pfile, 'video/mp2t');
+        });
+        return;
+    }
+    $request->SendLocalFile($pfile, 'video/mp2t');
+}
+
 sub hls_m3u8 {
     my ($request, $fileinfo) = @_;
+    my $masterplname = 'master.m3u8';
+    my $audioplname = 'audio.m3u8';
+    my $videoplname = 'video.m3u8';
+    if(index($request->{'path'}{'unsafecollapse'}, $masterplname, -length($masterplname)) != -1) {
+        say "masterpl";
+        hls_master_m3u8($request, $fileinfo);
+        return;
+    }
+    elsif(index($request->{'path'}{'unsafecollapse'}, $audioplname, -length($audioplname)) != -1) {
+        say "audioplname";
+        hls_audio_m3u8($request, $fileinfo);
+        return;
+    }
+    elsif(index($request->{'path'}{'unsafecollapse'}, $videoplname, -length($videoplname)) == -1) {
+        say "unknown playlistname";
+        $request->Send404;
+        return;
+    }
+    say "videoplname";
+
+
     my $fileabspath = $fileinfo->{'fileabspath'};
     my $segmentlength = $fileinfo->{'segmentlength'};
 
