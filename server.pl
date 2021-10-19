@@ -4106,11 +4106,13 @@ sub hls {
         hls_ts($request, $fileinfo);
         return;
     }
-    elsif($request->{'path'}{'unsafecollapse'} =~ /\/(audio\d+\.ts)$/) {
-        my $pfile = $request->{'client'}{'server'}{'settings'}{'TMPDIR'} . '/'.$fileinfo->{'tmpname'} . '/'.$1;
-        say "pfile $pfile";
-        $request->{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
-        $request->SendLocalFile($pfile, 'audio/mp2t');
+    elsif($request->{'path'}{'unsafecollapse'} =~ /\/audio(\d+)\.aac$/) {
+        #my $pfile = $request->{'client'}{'server'}{'settings'}{'TMPDIR'} . '/'.$fileinfo->{'tmpname'} . '/'.$1;
+        #say "pfile $pfile";
+        #$request->{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
+        #$request->SendLocalFile($pfile, 'audio/mp2t');
+        $fileinfo->{'segmentnumber'} = $1;
+        hls_audio_aac($request, $fileinfo);
         return;
     }
 
@@ -4160,24 +4162,134 @@ video.m3u8
     $request->SendLocalBuf($m3u8, 'application/x-mpegURL');
 }
 
+sub hls_audio_get_id3 {
+    my ($time) = @_;
+
+    my $tstime = int($time*90000)+126000;
+    #my $tstime = int(($time*90000)+0.5);
+    my $packedtstime = $tstime & 0x1FFFFFFFF; # 33 bits
+
+    my $id3 = 'ID3'.pack('CCCCCCC', 0x4, 0, 0, 0, 0, 0, 0x3F).
+    'PRIV'.pack('CCCCCC', 0, 0, 0, 0x35, 0, 0).
+    'com.apple.streaming.transportStreamTimestamp'.pack('C', 0).
+    pack('Q>', $packedtstime);
+
+    return $id3;
+}
+
+sub hls_audio_aac {
+    my ($request, $fileinfo) = @_;
+    my $seg = $fileinfo->{'segmentnumber'};
+    my $seconds = $seg * $fileinfo->{'segmentlength'};
+    my $sinfo = hls_audio_get_seg($seg);
+    my $startstr = $sinfo->{'startstr'};
+    my $endstr   = $sinfo->{'endstr'};
+    my @command = ('ffmpeg', '-i', $fileinfo->{'fileabspath'}, '-ss', $startstr, '-to', $endstr, '-vn', '-c', 'copy', '-f', 'adts', '-');
+    my $evp = $request->{'client'}{'server'}{'evp'};
+    $request->{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
+    HTTP::BS::Server::Process->new_output_process($evp, \@command, sub {
+        my ($output, $error) = @_;
+        $request->SendLocalBuf(hls_audio_get_id3($sinfo->{'stime'}).$output, 'audio/aac');
+    });
+}
+
+sub hls_audio_formattime {
+    my ($ttime) = @_;
+    my $hours = int($ttime / 3600);
+    $ttime -= ($hours * 3600);
+    my $minutes = int($ttime / 60);
+    $ttime -= ($minutes*60);
+    #my $seconds = int($ttime);
+    #$ttime -= $seconds;
+    #say "ttime $ttime";
+    #my $mili = int($ttime * 1000000);
+    #say "mili $mili";
+    #my $tstring = sprintf "%02d:%02d:%02d.%06d", $hours, $minutes, $seconds, $mili;
+    my $tstring = sprintf "%02d:%02d:%f", $hours, $minutes, $ttime;
+    return $tstring;
+}
+
+sub hls_audio_get_end_time {
+    my ($segnum) = @_;
+    my $deslen = 5;
+    my $destime = ($segnum+1) * $deslen;
+    my $floatseg = ($destime * 44100) / 1024;
+    my $lower = (int($floatseg)*1024)/44100;
+    my $higher = (int($floatseg + 0.5)*1024)/44100;
+    my $etime;
+    if(abs($destime - $lower) < abs($higher - $destime)) {
+        $etime = $lower;
+    }
+    else {
+        $etime = $higher;
+    }
+    return $etime;
+}
+
+sub hls_audio_round_down {
+    my ($time) = @_;
+    return (int($time*1000)-1) / 1000; # Forbidden (hack for sample accurate times)
+}
+
+sub hls_audio_get_seg {
+    my ($number) = @_;
+
+    my $startstr = "00:00:00";
+    my $fullstime = 0;
+    if($number > 0) {
+        $fullstime = hls_audio_get_end_time($number-1);
+        my $stime = hls_audio_round_down($fullstime);
+        $startstr = hls_audio_formattime($stime);
+    }
+    my $fullendtime = hls_audio_get_end_time($number);
+    my $endtime = hls_audio_round_down($fullendtime);
+    my $endstr = hls_audio_formattime($endtime);
+    return {'startstr' => $startstr, 'endstr' => $endstr, 'etime' => $fullendtime, 'stime' => $fullstime};
+}
+
 sub hls_audio_m3u8 {
     my ($request, $fileinfo) = @_;
     $request->{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
-    my $pdir = $request->{'client'}{'server'}{'settings'}{'TMPDIR'} . '/'.$fileinfo->{'tmpname'};
-    my $pfile = $pdir.'/audio.m3u8';
-    say "pfile $pfile";
-    if(! -f $pfile) {
-        system('mkdir', '-p', $pdir) == 0 or die('unable to make destdir');
-        my @command = ('ffmpeg', '-i', $fileinfo->{'fileabspath'}, '-vn', '-c', 'copy', '-f', 'hls', '-hls_time', '5', '-hls_list_size', '0', $pfile);
-        my $evp = $request->{'client'}{'server'}{'evp'};
+    #my $pdir = $request->{'client'}{'server'}{'settings'}{'TMPDIR'} . '/'.$fileinfo->{'tmpname'};
+    #my $pfile = $pdir.'/audio.m3u8';
+    #say "pfile $pfile";
+    #if(! -f $pfile) {
+    #    system('mkdir', '-p', $pdir) == 0 or die('unable to make destdir');
+    #    my @command = ('ffmpeg', '-i', $fileinfo->{'fileabspath'}, '-vn', '-c', 'copy', '-f', 'hls', '-hls_time', '5', '-hls_list_size', '0', $pfile);
+    #    my $evp = $request->{'client'}{'server'}{'evp'};
+#
+    #    HTTP::BS::Server::Process->new_output_process($evp, \@command, sub {
+    #        my ($output, $error) = @_;
+    #        $request->SendLocalFile($pfile, 'video/mp2t');
+    #    });
+    #    return;
+    #}
+    #$request->SendLocalFile($pfile, 'video/mp2t');
 
-        HTTP::BS::Server::Process->new_output_process($evp, \@command, sub {
-            my ($output, $error) = @_;
-            $request->SendLocalFile($pfile, 'video/mp2t');
-        });
-        return;
+    my $fileabspath = $fileinfo->{'fileabspath'};
+    my $segmentlength = $fileinfo->{'segmentlength'};
+    my $duration = matroska_get_duration($fileabspath);
+    if(! $duration) {
+        $request->Send404;
     }
-    $request->SendLocalFile($pfile, 'video/mp2t');
+
+    my $m3u8 =
+'#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:'.$segmentlength.'
+#EXT-X-MEDIA-SEQUENCE:0
+'   ;
+    my $seg = 0;
+    while($duration > 0) {
+        my $seginfo = hls_audio_get_seg($seg);
+        my $scalc = $seginfo->{'etime'} - $seginfo->{'stime'};
+        my $sdur = $scalc > $duration ? $duration : $scalc;
+        $m3u8 .= sprintf "#EXTINF:%.6f,\naudio%03d.aac\n", $sdur, $seg;
+        $seg++;
+        $duration -= $scalc;
+    }
+    $m3u8 .= "#EXT-X-ENDLIST\n";
+    $request->SendLocalBuf($m3u8, 'application/x-mpegURL');
 }
 
 sub hls_m3u8 {
