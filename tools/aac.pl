@@ -3,6 +3,9 @@
 use strict; use warnings;
 use feature 'say';
 
+scalar(@ARGV) == 1 or die('no file supplied');
+my $infile = $ARGV[0];
+
 sub formattime {
     my ($ttime) = @_;
     my $hours = int($ttime / 3600);
@@ -13,6 +16,7 @@ sub formattime {
     $ttime -= $seconds; 
     my $mili = int($ttime * 1000000);
     my $tstring = sprintf "%02d:%02d:%02d.%06d", $hours, $minutes, $seconds, $mili;
+    #my $tstring = sprintf "%02d:%02d:%02f", $hours, $minutes, $ttime;
     return $tstring;
 }
 
@@ -36,17 +40,16 @@ while($ctime < $maxtime) {
     else {
         $etime = $higher;
     }
-    my $endstr = formattime($etime);
+    my $brokenendtime = $etime;
+    $brokenendtime = (int($etime*1000)-1) / 1000; # Forbidden (hack for sample accurate times)
+    $etime = $brokenendtime;
+    my $endstr = formattime($brokenendtime);
    
     my $filename = sprintf("ed%d.ts", $segnum);
-    my $outputoffsetstr = $startstr;
-    if($ctime) {
-        my $offsettime = $ctime + 1.4;        
-        $outputoffsetstr = formattime($offsettime);
-    }
+    my $outputoffsetstr = $startstr; #fix this to use precise start
     say "start $startstr end $endstr delta " . formattime($etime-$ctime) . 'offsettime ' . $outputoffsetstr;
     # '-output_ts_offset', $startstr,
-    system('ffmpeg', '-ss', $startstr, '-to', $endstr, '-i', 'ABC.mkv','-vn', '-c', 'copy', '-f', 'mpegts', '-avoid_negative_ts', 'disabled', '-output_ts_offset', $outputoffsetstr, $filename) == 0 or die('failed to transcode');
+    system('ffmpeg', '-i', $infile, '-ss', $startstr, '-to', $endstr, '-vn', '-c', 'copy', '-f', 'mpegts', '-output_ts_offset', $outputoffsetstr, $filename) == 0 or die('failed to transcode');
     push @segments, $filename;
     $ctime = $etime;
     $dtime += 5;
