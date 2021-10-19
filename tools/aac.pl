@@ -12,11 +12,13 @@ sub formattime {
     $ttime -= ($hours * 3600);
     my $minutes = int($ttime / 60);
     $ttime -= ($minutes*60);
-    my $seconds = int($ttime);
-    $ttime -= $seconds; 
-    my $mili = int($ttime * 1000000);
-    my $tstring = sprintf "%02d:%02d:%02d.%06d", $hours, $minutes, $seconds, $mili;
-    #my $tstring = sprintf "%02d:%02d:%02f", $hours, $minutes, $ttime;
+    #my $seconds = int($ttime);
+    #$ttime -= $seconds;
+    #say "ttime $ttime";
+    #my $mili = int($ttime * 1000000);
+    #say "mili $mili";
+    #my $tstring = sprintf "%02d:%02d:%02d.%06d", $hours, $minutes, $seconds, $mili;
+    my $tstring = sprintf "%02d:%02d:%f", $hours, $minutes, $ttime;
     return $tstring;
 }
 
@@ -27,6 +29,7 @@ my @segments;
 my $ctime = 0;
 my $dtime = 5;
 my $segnum = 0;
+my $outputoffsetstr = "00:00:00";
 while($ctime < $maxtime) {
     my $startstr = formattime($ctime);
 
@@ -42,21 +45,22 @@ while($ctime < $maxtime) {
     }
     my $brokenendtime = $etime;
     $brokenendtime = (int($etime*1000)-1) / 1000; # Forbidden (hack for sample accurate times)
-    $etime = $brokenendtime;
     my $endstr = formattime($brokenendtime);
-   
-    my $filename = sprintf("ed%d.ts", $segnum);
-    my $outputoffsetstr = $startstr; #fix this to use precise start
+    say "etime $etime, endstr $endstr btime $brokenendtime";
+
     say "start $startstr end $endstr delta " . formattime($etime-$ctime) . 'offsettime ' . $outputoffsetstr;
-    # '-output_ts_offset', $startstr,
-    system('ffmpeg', '-i', $infile, '-ss', $startstr, '-to', $endstr, '-vn', '-c', 'copy', '-f', 'mpegts', '-output_ts_offset', $outputoffsetstr, $filename) == 0 or die('failed to transcode');
+    #my $filename = sprintf("ed%d.ts", $segnum);
+    #system('ffmpeg', '-i', $infile, '-ss', $startstr, '-to', $endstr, '-vn', '-c', 'copy', '-f', 'mpegts', '-output_ts_offset', $outputoffsetstr, $filename) == 0 or die('failed to transcode');
+    my $filename = sprintf("ed%d.adts", $segnum);
+    system('ffmpeg', '-i', $infile, '-ss', $startstr, '-to', $endstr, '-vn', '-c', 'copy', '-f', 'adts', $filename) == 0 or die('failed to transcode');
     push @segments, $filename;
+
+    $outputoffsetstr = formattime($etime);
+    $etime = $brokenendtime;
     $ctime = $etime;
     $dtime += 5;
     $segnum++;
 }
-
-exit 0;
 
 my $concatstr = 'concat:';
 open(my $fh, '>', 'list.txt') or die('could not open list');
@@ -67,6 +71,6 @@ foreach my $file (@segments) {
 close($fh);
 
 
-system('ffmpeg', '-f', 'concat', '-i', 'list.txt', '-c', 'copy', 'concat.aac') == 0 or die('failed to concat');
+system('ffmpeg', '-f', 'concat', '-i', 'list.txt', '-c', 'copy', 'concat.adts') == 0 or die('failed to concat');
 #chop $concatstr;
 #system('ffmpeg', '-i', $concatstr, '-c', 'copy', 'concat.aac') == 0 or die('failed to concat');
