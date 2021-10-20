@@ -4182,6 +4182,10 @@ sub hls_audio_aac {
     my $seg = $fileinfo->{'segmentnumber'};
     my $seconds = $seg * $fileinfo->{'segmentlength'};
     my $sinfo = hls_audio_get_seg($seg);
+
+    my $matroska = matroska_open($fileinfo->{'fileabspath'});
+    my $data = matroska_read_aac_track($matroska, 1, 1263616, 1024);
+
     my $startstr = $sinfo->{'startstr'};
     my $endstr   = $sinfo->{'endstr'};
     my @command = ('ffmpeg', '-i', $fileinfo->{'fileabspath'}, '-ss', $startstr, '-to', $endstr, '-vn', '-c', 'copy', '-f', 'adts', '-');
@@ -4850,6 +4854,7 @@ sub read_vint_from_buf {
 
 sub read_and_parse_vint_from_buf {
     my $bufref = $_[0];
+    my $savewidth = $_[1];
 
     my $width;
     my $value = read_vint_from_buf($bufref, \$width);
@@ -4861,6 +4866,9 @@ sub read_and_parse_vint_from_buf {
         $andval |= 0xFF;               
     }
     $value &= $andval;
+    if(defined $savewidth) {
+        $$savewidth = $width;
+    }
     return $value;     
 }
 
@@ -5042,6 +5050,7 @@ use constant {
         'EBMLID_TrackNumber'        => 0xD7,
         'EBMLID_TrackUID'           => 0x73C5,        
         'EBMLID_TrackType'          => 0x83,
+        'EBMLID_DefaulDuration'     => 0x23E383,
         'EBMLID_CodecID'            => 0x86,
         'EBMLID_CodecPrivData',     => 0x63A2,
         'EBMLID_AudioTrack'         => 0xE1,
@@ -5086,10 +5095,58 @@ sub matroska_cluster_parse_simpleblock_or_blockgroup {
     my $rawts = substr($data, 0, 2, '');
     my $rawflag = substr($data, 0, 1, '');
 
+    my $lacing = unpack('C', $rawflag) & 0x6;
+    my $framecnt;
+    my @sizes;
+    # XIPH
+    if($lacing == 0x2) {
+        $framecnt = unpack('C', substr($data, 0, 1, ''))+1;
+        my $firstframessize = 0;
+        for(my $i = 0; $i < ($framecnt-1); $i++) {
+            my $fsize = 0;
+            while(1) {
+                my $val = unpack('C', substr($data, 0, 1, ''));
+                $fsize += $val;
+                last if($val < 255);
+            }
+            push @sizes, $fsize;
+            $firstframessize += $fsize;
+        }
+        push @sizes, (length($data) - $firstframessize);
+    }
+    # EBML
+    elsif($lacing == 0x6) {
+        $framecnt = unpack('C', substr($data, 0, 1, ''))+1;
+        my $ffsize = read_and_parse_vint_from_buf(\$data);
+        push @sizes, $ffsize;
+        for(my $i = 0; $i < ($framecnt - 2); $i++) {
+            my $width;
+            my $offset = read_and_parse_vint_from_buf(\$data, \$width);
+            # multiple by 2^bitwidth - 1 (with adjusted bitwidth)
+            die("offset $offset width $width");
+        }
+
+        die;
+    }
+    # fixed
+    elsif($lacing == 0x4) {
+        $framecnt = unpack('C', substr($data, 0, 1, ''))+1;
+        my $framesize = length($data) / $framecnt;
+        for(my $i = 0; $i < $framecnt; $i++) {
+            push @sizes, $framesize;
+        }
+    }
+    # no lacing
+    else {
+        push @sizes, length($data);
+    }
+
     return {
         'trackno' => $trackno,
         'rawts' => $rawts,
-        'rawflag'  => $rawflag
+        'rawflag'  => $rawflag,
+        'frame_lengths' => \@sizes,
+        'data' => $data
     };
 }
 
@@ -5199,6 +5256,292 @@ sub parse_float_str {
     return unpack('d>', $str) if(length($str) == 8);
 
     return undef;
+}
+
+# matroska object needs
+# - ebml
+# - tsscale
+# - tracks
+#     - audio track, codec, channels, samplerate
+#     - video track, fps
+# - duration
+
+sub matroska_open {
+    my ($filename) = @_;
+    my $ebml = ebml_open($filename);
+    if(! $ebml) {
+        return undef;
+    }
+
+    # find segment
+    my $foundsegment = ebml_find_id($ebml, EBMLID_Segment);
+    if(!$foundsegment) {
+        return undef;
+    }
+    say "Found segment";
+    my %segment = (id => EBMLID_Segment, 'infsize' => 1, 'elms' => []);
+
+    # find segment info
+    my $foundsegmentinfo = ebml_find_id($ebml, EBMLID_SegmentInfo);
+    if(!$foundsegmentinfo) {
+        return undef;
+    }
+    say "Found segment info";
+    my %segmentinfo = (id => EBMLID_SegmentInfo, elms => []);
+
+    # find TimestampScale
+    my $tselm = ebml_find_id($ebml, EBMLID_TimestampScale);
+    if(!$tselm) {
+        return undef;
+    }
+    say "Found ts elm";
+    my $tsbinary;
+    if(!ebml_read($ebml, $tsbinary, $tselm->{'size'})) {
+        return undef;
+    }
+
+    Dump($tsbinary);
+    my $tsval = parse_uinteger_str($tsbinary);
+    defined($tsval) or return undef;
+    say "tsval: $tsval";
+
+    if(!ebml_skip($ebml)) {
+        return undef;
+    }
+    push @{$segmentinfo{'elms'}}, {id => EBMLID_TimestampScale, data => $tsbinary};
+
+    # find Duration
+    my $durationelm = ebml_find_id($ebml, EBMLID_Duration);
+    if(!$durationelm) {
+        return undef;
+    }
+    say "Found duration elm";
+    my $durbin;
+    if(!ebml_read($ebml, $durbin, $durationelm->{'size'})) {
+        return undef;
+    }
+    Dump($durbin);
+    my $scaledduration = parse_float_str($durbin);
+
+    say "scaledduration $scaledduration";
+
+    my $duration = ($tsval * $scaledduration)/1000000000;
+    say "duration: $duration";
+
+    # exit duration
+    if(!ebml_skip($ebml)) {
+        return undef;
+    }
+
+    # exit segment informations
+    if(!ebml_skip($ebml)) {
+        return undef;
+    }
+
+    # find tracks
+    my $in_tracks = ebml_find_id($ebml, EBMLID_Tracks);
+    if(!$in_tracks) {
+        return undef;
+    }
+    # loop through the Tracks
+    my @tracks;
+    for(;;) {
+        my $in_track = ebml_find_id($ebml, EBMLID_Track);
+        if(! $in_track) {
+            ebml_skip($ebml);
+            last;
+        }
+        my %track = ('id' => EBMLID_Track);
+        for(;;) {
+            my $telm = ebml_read_element($ebml);
+            if(!$telm) {
+                ebml_skip($ebml);
+                last;
+            }
+
+            # save the element into tracks
+            my %elm = ('id' => $telm->{'id'}, 'data' => '');
+            ebml_read($ebml, $elm{'data'}, $telm->{'size'});
+            if($elm{'id'} == EBMLID_TrackNumber) {
+                say "trackno";
+                $elm{'value'} = unpack('C', $elm{'data'});
+                $track{$elm{'id'}} = \%elm;
+            }
+            elsif($elm{'id'} == EBMLID_CodecID) {
+                say "codec";
+                $track{$elm{'id'}} = \%elm;
+            }
+            elsif($elm{'id'} == EBMLID_TrackType) {
+                say "tracktype";
+                $elm{'value'} = unpack('C', $elm{'data'});
+                $track{$elm{'id'}} = \%elm;
+            }
+            elsif($elm{'id'} == EBMLID_TrackUID) {
+                say "trackuid";
+                $track{$elm{'id'}} = \%elm;
+            }
+            elsif($elm{'id'} == EBMLID_DefaulDuration) {
+                say "defaultduration";
+                $elm{'value'} = parse_uinteger_str($elm{'data'});
+                $track{$elm{'id'}} = \%elm;
+                $track{'fps'} = int(((1/($elm{'value'} / 1000000000)) * 1000) + 0.5)/1000;
+            }
+            elsif($elm{'id'} == EBMLID_AudioTrack) {
+                say "audiotrack";
+                my $buf = $elm{'data'};
+                while(length($buf)) {
+                    # read the id, size, and data
+                    my $vintwidth;
+                    my $id = read_vint_from_buf(\$buf, \$vintwidth);
+                    if(!$id) {
+                        last;
+                    }
+                    say "elmid $id width $vintwidth";
+                    say sprintf("0x%X 0x%X", ord(substr($buf, 0, 1)), ord(substr($buf, 1, 1)));
+                    my $size = read_and_parse_vint_from_buf(\$buf);
+                    if(!$size) {
+                        last;
+                    }
+                    say "size $size";
+                    my $data = substr($buf, 0, $size, '');
+
+                    # save metadata
+                    if($id == EBMLID_AudioSampleRate) {
+                        $track{$id} = parse_float_str($data);
+                        say "samplerate " . $track{$id};
+                    }
+                    elsif($id == EBMLID_AudioChannels) {
+                        $track{$id} = parse_uinteger_str($data);
+                        say "channels " . $track{$id};
+                    }
+                }
+            }
+
+            ebml_skip($ebml);
+        }
+        push @tracks, \%track;
+    }
+    if(scalar(@tracks) == 0) {
+        return undef;
+    }
+
+
+    my %matroska = ('ebml' => $ebml, 'tsscale' => $tsval, 'rawduration' => $scaledduration, 'duration' => $duration, 'tracks' => \@tracks);
+
+    print Dumper(\%matroska);
+
+    return \%matroska;
+}
+
+sub matroska_read_cluster_metadata {
+    my ($matroska) = @_;
+    my $ebml = $matroska->{'ebml'};
+
+    # find a cluster
+    my $custer = ebml_find_id($ebml, EBMLID_Cluster);
+    return undef if(! $custer);
+    my %cluster = ( 'fileoffset' => tell($ebml->{'fh'}), 'size' => $custer->{'size'}, 'Segment_sizeleft' => $ebml->{'elements'}[0]{'size'});
+    say "ebml state";
+    print Dumper($ebml);
+
+    # find the cluster timestamp
+    for(;;) {
+        my $belm = ebml_read_element($ebml);
+        if(!$belm) {
+            ebml_skip($ebml);
+            last;
+        }
+        my %elm = ('id' => $belm->{'id'}, 'data' => '');
+        say "elm size " . $belm->{'size'};
+        ebml_read($ebml, $elm{'data'}, $belm->{'size'});
+        if($elm{'id'} == EBMLID_ClusterTimestamp) {
+            $cluster{'rawts'} = parse_uinteger_str($elm{'data'});
+            $cluster{'ts'} = $cluster{'rawts'} * $matroska->{'tsscale'};
+            say "found cluster:";
+            print Dumper(\%cluster);
+            # exit ClusterTimestamp
+            ebml_skip($ebml);
+            # exit cluster
+            ebml_skip($ebml);
+            return \%cluster;
+        }
+
+        ebml_skip($ebml);
+    }
+    return undef;
+}
+
+sub matroska_read_aac_track {
+    my ($matroska, $tid, $aacFrameIndex, $length) = @_;
+
+    my $samplerate = $matroska->{'tracks'}[$tid-1]{''.EBMLID_AudioSampleRate};
+
+    # find the cluster that might have the start of our audio
+    my $desiredcluster;
+    while(1) {
+        my $cluster = matroska_read_cluster_metadata($matroska);
+        last if(!$cluster);
+        my $curframe = int(($cluster->{'ts'} * $samplerate / 1000000000)+ 0.5);
+
+        #  Hack, adjust curframe when the tsscale isn't good enough
+        if($matroska->{'tsscale'} > int(1000000000 / $samplerate)) {
+            $curframe = int(($curframe/1024)+0.5)*1024;
+        }
+
+        # this cluster could contain our frame, save it's info
+        if($curframe <= $aacFrameIndex) {
+            $desiredcluster = $cluster;
+            $desiredcluster->{'frameIndex'} = $curframe;
+        }
+        # this cluster is at or past the frame, breakout
+        if($curframe >= $aacFrameIndex){
+            last;
+        }
+    }
+    return undef if(! $desiredcluster);
+
+    print Dumper($desiredcluster);
+
+    # find the block with the start of our audio
+    my $ebml = $matroska->{'ebml'};
+    seek($ebml->{'fh'}, $desiredcluster->{'fileoffset'}, SEEK_SET);
+    $ebml->{'elements'} = [
+        {
+            'id' => EBMLID_Segment,
+            'size' => $desiredcluster->{'Segment_sizeleft'}
+        },
+        {
+            'id' => EBMLID_Cluster,
+            'size' => $desiredcluster->{'size'}
+        }
+    ];
+
+
+    say "ebml start";
+    for(;;) {
+        my $belm = ebml_read_element($ebml);
+        if(!$belm) {
+            ebml_skip($ebml);
+            last;
+        }
+        my %elm = ('id' => $belm->{'id'}, 'data' => '');
+        say "elm size " . $belm->{'size'};
+
+        ebml_read($ebml, $elm{'data'}, $belm->{'size'});
+        if(($elm{'id'} == EBMLID_SimpleBlock) || ($elm{'id'} == EBMLID_BlockGroup)) {
+            my $block = matroska_cluster_parse_simpleblock_or_blockgroup(\%elm);
+            print Dumper($block);
+            if($block && ($block->{'trackno'} == $tid)) {
+                say "our track block";
+
+                if($aacFrameIndex < ($desiredcluster->{'frameIndex'} + (1024 * scalar(@{$block->{'frame_lengths'}})))) {
+                    say "found start block";
+                    die;
+                }
+            }
+        }
+        ebml_skip($ebml);
+    }
 }
 
 sub matroska_get_duration {
