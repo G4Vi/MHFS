@@ -4231,19 +4231,55 @@ sub hls_audio_round_down {
     return (int($time*1000)-1) / 1000; # Forbidden (hack for sample accurate times)
 }
 
+sub hls_audio_get_actual_time {
+    my ($destime) = @_;
+    my $floatseg = ($destime * 44100) / 1024;
+    my $lower = (int($floatseg)*1024)/44100;
+    my $higher = (int($floatseg + 0.5)*1024)/44100;
+    my $etime;
+    if(abs($destime - $lower) < abs($higher - $destime)) {
+        $etime = $lower;
+    }
+    else {
+        $etime = $higher;
+    }
+    return $etime;
+}
+
+#sub hls_audio_get_seg {
+#    my ($number) = @_;
+#
+#    my $startstr = "00:00:00";
+#    my $fullstime = 0;
+#    if($number > 0) {
+#        $fullstime = hls_audio_get_end_time($number-1);
+#        my $stime = hls_audio_round_down($fullstime);
+#        $startstr = hls_audio_formattime($stime);
+#    }
+#    my $fullendtime = hls_audio_get_end_time($number);
+#    my $endtime = hls_audio_round_down($fullendtime);
+#    my $endstr = hls_audio_formattime($endtime);
+#    return {'startstr' => $startstr, 'endstr' => $endstr, 'etime' => $fullendtime, 'stime' => $fullstime};
+#}
+
 sub hls_audio_get_seg {
     my ($number) = @_;
 
-    my $startstr = "00:00:00";
     my $fullstime = 0;
-    if($number > 0) {
-        $fullstime = hls_audio_get_end_time($number-1);
-        my $stime = hls_audio_round_down($fullstime);
-        $startstr = hls_audio_formattime($stime);
+    my $target = 0;
+    my $lasttime = 0;
+    for(my $i = 0; $i <= $number; $i++) {
+        $fullstime = $lasttime;
+
+        $target += 5;
+        my $atarget = ($target - $lasttime);
+        $lasttime = hls_audio_get_actual_time($atarget)+$fullstime;
     }
-    my $fullendtime = hls_audio_get_end_time($number);
-    my $endtime = hls_audio_round_down($fullendtime);
-    my $endstr = hls_audio_formattime($endtime);
+
+    my $fullendtime = $lasttime;
+    my $startstr = hls_audio_formattime($fullstime);
+    my $endstr = hls_audio_formattime($fullendtime);
+
     return {'startstr' => $startstr, 'endstr' => $endstr, 'etime' => $fullendtime, 'stime' => $fullstime};
 }
 

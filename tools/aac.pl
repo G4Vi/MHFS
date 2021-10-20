@@ -39,31 +39,62 @@ sub get_end_time {
     return $etime;
 }
 
+sub hls_audio_get_actual_time {
+    my ($destime) = @_;
+    my $floatseg = ($destime * 44100) / 1024;
+    my $lower = (int($floatseg)*1024)/44100;
+    my $higher = (int($floatseg + 0.5)*1024)/44100;
+    my $etime;
+    if(abs($destime - $lower) < abs($higher - $destime)) {
+        $etime = $lower;
+    }
+    else {
+        $etime = $higher;
+    }
+    return $etime;
+}
+
 sub round_down {
     my ($time) = @_;
     return (int($time*1000)-1) / 1000; # Forbidden (hack for sample accurate times)
 }
 
-sub get_seg {
+sub hls_audio_get_seg {
     my ($number) = @_;
 
-    my $startstr = "00:00:00";
+
     my $fullstime = 0;
-    if($number > 0) {
-        $fullstime = get_end_time($number-1);
-        my $stime = round_down($fullstime);
-        $startstr = formattime($stime);
+
+    my $target = 0;
+    my $lasttime = 0;
+    for(my $i = 0; $i <= $number; $i++) {
+        $fullstime = $lasttime;
+
+        $target += 5;
+        my $atarget = ($target - $lasttime);
+        $lasttime = hls_audio_get_actual_time($atarget)+$fullstime;
     }
-    my $fullendtime = get_end_time($number);
-    my $endtime = round_down($fullendtime);
-    my $endstr = formattime($endtime);
+
+    my $fullendtime = $lasttime;
+    my $startstr = formattime($fullstime);
+    my $endstr = formattime($fullendtime);
+
+    #my $startstr = "00:00:00";
+    #if($number > 0) {
+    #    $fullstime = get_end_time($number-1);
+    #    my $stime = round_down($fullstime);
+    #    $startstr = formattime($stime);
+    #}
+    #my $fullendtime = get_end_time($number);
+    #my $endtime = round_down($fullendtime);
+    #my $endstr = formattime($endtime);
     return {'startstr' => $startstr, 'endstr' => $endstr, 'etime' => $fullendtime, 'stime' => $fullstime};
 }
 
 sub get_id3 {
     my ($time) = @_;
 
-    my $tstime = int($time*90000);
+    my $tstime = int($time*90000)+126000;
     my $packedtstime = $tstime & 0x1FFFFFFFF; # 33 bits
 
     my $id3 = 'ID3'.pack('CCCCCCC', 0x4, 0, 0, 0, 0, 0, 0x3F).
@@ -124,7 +155,7 @@ while($ctime < $maxtime) {
     $ctime = $tstrings->{'etime'};
 
     open(my $out, '>', $filename.'.id3.adts') or die('unable to open id3 file');
-    print $out get_id3($tstrings->{'stime'}+1.4);
+    print $out get_id3($tstrings->{'stime'});
     open(my $in, '<', $filename) or die('unable to open src file');
     my $buf;
     while(read($in, $buf, 16384)) {
