@@ -76,8 +76,8 @@ sub hls_audio_get_seg {
     }
 
     my $fullendtime = $lasttime;
-    my $startstr = formattime($fullstime);
-    my $endstr = formattime($fullendtime);
+    my $startstr = formattime($fullstime > 0 ? round_down($fullstime) : $fullstime);
+    my $endstr = formattime(round_down($fullendtime));
 
     #my $startstr = "00:00:00";
     #if($number > 0) {
@@ -145,7 +145,7 @@ while($ctime < $maxtime) {
     #$segnum++;
 
     my $filename = sprintf("ed%d.adts", $segnum);
-    my $tstrings = get_seg($segnum);
+    my $tstrings = hls_audio_get_seg($segnum);
     my $startstr = $tstrings->{'startstr'};
     my $endstr   = $tstrings->{'endstr'};
     say "start $startstr end $endstr delta " . formattime($tstrings->{'etime'}-$tstrings->{'stime'});

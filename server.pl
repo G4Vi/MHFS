@@ -4277,8 +4277,8 @@ sub hls_audio_get_seg {
     }
 
     my $fullendtime = $lasttime;
-    my $startstr = hls_audio_formattime($fullstime);
-    my $endstr = hls_audio_formattime($fullendtime);
+    my $startstr = hls_audio_formattime($fullstime > 0 ? hls_audio_round_down($fullstime) : $fullstime);
+    my $endstr = hls_audio_formattime(hls_audio_round_down($fullendtime));
 
     return {'startstr' => $startstr, 'endstr' => $endstr, 'etime' => $fullendtime, 'stime' => $fullstime};
 }
