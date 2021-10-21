@@ -4177,22 +4177,52 @@ sub hls_audio_get_id3 {
     return $id3;
 }
 
+sub mux_aac_packet_to_adts_packet {
+    my ($packet, $samplerate) = @_;
+
+    my $si;
+    if($samplerate == 48000) {
+        $si = 3;
+    }
+    elsif($samplerate == 44100) {
+        $si = 4;
+    }
+    else {
+        die('unhandheld samplerate');
+    }
+
+    my $profilebits = (2-1) << 38;
+    my $samplebits  = $si << 34;
+    my $privbit = 0 << 33;
+    my $channelconfig = 2 << 30;
+    my $orighomecopyidcopyidstart = 0 << 26;
+    my $framlen = (7 + length($packet)) << 13;
+    my $bufferfullness = 0x7FF << 2;
+    my $framesbits = (1-1);
+    my $sh = $profilebits | $samplebits | $privbit | $channelconfig | $orighomecopyidcopyidstart | $framlen | $bufferfullness | $framesbits;
+    my $adtsheader = pack('nCCCCC', 0xFFF1, ($sh >> 32) & 0xFF, ($sh >> 24) & 0xFF, ($sh >> 16) & 0xFF, ($sh >> 8) & 0xFF, $sh & 0xFF);
+
+    return $adtsheader.$packet;
+}
+
 sub hls_audio_aac {
     my ($request, $fileinfo) = @_;
     my $seg = $fileinfo->{'segmentnumber'};
     my $seconds = $seg * $fileinfo->{'segmentlength'};
+
+    my $matroska = matroska_open($fileinfo->{'fileabspath'});
+    my $seginfo = hls_audio_get_sample_range($seg, 44100);
+    my $data = matroska_read_aac_track($matroska, 1, $seginfo->{'sframe'}, $seginfo->{'sduration'}, \&mux_aac_packet_to_adts_packet);
+    if(defined $data) {
+        $request->{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
+        $request->SendLocalBuf(hls_audio_get_id3($seginfo->{'stime'}).$data, 'audio/aac');
+    }
+    else {
+        $request->Send404;
+    }
+    return;
+
     my $sinfo = hls_audio_get_seg($seg);
-
-    #my $matroska = matroska_open($fileinfo->{'fileabspath'});
-    #my $data = matroska_read_aac_track($matroska, 1, 0, 220160);
-    #if(defined $data) {
-    #    $request->SendLocalBuf($data, 'application/octet-stream');
-    #}
-    #else {
-    #    $request->Send404;
-    #}
-    #return;
-
     my $startstr = $sinfo->{'startstr'};
     my $endstr   = $sinfo->{'endstr'};
     my @command = ('ffmpeg', '-i', $fileinfo->{'fileabspath'}, '-ss', $startstr, '-to', $endstr, '-vn', '-c', 'copy', '-f', 'adts', '-');
@@ -4294,6 +4324,30 @@ sub hls_audio_get_seg {
     return {'startstr' => $startstr, 'endstr' => $endstr, 'etime' => $fullendtime, 'stime' => $fullstime};
 }
 
+sub hls_audio_get_sample_range {
+    my ($number, $samplerate) = @_;
+    my $fullstime = 0;
+    my $target = 0;
+    my $seglength = 0;
+    for(my $i = 0; $i <= $number; $i++) {
+        $fullstime += $seglength;
+        $target += (5 * $samplerate);
+        my $atarget = ($target - $fullstime);
+        my $floatseg = $atarget / 1024;
+        my $lower = (int($floatseg)*1024);
+        my $higher = (int($floatseg + 0.5)*1024);
+
+        if(abs($atarget - $lower) < abs($higher - $atarget)) {
+            $seglength = $lower;
+        }
+        else {
+            $seglength = $higher;
+        }
+    }
+
+    return {'sframe' => $fullstime, 'sduration' => $seglength, 'duration' => ($seglength / $samplerate), ('stime' => $fullstime/$samplerate)};
+}
+
 sub hls_audio_m3u8 {
     my ($request, $fileinfo) = @_;
     $request->{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
@@ -4328,8 +4382,10 @@ sub hls_audio_m3u8 {
 '   ;
     my $seg = 0;
     while($duration > 0) {
-        my $seginfo = hls_audio_get_seg($seg);
-        my $scalc = $seginfo->{'etime'} - $seginfo->{'stime'};
+        #my $seginfo = hls_audio_get_seg($seg);
+        #my $scalc = $seginfo->{'etime'} - $seginfo->{'stime'};
+        my $seginfo = hls_audio_get_sample_range($seg, 44100);
+        my $scalc = $seginfo->{'duration'};
         my $sdur = $scalc > $duration ? $duration : $scalc;
         $m3u8 .= sprintf "#EXTINF:%.6f,\naudio%03d.aac\n", $sdur, $seg;
         $seg++;
@@ -5443,9 +5499,6 @@ sub matroska_open {
 
 
     my %matroska = ('ebml' => $ebml, 'tsscale' => $tsval, 'rawduration' => $scaledduration, 'duration' => $duration, 'tracks' => \@tracks);
-
-    #print Dumper(\%matroska);
-
     return \%matroska;
 }
 
@@ -5457,8 +5510,6 @@ sub matroska_read_cluster_metadata {
     my $custer = ebml_find_id($ebml, EBMLID_Cluster);
     return undef if(! $custer);
     my %cluster = ( 'fileoffset' => tell($ebml->{'fh'}), 'size' => $custer->{'size'}, 'Segment_sizeleft' => $ebml->{'elements'}[0]{'size'});
-    say "ebml state";
-    print Dumper($ebml);
 
     # find the cluster timestamp
     for(;;) {
@@ -5473,8 +5524,6 @@ sub matroska_read_cluster_metadata {
         if($elm{'id'} == EBMLID_ClusterTimestamp) {
             $cluster{'rawts'} = parse_uinteger_str($elm{'data'});
             $cluster{'ts'} = $cluster{'rawts'} * $matroska->{'tsscale'};
-            say "found cluster:";
-            print Dumper(\%cluster);
             # exit ClusterTimestamp
             ebml_skip($ebml);
             # exit cluster
@@ -5517,7 +5566,6 @@ sub matroska_get_track_block {
         ebml_read($ebml, $elm{'data'}, $belm->{'size'});
         if(($elm{'id'} == EBMLID_SimpleBlock) || ($elm{'id'} == EBMLID_BlockGroup)) {
             my $block = matroska_cluster_parse_simpleblock_or_blockgroup(\%elm);
-            #print Dumper($block);
             if($block && ($block->{'trackno'} == $tid)) {
                 ebml_skip($ebml);
                 return $block;
@@ -5541,7 +5589,7 @@ sub matroska_ts_to_sample  {
 }
 
 sub matroska_read_aac_track {
-    my ($matroska, $tid, $aacFrameIndex, $numsamples) = @_;
+    my ($matroska, $tid, $aacFrameIndex, $numsamples, $formatpacket) = @_;
 
     my $samplerate = $matroska->{'tracks'}[$tid-1]{''.EBMLID_AudioSampleRate};
 
@@ -5572,8 +5620,6 @@ sub matroska_read_aac_track {
     # restore to the the cluster that (probably has our audio)
     my $ebml = $matroska->{'ebml'};
     ebml_set_cluster($ebml, $desiredcluster);
-
-    #print Dumper($desiredcluster);
 
     my $outdata;
 
@@ -5606,13 +5652,19 @@ sub matroska_read_aac_track {
                 ebml_set_cluster($ebml, $desiredcluster);
                 next;
             }
-            if($matroska->{'ebml'}{'elements'}[1]{'id'} != EBMLID_Cluster) {
+
+            #if($matroska->{'ebml'}{'elements'}[1]{'id'} != EBMLID_Cluster) {
+            if(!$matroska->{'ebml'}{'elements'}[1]) {
                 my $cluster = matroska_read_cluster_metadata($matroska);
                 if($cluster) {
                     say "advancing cluster";
                     $desiredcluster = $cluster;
                     ebml_set_cluster($ebml, $desiredcluster);
                     next;
+                }
+                if(($matroska->{'ebml'}{'elements'}[0]{'id'} == EBMLID_Segment) && ($matroska->{'ebml'}{'elements'}[0]{'size'} == 0)) {
+                    say "done, EOF";
+                    return $outdata;
                 }
             }
             print Dumper($matroska->{'ebml'});
@@ -5637,11 +5689,11 @@ sub matroska_read_aac_track {
             my $toread = 0;
             for(my $i = $sindex; $curframe < $aend; $i++) {
                 $curframe += 1024;
+                my $packetlen = $block->{'frame_lengths'}[$i];
+                $outdata .= $formatpacket->(substr($block->{'data'}, $skip, $packetlen), $samplerate);
+                $skip += $packetlen;
                 $toread += $block->{'frame_lengths'}[$i];
             }
-
-            my $tdata = substr($block->{'data'}, $skip, $toread);
-            $outdata .= $tdata;
             $numsamples -= ($aend - $aacFrameIndex);
             if($numsamples == 0) {
                 say "done gathering data";
@@ -5649,7 +5701,6 @@ sub matroska_read_aac_track {
             }
             $aacFrameIndex = $aend;
             say "need more data,  $numsamples left";
-            print Dumper($matroska->{'ebml'});
         }
     }
     return undef;
