@@ -4183,8 +4183,15 @@ sub hls_audio_aac {
     my $seconds = $seg * $fileinfo->{'segmentlength'};
     my $sinfo = hls_audio_get_seg($seg);
 
-    my $matroska = matroska_open($fileinfo->{'fileabspath'});
-    my $data = matroska_read_aac_track($matroska, 1, 1263616, 1024);
+    #my $matroska = matroska_open($fileinfo->{'fileabspath'});
+    #my $data = matroska_read_aac_track($matroska, 1, 0, 220160);
+    #if(defined $data) {
+    #    $request->SendLocalBuf($data, 'application/octet-stream');
+    #}
+    #else {
+    #    $request->Send404;
+    #}
+    #return;
 
     my $startstr = $sinfo->{'startstr'};
     my $endstr   = $sinfo->{'endstr'};
@@ -5083,7 +5090,7 @@ sub matroska_cluster_parse_simpleblock_or_blockgroup {
         say "IS BLOCK";
     }
     elsif($elm->{'id'} == EBMLID_SimpleBlock) {
-        say "IS SIMPLEBLOCK";
+        #say "IS SIMPLEBLOCK";
     }
     else {
         die "unhandled block type";
@@ -5117,16 +5124,24 @@ sub matroska_cluster_parse_simpleblock_or_blockgroup {
     # EBML
     elsif($lacing == 0x6) {
         $framecnt = unpack('C', substr($data, 0, 1, ''))+1;
-        my $ffsize = read_and_parse_vint_from_buf(\$data);
-        push @sizes, $ffsize;
+        my $last = read_and_parse_vint_from_buf(\$data);
+        push @sizes, $last;
+        my $sum = $last;
         for(my $i = 0; $i < ($framecnt - 2); $i++) {
             my $width;
             my $offset = read_and_parse_vint_from_buf(\$data, \$width);
             # multiple by 2^bitwidth - 1 (with adjusted bitwidth)
-            die("offset $offset width $width");
+            my $desiredbits = (8 * $width) - ($width+1);
+            my $subtract = (1 << $desiredbits) - 1;
+            my $result = $offset - $subtract;
+            $last += $result;
+            say "offset $offset width $width factor: " . sprintf("0x%X ", $subtract) . "result $result evaled $last";
+            push @sizes, $last;
+            $sum += $last;
         }
-
-        die;
+        my $lastlast = length($data) - $sum;
+        say "lastlast $lastlast";
+        push @sizes, $lastlast;
     }
     # fixed
     elsif($lacing == 0x4) {
@@ -5146,7 +5161,8 @@ sub matroska_cluster_parse_simpleblock_or_blockgroup {
         'rawts' => $rawts,
         'rawflag'  => $rawflag,
         'frame_lengths' => \@sizes,
-        'data' => $data
+        'data' => $data,
+        'ts' => unpack('s>', $rawts)
     };
 }
 
@@ -5428,7 +5444,7 @@ sub matroska_open {
 
     my %matroska = ('ebml' => $ebml, 'tsscale' => $tsval, 'rawduration' => $scaledduration, 'duration' => $duration, 'tracks' => \@tracks);
 
-    print Dumper(\%matroska);
+    #print Dumper(\%matroska);
 
     return \%matroska;
 }
@@ -5471,8 +5487,61 @@ sub matroska_read_cluster_metadata {
     return undef;
 }
 
+sub ebml_set_cluster {
+    my ($ebml, $cluster) = @_;
+    seek($ebml->{'fh'}, $cluster->{'fileoffset'}, SEEK_SET);
+    $ebml->{'elements'} = [
+        {
+            'id' => EBMLID_Segment,
+            'size' => $cluster->{'Segment_sizeleft'}
+        },
+        {
+            'id' => EBMLID_Cluster,
+            'size' => $cluster->{'size'}
+        }
+    ];
+}
+
+sub matroska_get_track_block {
+    my ($matroska, $tid) = @_;
+    my $ebml = $matroska->{'ebml'};
+    for(;;) {
+        my $belm = ebml_read_element($ebml);
+        if(!$belm) {
+            ebml_skip($ebml);
+            last;
+        }
+        my %elm = ('id' => $belm->{'id'}, 'data' => '');
+        #say "elm size " . $belm->{'size'};
+
+        ebml_read($ebml, $elm{'data'}, $belm->{'size'});
+        if(($elm{'id'} == EBMLID_SimpleBlock) || ($elm{'id'} == EBMLID_BlockGroup)) {
+            my $block = matroska_cluster_parse_simpleblock_or_blockgroup(\%elm);
+            #print Dumper($block);
+            if($block && ($block->{'trackno'} == $tid)) {
+                ebml_skip($ebml);
+                return $block;
+            }
+        }
+        ebml_skip($ebml);
+    }
+    return undef;
+}
+
+sub matroska_ts_to_sample  {
+    my ($matroska, $samplerate, $ts) = @_;
+    my $curframe = int(($ts * $samplerate / 1000000000)+ 0.5);
+
+    #  Hack, adjust curframe when the tsscale isn't good enough
+    if($matroska->{'tsscale'} > int(1000000000 / $samplerate)) {
+        $curframe = int(($curframe/1024)+0.5)*1024;
+    }
+
+    return $curframe;
+}
+
 sub matroska_read_aac_track {
-    my ($matroska, $tid, $aacFrameIndex, $length) = @_;
+    my ($matroska, $tid, $aacFrameIndex, $numsamples) = @_;
 
     my $samplerate = $matroska->{'tracks'}[$tid-1]{''.EBMLID_AudioSampleRate};
 
@@ -5481,17 +5550,17 @@ sub matroska_read_aac_track {
     while(1) {
         my $cluster = matroska_read_cluster_metadata($matroska);
         last if(!$cluster);
-        my $curframe = int(($cluster->{'ts'} * $samplerate / 1000000000)+ 0.5);
-
-        #  Hack, adjust curframe when the tsscale isn't good enough
-        if($matroska->{'tsscale'} > int(1000000000 / $samplerate)) {
-            $curframe = int(($curframe/1024)+0.5)*1024;
-        }
+        my $curframe = matroska_ts_to_sample($matroska, $samplerate, $cluster->{'ts'});
 
         # this cluster could contain our frame, save it's info
         if($curframe <= $aacFrameIndex) {
+            my $prevcluster = $desiredcluster;
             $desiredcluster = $cluster;
             $desiredcluster->{'frameIndex'} = $curframe;
+            if($prevcluster) {
+                $prevcluster->{'prevcluster'} = undef;
+                $desiredcluster->{'prevcluster'} = $prevcluster;
+            }
         }
         # this cluster is at or past the frame, breakout
         if($curframe >= $aacFrameIndex){
@@ -5500,48 +5569,90 @@ sub matroska_read_aac_track {
     }
     return undef if(! $desiredcluster);
 
-    print Dumper($desiredcluster);
-
-    # find the block with the start of our audio
+    # restore to the the cluster that (probably has our audio)
     my $ebml = $matroska->{'ebml'};
-    seek($ebml->{'fh'}, $desiredcluster->{'fileoffset'}, SEEK_SET);
-    $ebml->{'elements'} = [
-        {
-            'id' => EBMLID_Segment,
-            'size' => $desiredcluster->{'Segment_sizeleft'}
-        },
-        {
-            'id' => EBMLID_Cluster,
-            'size' => $desiredcluster->{'size'}
-        }
-    ];
+    ebml_set_cluster($ebml, $desiredcluster);
 
+    #print Dumper($desiredcluster);
 
-    say "ebml start";
+    my $outdata;
+
+    # search for the block
     for(;;) {
-        my $belm = ebml_read_element($ebml);
-        if(!$belm) {
-            ebml_skip($ebml);
-            last;
-        }
-        my %elm = ('id' => $belm->{'id'}, 'data' => '');
-        say "elm size " . $belm->{'size'};
+        # load a block
+        my $block = matroska_get_track_block($matroska, $tid);
 
-        ebml_read($ebml, $elm{'data'}, $belm->{'size'});
-        if(($elm{'id'} == EBMLID_SimpleBlock) || ($elm{'id'} == EBMLID_BlockGroup)) {
-            my $block = matroska_cluster_parse_simpleblock_or_blockgroup(\%elm);
-            print Dumper($block);
-            if($block && ($block->{'trackno'} == $tid)) {
-                say "our track block";
-
-                if($aacFrameIndex < ($desiredcluster->{'frameIndex'} + (1024 * scalar(@{$block->{'frame_lengths'}})))) {
-                    say "found start block";
-                    die;
-                }
+        my $curframe;
+        if($block) {
+            # check ts
+            say 'clusterts ' . ($desiredcluster->{'ts'}/1000000000);
+            say 'blockts ' . $block->{'ts'};
+            my $time = ($desiredcluster->{'rawts'} + $block->{'ts'}) * $matroska->{'tsscale'};
+            say 'blocktime ' . ($time/1000000000);
+            $curframe = matroska_ts_to_sample($matroska, $samplerate, $time);
+            say "curframe $curframe";
+            if($curframe > $aacFrameIndex) {
+                say "too far";
+                $block = undef;
+            }
+            else {
+                $desiredcluster->{'prevcluster'} = undef;
             }
         }
-        ebml_skip($ebml);
+        if(!$block) {
+            if($desiredcluster->{'prevcluster'}) {
+                say "revert cluster";
+                $desiredcluster = $desiredcluster->{'prevcluster'};
+                ebml_set_cluster($ebml, $desiredcluster);
+                next;
+            }
+            if($matroska->{'ebml'}{'elements'}[1]{'id'} != EBMLID_Cluster) {
+                my $cluster = matroska_read_cluster_metadata($matroska);
+                if($cluster) {
+                    say "advancing cluster";
+                    $desiredcluster = $cluster;
+                    ebml_set_cluster($ebml, $desiredcluster);
+                    next;
+                }
+            }
+            print Dumper($matroska->{'ebml'});
+            return undef;
+        }
+
+
+        # check range
+        my $aacSampleCount = (1024 * scalar(@{$block->{'frame_lengths'}}));
+        if($aacFrameIndex < ($curframe +  $aacSampleCount)) {
+            say "found start block: curframe $curframe desired $aacFrameIndex";
+            my $sindex = ($aacFrameIndex - $curframe) / 1024;
+            my $skip = 0;
+            for(my $i = 0; $i < $sindex; $i++) {
+                $skip += $block->{'frame_lengths'}[$i];
+            }
+
+            my $totalend = $aacFrameIndex+$numsamples;
+            my $blockend = $curframe + $aacSampleCount;
+            my $aend = $totalend > $blockend ? $blockend : $totalend;
+            $curframe += ($aacFrameIndex - $curframe);
+            my $toread = 0;
+            for(my $i = $sindex; $curframe < $aend; $i++) {
+                $curframe += 1024;
+                $toread += $block->{'frame_lengths'}[$i];
+            }
+
+            my $tdata = substr($block->{'data'}, $skip, $toread);
+            $outdata .= $tdata;
+            $numsamples -= ($aend - $aacFrameIndex);
+            if($numsamples == 0) {
+                say "done gathering data";
+                return $outdata;
+            }
+            $aacFrameIndex = $aend;
+            say "need more data,  $numsamples left";
+            print Dumper($matroska->{'ebml'});
+        }
     }
+    return undef;
 }
 
 sub matroska_get_duration {
