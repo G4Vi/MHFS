@@ -4211,8 +4211,27 @@ sub hls_audio_aac {
     my $seconds = $seg * $fileinfo->{'segmentlength'};
 
     my $matroska = matroska_open($fileinfo->{'fileabspath'});
-    my $seginfo = hls_audio_get_sample_range($seg, 44100);
-    my $data = matroska_read_aac_track($matroska, 1, $seginfo->{'sframe'}, $seginfo->{'sduration'}, \&mux_aac_packet_to_adts_packet);
+    if(!$matroska) {
+        $request->Send404;
+        return;
+    }
+    my $atrack = matroska_get_audio_track($matroska);
+    if(! $atrack) {
+        $request->Send404;
+        return;
+    }
+    my $samplerate = $atrack->{&EBMLID_AudioSampleRate};
+    if(!$samplerate) {
+        $request->Send404;
+        return;
+    }
+    if(!$atrack{'CodecID_Major'} || ($atrack{'CodecID_Major'} ne 'AAC')) {
+        say "unhandled audio codec";
+        $request->Send404;
+        return;
+    }
+    my $seginfo = hls_audio_get_sample_range($seg, $samplerate);
+    my $data = matroska_read_aac_track($matroska, $atrack, $seginfo->{'sframe'}, $seginfo->{'sduration'}, \&mux_aac_packet_to_adts_packet);
     if(defined $data) {
         $request->{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
         $request->SendLocalBuf(hls_audio_get_id3($seginfo->{'stime'}).$data, 'audio/aac');
@@ -4222,6 +4241,7 @@ sub hls_audio_aac {
     }
     return;
 
+    # mostly works, but has messed up time stamps
     my $sinfo = hls_audio_get_seg($seg);
     my $startstr = $sinfo->{'startstr'};
     my $endstr   = $sinfo->{'endstr'};
@@ -4369,9 +4389,16 @@ sub hls_audio_m3u8 {
 
     my $fileabspath = $fileinfo->{'fileabspath'};
     my $segmentlength = $fileinfo->{'segmentlength'};
-    my $duration = matroska_get_duration($fileabspath);
-    if(! $duration) {
+    my $matroska = matroska_open($fileabspath);
+    if(! $matroska) {
         $request->Send404;
+    }
+    my $duration = $matroska->{'duration'};
+    my $atrack = matroska_get_audio_track($matroska);
+    my $samplerate = $atrack->{&EBMLID_AudioSampleRate};
+    if(! $duration || !$samplerate) {
+        $request->Send404;
+        return;
     }
 
     my $m3u8 =
@@ -4384,7 +4411,7 @@ sub hls_audio_m3u8 {
     while($duration > 0) {
         #my $seginfo = hls_audio_get_seg($seg);
         #my $scalc = $seginfo->{'etime'} - $seginfo->{'stime'};
-        my $seginfo = hls_audio_get_sample_range($seg, 44100);
+        my $seginfo = hls_audio_get_sample_range($seg, $samplerate);
         my $scalc = $seginfo->{'duration'};
         my $sdur = $scalc > $duration ? $duration : $scalc;
         $m3u8 .= sprintf "#EXTINF:%.6f,\naudio%03d.aac\n", $sdur, $seg;
@@ -4421,12 +4448,16 @@ sub hls_m3u8 {
     my $fileabspath = $fileinfo->{'fileabspath'};
     my $segmentlength = $fileinfo->{'segmentlength'};
 
-    my $duration = matroska_get_duration($fileabspath);
+    my $matroska = matroska_open($fileabspath);
+    if(! $matroska) {
+        $request->Send404;
+        return;
+    }
+    my $duration = $matroska->{'duration'};
     if(! $duration) {
         $request->Send404;
+        return;
     }
-
-
 
     my $m3u8 =
 '#EXTM3U
@@ -5440,7 +5471,14 @@ sub matroska_open {
                 $track{$elm{'id'}} = \%elm;
             }
             elsif($elm{'id'} == EBMLID_CodecID) {
-                say "codec";
+                say "codec " . $elm{'data'};
+                if($elm{'data'} =~ /^([A-Z]+_)([A-Z0-9]+)(?:\/([A-Z0-9_\/]+))?$/) {
+                    $track{'CodecID_Prefix'} = $1;
+                    $track{'CodecID_Major'} = $2;
+                    if($3) {
+                        $track{'CodecID_Minor'} = $3;
+                    }
+                }
                 $track{$elm{'id'}} = \%elm;
             }
             elsif($elm{'id'} == EBMLID_TrackType) {
@@ -5500,6 +5538,17 @@ sub matroska_open {
 
     my %matroska = ('ebml' => $ebml, 'tsscale' => $tsval, 'rawduration' => $scaledduration, 'duration' => $duration, 'tracks' => \@tracks);
     return \%matroska;
+}
+
+sub matroska_get_audio_track {
+    my ($matroska) = @_;
+    foreach my $track (@{$matroska->{'tracks'}}) {
+        my $tt = $track->{&EBMLID_TrackType};
+        if(defined $tt && ($tt->{'value'} == 2)) {
+            return $track;
+        }
+    }
+    return undef;
 }
 
 sub matroska_read_cluster_metadata {
@@ -5582,16 +5631,27 @@ sub matroska_ts_to_sample  {
 
     #  Hack, adjust curframe when the tsscale isn't good enough
     if($matroska->{'tsscale'} > int(1000000000 / $samplerate)) {
-        $curframe = int(($curframe/1024)+0.5)*1024;
+        #$curframe = int(($curframe/1024)+0.5)*1024;
+
+        # ceil to 1024 boundry
+        #$curframe = int(($curframe + 1024 - 1) / 1024);
     }
 
     return $curframe;
 }
 
-sub matroska_read_aac_track {
-    my ($matroska, $tid, $aacFrameIndex, $numsamples, $formatpacket) = @_;
+sub round {
+    return int($_[0]+0.5);
+}
 
-    my $samplerate = $matroska->{'tracks'}[$tid-1]{''.EBMLID_AudioSampleRate};
+sub ceil_div {
+    return int(($_[0] + $_[1] - 1) / $_[1]);
+}
+
+sub matroska_read_aac_track {
+    my ($matroska, $track, $aacFrameIndex, $numsamples, $formatpacket) = @_;
+    my $tid = $track->{&EBMLID_TrackNumber}{'value'};
+    my $samplerate = $track->{&EBMLID_AudioSampleRate};
 
     # find the cluster that might have the start of our audio
     my $desiredcluster;
@@ -5599,6 +5659,8 @@ sub matroska_read_aac_track {
         my $cluster = matroska_read_cluster_metadata($matroska);
         last if(!$cluster);
         my $curframe = matroska_ts_to_sample($matroska, $samplerate, $cluster->{'ts'});
+        #$curframe = int(($curframe/1024)+0.5)*1024; # requires revert cluster
+        $curframe = ceil_div($curframe, 1024) * 1024;# int(($curframe + 1024 - 1) / 1024)*1024;
 
         # this cluster could contain our frame, save it's info
         if($curframe <= $aacFrameIndex) {
@@ -5616,6 +5678,9 @@ sub matroska_read_aac_track {
         }
     }
     return undef if(! $desiredcluster);
+
+    say "cur rawts " . $desiredcluster->{'rawts'};
+    say "last rawts " . $desiredcluster->{'prevcluster'}{'rawts'} if($desiredcluster->{'prevcluster'});
 
     # restore to the the cluster that (probably has our audio)
     my $ebml = $matroska->{'ebml'};
@@ -5636,7 +5701,7 @@ sub matroska_read_aac_track {
             my $time = ($desiredcluster->{'rawts'} + $block->{'ts'}) * $matroska->{'tsscale'};
             say 'blocktime ' . ($time/1000000000);
             $curframe = matroska_ts_to_sample($matroska, $samplerate, $time);
-            say "curframe $curframe";
+            $curframe = round($curframe/1024)*1024;
             if($curframe > $aacFrameIndex) {
                 say "too far";
                 $block = undef;
@@ -5648,6 +5713,7 @@ sub matroska_read_aac_track {
         if(!$block) {
             if($desiredcluster->{'prevcluster'}) {
                 say "revert cluster";
+                die;
                 $desiredcluster = $desiredcluster->{'prevcluster'};
                 ebml_set_cluster($ebml, $desiredcluster);
                 next;
@@ -5704,70 +5770,6 @@ sub matroska_read_aac_track {
         }
     }
     return undef;
-}
-
-sub matroska_get_duration {
-    my ($videofile) = @_;
-    my $ebml = ebml_open($videofile);
-    if(! $ebml) {
-        return undef;
-    }
-
-    # find segment
-    my $foundsegment = ebml_find_id($ebml, EBMLID_Segment);
-    if(!$foundsegment) {
-        return undef;
-    }
-    say "Found segment";
-    my %segment = (id => EBMLID_Segment, 'infsize' => 1, 'elms' => []);
-
-    # find segment info
-    my $foundsegmentinfo = ebml_find_id($ebml, EBMLID_SegmentInfo);
-    if(!$foundsegmentinfo) {
-        return undef;
-    }
-    say "Found segment info";
-    my %segmentinfo = (id => EBMLID_SegmentInfo, elms => []);
-
-    # find TimestampScale
-    my $tselm = ebml_find_id($ebml, EBMLID_TimestampScale);
-    if(!$tselm) {
-        return undef;
-    }
-    say "Found ts elm";
-    my $tsbinary;
-    if(!ebml_read($ebml, $tsbinary, $tselm->{'size'})) {
-        return undef;
-    }
-
-    Dump($tsbinary);
-    my $tsval = parse_uinteger_str($tsbinary);
-    defined($tsval) or return undef;
-    say "tsval: $tsval";
-
-    if(!ebml_skip($ebml)) {
-        return undef;
-    }
-    push @{$segmentinfo{'elms'}}, {id => EBMLID_TimestampScale, data => $tsbinary};
-
-    # find Duration
-    my $durationelm = ebml_find_id($ebml, EBMLID_Duration);
-    if(!$durationelm) {
-        return undef;
-    }
-    say "Found duration elm";
-    my $durbin;
-    if(!ebml_read($ebml, $durbin, $durationelm->{'size'})) {
-        return undef;
-    }
-    Dump($durbin);
-    my $scaledduration = parse_float_str($durbin);
-
-    say "scaledduration $scaledduration";
-
-    my $duration = ($tsval * $scaledduration)/1000000000;
-    say "duration: $duration";
-    return $duration;
 }
 
 sub video_matroska {
