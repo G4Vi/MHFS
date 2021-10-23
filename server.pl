@@ -4220,18 +4220,18 @@ sub hls_audio_aac {
         $request->Send404;
         return;
     }
-    my $samplerate = $atrack->{&EBMLID_AudioSampleRate};
-    if(!$samplerate) {
+    my $seginfo = hls_audio_get_sample_range($atrack, $seg);
+    if(! $seginfo) {
         $request->Send404;
         return;
     }
-    if(!$atrack{'CodecID_Major'} || ($atrack{'CodecID_Major'} ne 'AAC')) {
-        say "unhandled audio codec";
-        $request->Send404;
-        return;
+    my $muxsub = sub {
+        return $_[0];
+    };
+    if($atrack->{'CodecID_Major'} eq 'AAC') {
+        $muxsub = \&mux_aac_packet_to_adts_packet;
     }
-    my $seginfo = hls_audio_get_sample_range($seg, $samplerate);
-    my $data = matroska_read_aac_track($matroska, $atrack, $seginfo->{'sframe'}, $seginfo->{'sduration'}, \&mux_aac_packet_to_adts_packet);
+    my $data = matroska_read_track($matroska, $atrack, $seginfo->{'sframe'}, $seginfo->{'sduration'}, $muxsub);
     if(defined $data) {
         $request->{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
         $request->SendLocalBuf(hls_audio_get_id3($seginfo->{'stime'}).$data, 'audio/aac');
@@ -4345,7 +4345,16 @@ sub hls_audio_get_seg {
 }
 
 sub hls_audio_get_sample_range {
-    my ($number, $samplerate) = @_;
+    my ($atrack, $number) = @_;
+    my $samplerate = $atrack->{&EBMLID_AudioSampleRate};
+    return undef if(!$samplerate);
+
+    my $pcmFrameLen = $atrack->{'PCMFrameLength'};
+    if(! $pcmFrameLen) {
+        say "unhandled audio codec";
+        return undef;
+    }
+
     my $fullstime = 0;
     my $target = 0;
     my $seglength = 0;
@@ -4353,9 +4362,9 @@ sub hls_audio_get_sample_range {
         $fullstime += $seglength;
         $target += (5 * $samplerate);
         my $atarget = ($target - $fullstime);
-        my $floatseg = $atarget / 1024;
-        my $lower = (int($floatseg)*1024);
-        my $higher = (int($floatseg + 0.5)*1024);
+        my $floatseg = $atarget / $pcmFrameLen;
+        my $lower = (int($floatseg)*$pcmFrameLen);
+        my $higher = (int($floatseg + 0.5)*$pcmFrameLen);
 
         if(abs($atarget - $lower) < abs($higher - $atarget)) {
             $seglength = $lower;
@@ -4395,8 +4404,7 @@ sub hls_audio_m3u8 {
     }
     my $duration = $matroska->{'duration'};
     my $atrack = matroska_get_audio_track($matroska);
-    my $samplerate = $atrack->{&EBMLID_AudioSampleRate};
-    if(! $duration || !$samplerate) {
+    if(! $duration) {
         $request->Send404;
         return;
     }
@@ -4411,7 +4419,7 @@ sub hls_audio_m3u8 {
     while($duration > 0) {
         #my $seginfo = hls_audio_get_seg($seg);
         #my $scalc = $seginfo->{'etime'} - $seginfo->{'stime'};
-        my $seginfo = hls_audio_get_sample_range($seg, $samplerate);
+        my $seginfo = hls_audio_get_sample_range($atrack, $seg);
         my $scalc = $seginfo->{'duration'};
         my $sdur = $scalc > $duration ? $duration : $scalc;
         $m3u8 .= sprintf "#EXTINF:%.6f,\naudio%03d.aac\n", $sdur, $seg;
@@ -5447,6 +5455,7 @@ sub matroska_open {
         return undef;
     }
     # loop through the Tracks
+    my %CodecPCMFrameLength = ( 'AAC' => 1024, 'EAC3' => 1536, 'AC3' => 1536);
     my @tracks;
     for(;;) {
         my $in_track = ebml_find_id($ebml, EBMLID_Track);
@@ -5478,6 +5487,7 @@ sub matroska_open {
                     if($3) {
                         $track{'CodecID_Minor'} = $3;
                     }
+                    $track{'PCMFrameLength'} = $CodecPCMFrameLength{$track{'CodecID_Major'}} if($track{'CodecID_Prefix'} eq 'A_');
                 }
                 $track{$elm{'id'}} = \%elm;
             }
@@ -5628,15 +5638,6 @@ sub matroska_get_track_block {
 sub matroska_ts_to_sample  {
     my ($matroska, $samplerate, $ts) = @_;
     my $curframe = int(($ts * $samplerate / 1000000000)+ 0.5);
-
-    #  Hack, adjust curframe when the tsscale isn't good enough
-    if($matroska->{'tsscale'} > int(1000000000 / $samplerate)) {
-        #$curframe = int(($curframe/1024)+0.5)*1024;
-
-        # ceil to 1024 boundry
-        #$curframe = int(($curframe + 1024 - 1) / 1024);
-    }
-
     return $curframe;
 }
 
@@ -5648,10 +5649,17 @@ sub ceil_div {
     return int(($_[0] + $_[1] - 1) / $_[1]);
 }
 
-sub matroska_read_aac_track {
+
+
+sub matroska_read_track {
     my ($matroska, $track, $aacFrameIndex, $numsamples, $formatpacket) = @_;
     my $tid = $track->{&EBMLID_TrackNumber}{'value'};
     my $samplerate = $track->{&EBMLID_AudioSampleRate};
+    my $pcmFrameLen = $track->{'PCMFrameLength'};
+    if(!$pcmFrameLen) {
+        warn("Unknown codec");
+        return undef;
+    }
 
     # find the cluster that might have the start of our audio
     my $desiredcluster;
@@ -5659,8 +5667,8 @@ sub matroska_read_aac_track {
         my $cluster = matroska_read_cluster_metadata($matroska);
         last if(!$cluster);
         my $curframe = matroska_ts_to_sample($matroska, $samplerate, $cluster->{'ts'});
-        #$curframe = int(($curframe/1024)+0.5)*1024; # requires revert cluster
-        $curframe = ceil_div($curframe, 1024) * 1024;# int(($curframe + 1024 - 1) / 1024)*1024;
+        #$curframe = int(($curframe/$pcmFrameLen)+0.5)*$pcmFrameLen; # requires revert cluster
+        $curframe = ceil_div($curframe, $pcmFrameLen) * $pcmFrameLen;
 
         # this cluster could contain our frame, save it's info
         if($curframe <= $aacFrameIndex) {
@@ -5701,7 +5709,7 @@ sub matroska_read_aac_track {
             my $time = ($desiredcluster->{'rawts'} + $block->{'ts'}) * $matroska->{'tsscale'};
             say 'blocktime ' . ($time/1000000000);
             $curframe = matroska_ts_to_sample($matroska, $samplerate, $time);
-            $curframe = round($curframe/1024)*1024;
+            $curframe = round($curframe/$pcmFrameLen)*$pcmFrameLen;
             if($curframe > $aacFrameIndex) {
                 say "too far";
                 $block = undef;
@@ -5713,7 +5721,7 @@ sub matroska_read_aac_track {
         if(!$block) {
             if($desiredcluster->{'prevcluster'}) {
                 say "revert cluster";
-                die;
+                #die;
                 $desiredcluster = $desiredcluster->{'prevcluster'};
                 ebml_set_cluster($ebml, $desiredcluster);
                 next;
@@ -5739,10 +5747,10 @@ sub matroska_read_aac_track {
 
 
         # check range
-        my $aacSampleCount = (1024 * scalar(@{$block->{'frame_lengths'}}));
+        my $aacSampleCount = ($pcmFrameLen * scalar(@{$block->{'frame_lengths'}}));
         if($aacFrameIndex < ($curframe +  $aacSampleCount)) {
             say "found start block: curframe $curframe desired $aacFrameIndex";
-            my $sindex = ($aacFrameIndex - $curframe) / 1024;
+            my $sindex = ($aacFrameIndex - $curframe) / $pcmFrameLen;
             my $skip = 0;
             for(my $i = 0; $i < $sindex; $i++) {
                 $skip += $block->{'frame_lengths'}[$i];
@@ -5754,7 +5762,7 @@ sub matroska_read_aac_track {
             $curframe += ($aacFrameIndex - $curframe);
             my $toread = 0;
             for(my $i = $sindex; $curframe < $aend; $i++) {
-                $curframe += 1024;
+                $curframe += $pcmFrameLen;
                 my $packetlen = $block->{'frame_lengths'}[$i];
                 $outdata .= $formatpacket->(substr($block->{'data'}, $skip, $packetlen), $samplerate);
                 $skip += $packetlen;
