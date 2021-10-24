@@ -4220,7 +4220,7 @@ sub hls_audio_aac {
         $request->Send404;
         return;
     }
-    my $seginfo = hls_audio_get_sample_range($atrack, $seg);
+    my $seginfo = hls_audio_get_decode_sample_range($atrack, $seg);
     if(! $seginfo) {
         $request->Send404;
         return;
@@ -4234,24 +4234,27 @@ sub hls_audio_aac {
     my $data = matroska_read_track($matroska, $atrack, $seginfo->{'sframe'}, $seginfo->{'sduration'}, $muxsub);
     if(defined $data) {
         $request->{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
-        $request->SendLocalBuf(hls_audio_get_id3($seginfo->{'stime'}).$data, 'audio/aac');
+        if($atrack->{'CodecID_Major'} eq 'AAC') {
+            $request->SendLocalBuf(hls_audio_get_id3($seginfo->{'stime'}).$data, 'audio/aac');
+        }
+        elsif(($atrack->{'CodecID_Major'} eq 'EAC3') || ($atrack->{'CodecID_Major'} eq 'AC3')) {
+            write_file('public_html/tmp/dump', $data);
+            my $ffmpegcodecname = lc $atrack->{'CodecID_Major'};
+            my $evp = $request->{'client'}{'server'}{'evp'};
+            say "ffmpegcodecname $ffmpegcodecname";
+            my $process = HTTP::BS::Server::Process->new_output_process($evp, ['ffmpeg', '-f', $ffmpegcodecname, '-i', '-', '-f', 's16le', '-c:a', 'pcm_s16le', '-'], sub {
+                my ($output, $error) = @_;
+                say $error;
+                $request->SendLocalBuf($output, 'application/octet-stream');
+            });
+            #my $fd = $process->{'fd'}{'stdin'}{'fd'};
+            #Dump($fd);
+            #print $fd $data;
+        }
     }
     else {
         $request->Send404;
     }
-    return;
-
-    # mostly works, but has messed up time stamps
-    my $sinfo = hls_audio_get_seg($seg);
-    my $startstr = $sinfo->{'startstr'};
-    my $endstr   = $sinfo->{'endstr'};
-    my @command = ('ffmpeg', '-i', $fileinfo->{'fileabspath'}, '-ss', $startstr, '-to', $endstr, '-vn', '-c', 'copy', '-f', 'adts', '-');
-    my $evp = $request->{'client'}{'server'}{'evp'};
-    $request->{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
-    HTTP::BS::Server::Process->new_output_process($evp, \@command, sub {
-        my ($output, $error) = @_;
-        $request->SendLocalBuf(hls_audio_get_id3($sinfo->{'stime'}).$output, 'audio/aac');
-    });
 }
 
 sub hls_audio_formattime {
@@ -4270,80 +4273,6 @@ sub hls_audio_formattime {
     return $tstring;
 }
 
-sub hls_audio_get_end_time {
-    my ($segnum) = @_;
-    my $deslen = 5;
-    my $destime = ($segnum+1) * $deslen;
-    my $floatseg = ($destime * 44100) / 1024;
-    my $lower = (int($floatseg)*1024)/44100;
-    my $higher = (int($floatseg + 0.5)*1024)/44100;
-    my $etime;
-    if(abs($destime - $lower) < abs($higher - $destime)) {
-        $etime = $lower;
-    }
-    else {
-        $etime = $higher;
-    }
-    return $etime;
-}
-
-sub hls_audio_round_down {
-    my ($time) = @_;
-    return (int($time*1000)-1) / 1000; # Forbidden (hack for sample accurate times)
-}
-
-sub hls_audio_get_actual_time {
-    my ($destime) = @_;
-    my $floatseg = ($destime * 44100) / 1024;
-    my $lower = (int($floatseg)*1024)/44100;
-    my $higher = (int($floatseg + 0.5)*1024)/44100;
-    my $etime;
-    if(abs($destime - $lower) < abs($higher - $destime)) {
-        $etime = $lower;
-    }
-    else {
-        $etime = $higher;
-    }
-    return $etime;
-}
-
-#sub hls_audio_get_seg {
-#    my ($number) = @_;
-#
-#    my $startstr = "00:00:00";
-#    my $fullstime = 0;
-#    if($number > 0) {
-#        $fullstime = hls_audio_get_end_time($number-1);
-#        my $stime = hls_audio_round_down($fullstime);
-#        $startstr = hls_audio_formattime($stime);
-#    }
-#    my $fullendtime = hls_audio_get_end_time($number);
-#    my $endtime = hls_audio_round_down($fullendtime);
-#    my $endstr = hls_audio_formattime($endtime);
-#    return {'startstr' => $startstr, 'endstr' => $endstr, 'etime' => $fullendtime, 'stime' => $fullstime};
-#}
-
-sub hls_audio_get_seg {
-    my ($number) = @_;
-
-    my $fullstime = 0;
-    my $target = 0;
-    my $lasttime = 0;
-    for(my $i = 0; $i <= $number; $i++) {
-        $fullstime = $lasttime;
-
-        $target += 5;
-        my $atarget = ($target - $lasttime);
-        $lasttime = hls_audio_get_actual_time($atarget)+$fullstime;
-    }
-
-    my $fullendtime = $lasttime;
-    my $startstr = hls_audio_formattime($fullstime > 0 ? hls_audio_round_down($fullstime) : $fullstime);
-    my $endstr = hls_audio_formattime(hls_audio_round_down($fullendtime));
-
-    return {'startstr' => $startstr, 'endstr' => $endstr, 'etime' => $fullendtime, 'stime' => $fullstime};
-}
-
 sub hls_audio_get_sample_range {
     my ($atrack, $number) = @_;
     my $samplerate = $atrack->{&EBMLID_AudioSampleRate};
@@ -4355,26 +4284,53 @@ sub hls_audio_get_sample_range {
         return undef;
     }
 
-    my $fullstime = 0;
-    my $target = 0;
-    my $seglength = 0;
-    for(my $i = 0; $i <= $number; $i++) {
-        $fullstime += $seglength;
-        $target += (5 * $samplerate);
-        my $atarget = ($target - $fullstime);
-        my $floatseg = $atarget / $pcmFrameLen;
-        my $lower = (int($floatseg)*$pcmFrameLen);
-        my $higher = (int($floatseg + 0.5)*$pcmFrameLen);
+    # 5 second target length average
+    #my $fullstime = 0;
+    #my $target = 0;
+    #my $seglength = 0;
+    #for(my $i = 0; $i <= $number; $i++) {
+    #    $fullstime += $seglength;
+    #    $target += (5 * $samplerate);
+    #    my $atarget = ($target - $fullstime);
+    #    my $floatseg = $atarget / $pcmFrameLen;
+    #    my $lower = (int($floatseg)*$pcmFrameLen);
+    #    my $higher = (int($floatseg + 0.5)*$pcmFrameLen);
+    #    if(abs($atarget - $lower) < abs($higher - $atarget)) {
+    #        $seglength = $lower;
+    #    }
+    #    else {
+    #        $seglength = $higher;
+    #    }
+    #}
 
-        if(abs($atarget - $lower) < abs($higher - $atarget)) {
-            $seglength = $lower;
-        }
-        else {
-            $seglength = $higher;
-        }
-    }
+    # consistent segment length
+    my $seglength = round((5 * $samplerate) / $pcmFrameLen)*$pcmFrameLen;
+    my $fullstime = $seglength*$number;
 
     return {'sframe' => $fullstime, 'sduration' => $seglength, 'duration' => ($seglength / $samplerate), ('stime' => $fullstime/$samplerate)};
+}
+
+sub hls_audio_get_decode_sample_range {
+    my ($atrack, $number) = @_;
+
+    return hls_audio_get_sample_range($atrack, $number) if(! $atrack->{'faketrack'});
+
+    my $finfo = hls_audio_get_sample_range($atrack->{'faketrack'}, $number);
+    return undef if(! $finfo);
+
+    my $pcmFrameLen = $atrack->{'PCMFrameLength'};
+    if(! $pcmFrameLen) {
+        say "unhandled audio codec";
+        return undef;
+    }
+
+    # convert from the virtual track to the track we need to decode
+    my $sframe = int($finfo->{'sframe'} / $pcmFrameLen)*$pcmFrameLen;
+    my $skipframes = $finfo->{'sframe'} - $sframe;
+    my $sduration = ceil_div($skipframes + $finfo->{'sduration'}, $pcmFrameLen)*$pcmFrameLen;
+    my $chopframes = $sduration - $skipframes  - $finfo->{'sduration'};
+
+    return { 'sframe' => $sframe, 'sduration' => $sduration, 'skip' => $skipframes, 'chop' => $chopframes };
 }
 
 sub hls_audio_m3u8 {
@@ -4409,6 +4365,8 @@ sub hls_audio_m3u8 {
         return;
     }
 
+    my $playlisttrack = $atrack->{'faketrack'} // $atrack;
+
     my $m3u8 =
 '#EXTM3U
 #EXT-X-VERSION:3
@@ -4417,9 +4375,7 @@ sub hls_audio_m3u8 {
 '   ;
     my $seg = 0;
     while($duration > 0) {
-        #my $seginfo = hls_audio_get_seg($seg);
-        #my $scalc = $seginfo->{'etime'} - $seginfo->{'stime'};
-        my $seginfo = hls_audio_get_sample_range($atrack, $seg);
+        my $seginfo = hls_audio_get_sample_range($playlisttrack, $seg);
         my $scalc = $seginfo->{'duration'};
         my $sdur = $scalc > $duration ? $duration : $scalc;
         $m3u8 .= sprintf "#EXTINF:%.6f,\naudio%03d.aac\n", $sdur, $seg;
@@ -5538,6 +5494,14 @@ sub matroska_open {
             }
 
             ebml_skip($ebml);
+        }
+        # add the fake track
+        if(($track{'CodecID_Major'} eq 'EAC3') || ($track{'CodecID_Major'} eq 'AC3')) {
+            $track{'faketrack'} = {
+                'PCMFrameLength' => $CodecPCMFrameLength{'AAC'},
+                &EBMLID_AudioSampleRate => $track{&EBMLID_AudioSampleRate},
+                &EBMLID_AudioChannels => $track{&EBMLID_AudioChannels}
+            };
         }
         push @tracks, \%track;
     }
