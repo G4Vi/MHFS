@@ -4238,18 +4238,32 @@ sub hls_audio_aac {
             $request->SendLocalBuf(hls_audio_get_id3($seginfo->{'stime'}).$data, 'audio/aac');
         }
         elsif(($atrack->{'CodecID_Major'} eq 'EAC3') || ($atrack->{'CodecID_Major'} eq 'AC3')) {
-            write_file('public_html/tmp/dump', $data);
+
+            #$request->SendLocalBuf($data, 'application/octet-stream');
+            #return;
+            my $dir = 'public_html/tmp/'.$fileinfo->{'tmpname'};
+            if(system("mkdir", '-p', $dir) != 0) {
+                $request->Send404;
+                return;
+            }
+            my $fullpcm = $dir.'/audio'.$seg.'_bad.eac3';
+            write_file($fullpcm, $data);
             my $ffmpegcodecname = lc $atrack->{'CodecID_Major'};
             my $evp = $request->{'client'}{'server'}{'evp'};
             say "ffmpegcodecname $ffmpegcodecname";
-            my $process = HTTP::BS::Server::Process->new_output_process($evp, ['ffmpeg', '-f', $ffmpegcodecname, '-i', '-', '-f', 's16le', '-c:a', 'pcm_s16le', '-'], sub {
+            my $process = HTTP::BS::Server::Process->new_output_process($evp, ['ffmpeg', '-f', $ffmpegcodecname, '-i', $fullpcm, '-f', 's16le', '-c:a', 'pcm_s16le', '-'], sub {
                 my ($output, $error) = @_;
-                say $error;
+
+                my $sduration = $seginfo->{'sduration'} - $seginfo->{'skip'} - $seginfo->{'chop'};
+                my $sframe = $seginfo->{'sframe'} + $seginfo->{'skip'};
+                my $skipbytes = $seginfo->{'skip'}*(2*6);
+                $output = substr($output, $skipbytes, $sduration * (2*6));
+
+                print Dumper($seginfo);
+
+                #say $error;
                 $request->SendLocalBuf($output, 'application/octet-stream');
             });
-            #my $fd = $process->{'fd'}{'stdin'}{'fd'};
-            #Dump($fd);
-            #print $fd $data;
         }
     }
     else {
@@ -4326,6 +4340,10 @@ sub hls_audio_get_decode_sample_range {
 
     # convert from the virtual track to the track we need to decode
     my $sframe = int($finfo->{'sframe'} / $pcmFrameLen)*$pcmFrameLen;
+    # include an extra frame
+    if($sframe >= ($pcmFrameLen*156)) {
+        $sframe -= ($pcmFrameLen*156);
+    }
     my $skipframes = $finfo->{'sframe'} - $sframe;
     my $sduration = ceil_div($skipframes + $finfo->{'sduration'}, $pcmFrameLen)*$pcmFrameLen;
     my $chopframes = $sduration - $skipframes  - $finfo->{'sduration'};
