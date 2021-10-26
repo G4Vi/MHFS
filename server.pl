@@ -2069,6 +2069,10 @@ package HTTP::BS::Server::Process {
             (0 == fcntl($out, Fcntl::F_GETFL, $flags)) or die;#return undef;
             $flags |= Fcntl::O_NONBLOCK;
             (0 == fcntl($out, Fcntl::F_SETFL, $flags)) or die;#return undef;
+            # stdin
+            #(0 == fcntl($in, Fcntl::F_GETFL, $flags)) or die;#return undef;
+            #$flags |= Fcntl::O_NONBLOCK;
+            #(0 == fcntl($in, Fcntl::F_SETFL, $flags)) or die;#return undef;
             return $self;
         }
     }    
@@ -2156,6 +2160,35 @@ package HTTP::BS::Server::Process {
         },      
         };
 
+        if($context->{'input'}) {
+            $prochandlers->{'STDIN'} = sub {
+                my ($fh) = @_;
+                while(1) {
+                    my $curbuf = $context->{'curbuf'};
+                    if($curbuf) {
+                        my $rv = syswrite($fh, $curbuf, length($curbuf));
+                        if(!defined($rv)) {
+                            if(! $!{EAGAIN}) {
+                                return undef;
+                            }
+                            return 1;
+                        }
+                        elsif($rv != length($curbuf)) {
+                            substr($context->{'curbuf'}, 0, $rv, '');
+                            return 1;
+                        }
+                        else {
+                            say "wrote all";
+                        }
+                    }
+                    $context->{'curbuf'} = $context->{'input'}->();
+                    if(! defined $context->{'curbuf'}) {
+                        return 0;
+                    }
+                }
+            };
+        }
+
         $process = $make_process->($make_process_args, $prochandlers, {'O_NONBLOCK' => 1});
         return $process;
     }
@@ -2176,12 +2209,6 @@ package HTTP::BS::Server::Process {
     # subset of command process, just need the data on SIGCHLD
     sub new_output_process {
         my ($class, $evp, $cmd, $handler) = @_;
-        #my $context = {
-        #    at_exit => sub {
-        #        say "at_exit1";
-        #    }
-        #};
-        #return new_cmd_process($class, $evp, $cmd, $context);
         
         return new_cmd_process($class, $evp, $cmd, {   
             'at_exit' => sub {
