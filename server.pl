@@ -2070,7 +2070,8 @@ package HTTP::BS::Server::Process {
             $flags |= Fcntl::O_NONBLOCK;
             (0 == fcntl($out, Fcntl::F_SETFL, $flags)) or die;#return undef;
             # stdin
-            #(0 == fcntl($in, Fcntl::F_GETFL, $flags)) or die;#return undef;
+            defined($in->blocking(0)) or die($!);
+            #(0 == fcntl($in, Fcntl::F_GETFL, $flags)) or die("$!");#return undef;
             #$flags |= Fcntl::O_NONBLOCK;
             #(0 == fcntl($in, Fcntl::F_SETFL, $flags)) or die;#return undef;
             return $self;
@@ -4257,45 +4258,93 @@ sub hls_audio_aac {
     };
     if($atrack->{'CodecID_Major'} eq 'AAC') {
         $muxsub = \&mux_aac_packet_to_adts_packet;
-    }
-    my $data = matroska_read_track($matroska, $atrack, $seginfo->{'sframe'}, $seginfo->{'sduration'}, $muxsub);
-    if(defined $data) {
+        my $data = matroska_read_track($matroska, $atrack, $seginfo->{'sframe'}, $seginfo->{'sduration'}, $muxsub);
+        if(! defined $data) {
+            $request->Send404;
+            return;
+        }
+        
         $request->{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
-        if($atrack->{'CodecID_Major'} eq 'AAC') {
-            $request->SendLocalBuf(hls_audio_get_id3($seginfo->{'stime'}).$data, 'audio/aac');
+        $request->SendLocalBuf(hls_audio_get_id3($seginfo->{'stime'}).$data, 'audio/aac');
+    }
+    elsif(($atrack->{'CodecID_Major'} eq 'EAC3') || ($atrack->{'CodecID_Major'} eq 'AC3')) {
+        my $sesh = $request->{'client'}{'server'}{'sesh'}{'sessions'}{$request->{'qs'}{'sesh'}};
+        if(! defined $sesh) {
+            say 'sesh required';
+            $request->Send404;
+            return;
         }
-        elsif(($atrack->{'CodecID_Major'} eq 'EAC3') || ($atrack->{'CodecID_Major'} eq 'AC3')) {
-
-            #$request->SendLocalBuf($data, 'application/octet-stream');
-            #return;
-            my $dir = 'public_html/tmp/'.$fileinfo->{'tmpname'};
-            if(system("mkdir", '-p', $dir) != 0) {
-                $request->Send404;
-                return;
-            }
-            my $fullpcm = $dir.'/audio'.$seg.'_bad.eac3';
-            write_file($fullpcm, $data);
-            my $ffmpegcodecname = lc $atrack->{'CodecID_Major'};
-            my $evp = $request->{'client'}{'server'}{'evp'};
-            say "ffmpegcodecname $ffmpegcodecname";
-            my $process = HTTP::BS::Server::Process->new_output_process($evp, ['ffmpeg', '-f', $ffmpegcodecname, '-i', $fullpcm, '-f', 's16le', '-c:a', 'pcm_s16le', '-'], sub {
-                my ($output, $error) = @_;
-
-                my $sduration = $seginfo->{'sduration'} - $seginfo->{'skip'} - $seginfo->{'chop'};
-                my $sframe = $seginfo->{'sframe'} + $seginfo->{'skip'};
-                my $skipbytes = $seginfo->{'skip'}*(2*6);
-                $output = substr($output, $skipbytes, $sduration * (2*6));
-
-                print Dumper($seginfo);
-
-                #say $error;
-                $request->SendLocalBuf($output, 'application/octet-stream');
-            });
+        if($sesh->{'request'}) {
+            say "sesh busy, try again";
+            $request->{'outheaders'}{'Retry-After'} = '5';
+            $request->Send503;
+            return;
         }
+        if($sesh->{'segnum'} != $seg) {
+            say "sesh segnum differing, recreating process, expected " . $sesh->{'segnum'} . ' got ' . $seg;
+            $sesh->{'process'} = undef;
+        }
+
+        $sesh->{'request'} = $request;
+
+        my $ffmpegcodecname = lc $atrack->{'CodecID_Major'};
+        my $evp = $request->{'client'}{'server'}{'evp'};
+        my $aacdata;
+        my @expectedduration;
+        my @stimes;
+        #$sesh->{'process'} //= HTTP::BS::Server::Process->new_cmd_process($evp, ['ffmpeg', '-f', $ffmpegcodecname, '-i', '-', '-f', 's16le', '-c:a', 'pcm_s16le', '-'], {
+        $sesh->{'process'} //= HTTP::BS::Server::Process->new_cmd_process($evp, ['ffmpeg', '-f', $ffmpegcodecname, '-i', '-', '-f', 'adts', '-c:a', 'aac', '-b:a', '160k', '-'], {
+            'input' => sub {
+                $matroska = matroska_open($fileinfo->{'fileabspath'});
+                if(!$matroska) {
+                    return undef;
+                }
+                say "matroska_read_track read: start ".$seginfo->{'sframe'} . " duration " . $seginfo->{'sduration'};
+                my $packcnt = 0;
+                $muxsub = sub {
+                    $packcnt++;
+                    return $_[0];
+                };
+                my $data = matroska_read_track($matroska, $atrack, $seginfo->{'sframe'}, $seginfo->{'sduration'}, $muxsub);
+                say "bad read" if(! $data);
+                push @expectedduration, ($packcnt * $atrack->{'PCMFrameLength'});
+                push @stimes, $seginfo->{'stime'};
+                $seginfo->{'sframe'} += ($packcnt * $atrack->{'PCMFrameLength'});
+                return $data;
+            },
+            'on_stdout_data' => sub {
+                my ($context) = @_;
+                # parse aac frames
+
+                say "on_stdout_data called";
+
+                # send if enough have been read and disable read
+                my $dbytes = (6*2*$expectedduration[0]);
+                if(length($context->{'stdout'}) >= $dbytes) {
+                    unshift @expectedduration;
+                    my $tosend = substr($context->{'stdout'}, 0, $dbytes, '');
+                    $sesh->{'request'}{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
+                    #$sesh->{'request'}->SendLocalBuf($tosend, 'application/octet-stream');
+                    my $stime = unshift @stimes;
+                    $request->SendLocalBuf(hls_audio_get_id3($stime).$tosend, 'audio/aac');
+                    $evp->set($sesh->{'process'}{'fd'}{'stdout'}{'fd'}, $sesh->{'process'}{'fd'}{'stdout'}, $EventLoop::Poll::ALWAYSMASK) if($sesh->{'process'});
+                    $sesh->{'request'} = undef;
+                    $sesh->{'segnum'}++;   
+                }                
+            },
+            'at_exit' => sub {
+                say "sesh proc over";
+                #$sesh->{'request'} = undef;
+                $sesh->{'process'} = undef;
+            }            
+        });
+
+        # enable read
+        $evp->set($sesh->{'process'}{'fd'}{'stdout'}{'fd'}, $sesh->{'process'}{'fd'}{'stdout'}, POLLIN | $EventLoop::Poll::ALWAYSMASK);
     }
     else {
         $request->Send404;
-    }
+    }   
 }
 
 sub hls_audio_formattime {
@@ -4358,6 +4407,7 @@ sub hls_audio_get_decode_sample_range {
 
     my $finfo = hls_audio_get_sample_range($atrack->{'faketrack'}, $number);
     return undef if(! $finfo);
+    say "ft sframe ". $finfo->{'sframe'};
 
     my $pcmFrameLen = $atrack->{'PCMFrameLength'};
     if(! $pcmFrameLen) {
@@ -4368,9 +4418,9 @@ sub hls_audio_get_decode_sample_range {
     # convert from the virtual track to the track we need to decode
     my $sframe = int($finfo->{'sframe'} / $pcmFrameLen)*$pcmFrameLen;
     # include an extra frame
-    if($sframe >= ($pcmFrameLen*156)) {
-        $sframe -= ($pcmFrameLen*156);
-    }
+    #if($sframe >= ($pcmFrameLen*156)) {
+    #    $sframe -= ($pcmFrameLen*156);
+    #}
     my $skipframes = $finfo->{'sframe'} - $sframe;
     my $sduration = ceil_div($skipframes + $finfo->{'sduration'}, $pcmFrameLen)*$pcmFrameLen;
     my $chopframes = $sduration - $skipframes  - $finfo->{'sduration'};
@@ -4410,7 +4460,18 @@ sub hls_audio_m3u8 {
         return;
     }
 
-    my $playlisttrack = $atrack->{'faketrack'} // $atrack;
+    my $segnameextra = '';
+    my $playlisttrack = $atrack;
+    if($atrack->{'faketrack'}) {
+        $playlisttrack = $atrack->{'faketrack'};
+        $request->{'client'}{'server'}{'sesh'} //= { 'newindex' => 0, 'sessions' => {}};
+        my $seshs = $request->{'client'}{'server'}{'sesh'};
+        $seshs->{'sessions'}{$seshs->{'newindex'}} = {
+            'segnum' => 0
+        };
+        $segnameextra = '?sesh='.$seshs->{'newindex'};
+        $seshs->{'newindex'}++;
+    }    
 
     my $m3u8 =
 '#EXTM3U
@@ -4423,7 +4484,7 @@ sub hls_audio_m3u8 {
         my $seginfo = hls_audio_get_sample_range($playlisttrack, $seg);
         my $scalc = $seginfo->{'duration'};
         my $sdur = $scalc > $duration ? $duration : $scalc;
-        $m3u8 .= sprintf "#EXTINF:%.6f,\naudio%03d.aac\n", $sdur, $seg;
+        $m3u8 .= sprintf "#EXTINF:%.6f,\naudio%03d.aac$segnameextra\n", $sdur, $seg;
         $seg++;
         $duration -= $scalc;
     }
@@ -5587,7 +5648,7 @@ sub matroska_read_cluster_metadata {
             last;
         }
         my %elm = ('id' => $belm->{'id'}, 'data' => '');
-        say "elm size " . $belm->{'size'};
+        #say "elm size " . $belm->{'size'};
         ebml_read($ebml, $elm{'data'}, $belm->{'size'});
         if($elm{'id'} == EBMLID_ClusterTimestamp) {
             $cluster{'rawts'} = parse_uinteger_str($elm{'data'});
@@ -5694,6 +5755,7 @@ sub matroska_read_track {
             last;
         }
     }
+    say "before dc check";
     return undef if(! $desiredcluster);
 
     say "cur rawts " . $desiredcluster->{'rawts'};
@@ -5704,7 +5766,7 @@ sub matroska_read_track {
     ebml_set_cluster($ebml, $desiredcluster);
 
     my $outdata;
-
+    say 'aac frameIndex ' .  $aacFrameIndex;
     # search for the block
     for(;;) {
         # load a block
@@ -5718,7 +5780,7 @@ sub matroska_read_track {
             my $time = ($desiredcluster->{'rawts'} + $block->{'ts'}) * $matroska->{'tsscale'};
             say 'blocktime ' . ($time/1000000000);
             $curframe = matroska_ts_to_sample($matroska, $samplerate, $time);
-            $curframe = round($curframe/$pcmFrameLen)*$pcmFrameLen;
+            $curframe = round($curframe/$pcmFrameLen)*$pcmFrameLen;            
             if($curframe > $aacFrameIndex) {
                 say "too far";
                 $block = undef;
