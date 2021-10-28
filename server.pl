@@ -207,7 +207,7 @@ package EventLoop::Poll {
                 }
                 
                 if($revents & (POLLHUP | $POLLRDHUP )) { 
-                    say "Hangup $handle";                   
+                    say "Hangup $handle, before ". scalar ( $self->{'poll'}->handles);
                     $obj->onHangUp();
                     $self->remove($handle);
                     say "poll has " . scalar ( $self->{'poll'}->handles) . " handles";                        
@@ -233,7 +233,7 @@ package EventLoop::Poll {
             check_timers($self);        
             print "do_poll $$";
             if($self->{'timers'}) {
-                say " timers " . scalar(@{$self->{'timers'}});                    
+                say " timers " . scalar(@{$self->{'timers'}}) . ' handles ' . scalar($self->{'poll'}->handles());
             }
             else {
                 print "\n";
@@ -290,7 +290,7 @@ package EventLoop::Poll {
                 {
                     print "do_poll LINUX_X86_64 $$";
                     if($self->{'timers'}) {
-                        say " timers " . scalar(@{$self->{'timers'}});                    
+                        say " timers " . scalar(@{$self->{'timers'}}) . ' handles ' . scalar($self->{'poll'}->handles());
                     }
                     else {
                         print "\n";
@@ -354,7 +354,8 @@ package HTTP::BS::Server {
             $sock->setsockopt(IPPROTO_TCP, TCP_QUICKACK, 1) or die("Failed to set TCP_QUICKACK");
         }
         my $evp = EventLoop::Poll->new;
-        my %self = ( 'settings' => $settings, 'routes' => $routes, 'route_default' => pop @$routes, 'plugins' => $plugins, 'sock' => $sock, 'evp' => $evp, 'uploaders' => []);
+        my %self = ( 'settings' => $settings, 'routes' => $routes, 'route_default' => pop @$routes, 'plugins' => $plugins, 'sock' => $sock, 'evp' => $evp, 'uploaders' => [], 'sesh' =>
+        { 'newindex' => 0, 'sessions' => {}});
         bless \%self, $class;
 
         $evp->set($sock, \%self, POLLIN);
@@ -1961,7 +1962,8 @@ package HTTP::BS::Server::FD::Reader{
     use Scalar::Util qw(looks_like_number weaken);
     sub new {
         my ($class, $process, $fd, $func) = @_;        
-        my %self = ('time' => clock_gettime(CLOCK_MONOTONIC), 'process' => $process, 'fd' => $fd, 'onWriteReady' => $func); 
+        my %self = ('time' => clock_gettime(CLOCK_MONOTONIC), 'process' => $process, 'fd' => $fd, 'onWriteReady' => $func);
+        say "PID " . $self{'process'}{'pid'} . 'FD ' . $self{'fd'};
         weaken($self{'process'});
         return bless \%self, $class;
     }
@@ -1982,7 +1984,7 @@ package HTTP::BS::Server::FD::Reader{
     }
     
     sub onHangUp {
-    
+
     }
 
     sub DESTROY {
@@ -2020,6 +2022,7 @@ package HTTP::BS::Server::Process {
             if(defined $CHILDREN{$child}) {                
                 say "PID $child reaped (func) $exitcode"; 
                 $CHILDREN{$child}->($exitcode);
+                # remove file handles here?
                 $CHILDREN{$child} = undef;
             }
             else {
@@ -2076,6 +2079,16 @@ package HTTP::BS::Server::Process {
             #(0 == fcntl($in, Fcntl::F_SETFL, $flags)) or die;#return undef;
             return $self;
         }
+    }
+
+    sub stopSTDOUT {
+        my ($self) = @_;
+        $self->{'evp'}->set($self->{'fd'}{'stdout'}{'fd'}, $self->{'fd'}{'stdout'}, $EventLoop::Poll::ALWAYSMASK);
+    }
+
+    sub resumeSTDOUT {
+        my ($self) = @_;
+        $self->{'evp'}->set($self->{'fd'}{'stdout'}{'fd'}, $self->{'fd'}{'stdout'}, POLLIN | $EventLoop::Poll::ALWAYSMASK);
     }    
     
     sub new {
@@ -2154,10 +2167,6 @@ package HTTP::BS::Server::Process {
                 $context->{'on_stdout_data'}->($context);
             }
             $context->{'at_exit'}->($context);
-            #$make_process_args->{'evp'}->add_timer(0, 0, sub {
-            #    $context->{'at_exit'}->($context);
-            #    return undef;
-            #});        
         },      
         };
 
@@ -2170,7 +2179,8 @@ package HTTP::BS::Server::Process {
                         my $rv = syswrite($fh, $curbuf, length($curbuf));
                         if(!defined($rv)) {
                             if(! $!{EAGAIN}) {
-                                return undef;
+                                say "Critical write error";
+                                return -1;
                             }
                             return 1;
                         }
@@ -2182,7 +2192,7 @@ package HTTP::BS::Server::Process {
                             say "wrote all";
                         }
                     }
-                    $context->{'curbuf'} = $context->{'input'}->();
+                    $context->{'curbuf'} = $context->{'input'}->($context);
                     if(! defined $context->{'curbuf'}) {
                         return 0;
                     }
@@ -3286,7 +3296,7 @@ package MusicLibrary {
 
         $self->{'timers'} = [
             # update the library at start and periodically
-            [0, 300, sub {
+            [0, 30, sub {
                 my ($timer, $current_time, $evp) = @_;
                 say "$pstart  library timer";                
                 UpdateLibrariesAsync($self, $evp, sub {
@@ -4292,55 +4302,83 @@ sub hls_audio_aac {
         my $aacdata;
         my @expectedduration;
         my @stimes;
-        #$sesh->{'process'} //= HTTP::BS::Server::Process->new_cmd_process($evp, ['ffmpeg', '-f', $ffmpegcodecname, '-i', '-', '-f', 's16le', '-c:a', 'pcm_s16le', '-'], {
-        $sesh->{'process'} //= HTTP::BS::Server::Process->new_cmd_process($evp, ['ffmpeg', '-f', $ffmpegcodecname, '-i', '-', '-f', 'adts', '-c:a', 'aac', '-b:a', '160k', '-'], {
-            'input' => sub {
-                $matroska = matroska_open($fileinfo->{'fileabspath'});
-                if(!$matroska) {
-                    return undef;
-                }
-                say "matroska_read_track read: start ".$seginfo->{'sframe'} . " duration " . $seginfo->{'sduration'};
-                my $packcnt = 0;
-                $muxsub = sub {
-                    $packcnt++;
-                    return $_[0];
-                };
-                my $data = matroska_read_track($matroska, $atrack, $seginfo->{'sframe'}, $seginfo->{'sduration'}, $muxsub);
-                say "bad read" if(! $data);
-                push @expectedduration, ($packcnt * $atrack->{'PCMFrameLength'});
-                push @stimes, $seginfo->{'stime'};
-                $seginfo->{'sframe'} += ($packcnt * $atrack->{'PCMFrameLength'});
-                return $data;
-            },
-            'on_stdout_data' => sub {
+        if(! $sesh->{'process'}) {
+
+            sub context_input {
                 my ($context) = @_;
-                # parse aac frames
+                return undef;
+            };
 
-                say "on_stdout_data called";
+            sub context_on_stdout_data {
+                my ($context) = @_;
+            };
 
-                # send if enough have been read and disable read
-                my $dbytes = (6*2*$expectedduration[0]);
-                if(length($context->{'stdout'}) >= $dbytes) {
-                    unshift @expectedduration;
-                    my $tosend = substr($context->{'stdout'}, 0, $dbytes, '');
-                    $sesh->{'request'}{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
-                    #$sesh->{'request'}->SendLocalBuf($tosend, 'application/octet-stream');
-                    my $stime = unshift @stimes;
-                    $request->SendLocalBuf(hls_audio_get_id3($stime).$tosend, 'audio/aac');
-                    $evp->set($sesh->{'process'}{'fd'}{'stdout'}{'fd'}, $sesh->{'process'}{'fd'}{'stdout'}, $EventLoop::Poll::ALWAYSMASK) if($sesh->{'process'});
-                    $sesh->{'request'} = undef;
-                    $sesh->{'segnum'}++;   
-                }                
-            },
-            'at_exit' => sub {
-                say "sesh proc over";
-                #$sesh->{'request'} = undef;
-                $sesh->{'process'} = undef;
-            }            
-        });
+            sub context_at_exit {
+                my ($context) = @_;
+            };
+
+            $request->{'outheaders'}{'Connection'} = 'close';
+            #$request->Send404;
+
+
+            my $ctx = {
+                #'input' => \&context_input,
+                
+                'input' => sub {
+                    my ($context) = @_;
+                    $matroska = matroska_open($fileinfo->{'fileabspath'});
+                    if(!$matroska) {
+                        return undef;
+                    }
+                    say "matroska_read_track read: start ".$seginfo->{'sframe'} . " duration " . $seginfo->{'sduration'};
+                    my $packcnt = 0;
+                    $muxsub = sub {
+                        $packcnt++;
+                        return $_[0];
+                    };
+                    my $data = matroska_read_track($matroska, $atrack, $seginfo->{'sframe'}, $seginfo->{'sduration'}, $muxsub);
+                    say "bad read" if(! $data);
+                    push @expectedduration, ($packcnt * $atrack->{'PCMFrameLength'});
+                    push @stimes, $seginfo->{'stime'};
+                    $seginfo->{'sframe'} += ($packcnt * $atrack->{'PCMFrameLength'});
+                    return $data;
+                },
+                #'on_stdout_data' => \&context_on_stdout_data,
+                
+                'on_stdout_data' => sub {
+                    my ($context) = @_;
+                    # parse aac frames
+
+                    say "on_stdout_data called";
+
+                    # send if enough have been read and disable read
+                    my $dbytes = (6*2*$expectedduration[0]);
+                    if(length($context->{'stdout'}) >= $dbytes) {
+                        unshift @expectedduration;
+                        my $tosend = substr($context->{'stdout'}, 0, $dbytes, '');
+                        $sesh->{'request'}{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
+                        $sesh->{'request'}->SendLocalBuf($tosend, 'application/octet-stream');
+                        #my $stime = unshift @stimes;
+                        #$sesh->{'request'}->SendLocalBuf(hls_audio_get_id3($stime).$tosend, 'audio/aac');
+                        $sesh->{'process'}->stopSTDOUT();
+                        $sesh->{'request'} = undef;
+                        $sesh->{'segnum'}++;   
+                    }                
+                },
+                #'at_exit' => \&context_at_exit  
+                'at_exit' => sub {
+                    say "sesh proc over";
+                    #$sesh->{'request'} = undef;
+                    #$sesh->{'process'} = undef;
+                }            
+            };
+            #$sesh->{'process'} = HTTP::BS::Server::Process->new_cmd_process($evp, ['ffmpeg', '-f', $ffmpegcodecname, '-i', '-', '-f', 'adts', '-c:a', 'aac', '-b:a', '160k', '-'], $ctx);
+            say "poll handles " . scalar($evp->{'poll'}->handles());
+            $sesh->{'process'} = HTTP::BS::Server::Process->new_cmd_process($evp, ['ffmpeg', '-f', $ffmpegcodecname, '-i', 'aaa', '-f', 's16le', '-c:a', 'pcm_s16le', '-'], $ctx);
+        }        
 
         # enable read
-        $evp->set($sesh->{'process'}{'fd'}{'stdout'}{'fd'}, $sesh->{'process'}{'fd'}{'stdout'}, POLLIN | $EventLoop::Poll::ALWAYSMASK);
+        $sesh->{'process'}->resumeSTDOUT();
     }
     else {
         $request->Send404;
@@ -4464,7 +4502,6 @@ sub hls_audio_m3u8 {
     my $playlisttrack = $atrack;
     if($atrack->{'faketrack'}) {
         $playlisttrack = $atrack->{'faketrack'};
-        $request->{'client'}{'server'}{'sesh'} //= { 'newindex' => 0, 'sessions' => {}};
         my $seshs = $request->{'client'}{'server'}{'sesh'};
         $seshs->{'sessions'}{$seshs->{'newindex'}} = {
             'segnum' => 0
