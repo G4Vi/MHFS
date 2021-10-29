@@ -11,23 +11,23 @@ package EventLoop::Poll::Linux::Timer {
         _clock_BOOTTIME  => 7,
         _clock_REALTIME_ALARM => 8,
         _clock_BOOTTIME_ALARM => 9,
-     
+
         _ENOTTY => 25,  #constant for Linux?
     };
     # x86_64 numbers
     require 'syscall.ph';
 
     my $TFD_CLOEXEC = 0x80000;
-    my $TFD_NONBLOCK = 0x800;     
+    my $TFD_NONBLOCK = 0x800;
 
     sub new {
         my ($class, $evp) = @_;
         say 'timerfd_create ' . SYS_timerfd_create();
         say "timerfd_settime " . SYS_timerfd_settime();
-        my $timerfd = syscall(SYS_timerfd_create(), _clock_MONOTONIC, $TFD_NONBLOCK | $TFD_CLOEXEC);       
+        my $timerfd = syscall(SYS_timerfd_create(), _clock_MONOTONIC, $TFD_NONBLOCK | $TFD_CLOEXEC);
         $timerfd != -1 or die("failed to create timerfd: $!");
         my $timerhandle = IO::Handle->new_from_fd($timerfd, "r");
-        $timerhandle or die("failed to turn timerfd into a file handle"); 
+        $timerhandle or die("failed to turn timerfd into a file handle");
         my %self = ('timerfd' => $timerfd, 'timerhandle' => $timerhandle);
         bless \%self, $class;
 
@@ -37,7 +37,7 @@ package EventLoop::Poll::Linux::Timer {
     }
 
     sub packitimerspec {
-       my ($times) = @_; 
+       my ($times) = @_;
        my $it_interval_sec  = int($times->{'it_interval'});
        my $it_interval_nsec = floor(($times->{'it_interval'} - $it_interval_sec) * 1000000000);
        my $it_value_sec = int($times->{'it_value'});
@@ -71,24 +71,25 @@ package EventLoop::Poll::Linux::Timer {
             if( ! $!{EAGAIN}) {
                 say "sysread failed with $!";
             }
-            
+
         }
         $self->{'evp'}->check_timers;
         return 1;
     };
-    
+
 1;
 };
 
 # You must provide event handlers for the events you are listening for
 # return undef to have them removed from poll's structures
-package EventLoop::Poll {     
+package EventLoop::Poll {
     use strict; use warnings;
     use feature 'say';
+    use POSIX ":sys_wait_h";
     use IO::Poll qw(POLLIN POLLOUT POLLHUP);
     use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
     use Scalar::Util qw(looks_like_number);
-    use Data::Dumper;    
+    use Data::Dumper;
     use Devel::Peek;
     #use Devel::Refcount qw( refcount );
 
@@ -97,9 +98,37 @@ package EventLoop::Poll {
     
     sub new {
         my ($class) = @_;        
-        my %self = ('poll' => IO::Poll->new(), 'fh_map' => {}, 'timers' => []);
+        my %self = ('poll' => IO::Poll->new(), 'fh_map' => {}, 'timers' => [], 'children' => {}, 'deadchildren' => []);
         bless \%self, $class;
+
+        $SIG{CHLD} = sub {
+            while((my $child = waitpid(-1, WNOHANG)) > 0) {
+                my ($wstatus, $exitcode) = ($?, $?>> 8);
+                if(defined $self{'children'}{$child}) {
+                    say "PID $child reaped (func) $exitcode";
+                    push @{$self{'deadchildren'}}, [$self{'children'}{$child}, $child, $exitcode];
+                    $self{'children'}{$child} = undef;
+                }
+                else {
+                    say "PID $child reaped (No func) $exitcode"; 
+                }        
+            }
+        };
+
         return \%self;   
+    }
+
+    sub register_child {
+        my ($self, $pid, $cb) = @_;
+        $self->{'children'}{$pid} = $cb;
+    }
+
+    sub run_dead_children_callbacks {
+        my ($self) = @_;
+        while(my $chld = shift(@{$self->{'deadchildren'}})) {
+            say "PID " . $chld->[1] . ' running SIGCHLD cb';
+            $chld->[0]($chld->[2]);
+        }
     }
 
     sub set {
@@ -223,6 +252,8 @@ package EventLoop::Poll {
             say "Poll ERROR $!";
             #return undef;
         }
+
+        $self->run_dead_children_callbacks;
     }   
    
     sub run {
@@ -1949,7 +1980,7 @@ package HTTP::BS::Server::FD::Reader{
         my $self = shift;
         print "PID " . $self->{'process'}{'pid'} . ' ' if($self->{'process'});
         print "FD " . $self->{'fd'};
-        say 'reader DESTROY called';                        
+        say ' reader DESTROY called';                        
     }
     
     1;
@@ -1990,8 +2021,7 @@ package HTTP::BS::Server::FD::Reader{
 
     sub DESTROY {
         my $self = shift;        
-        say "PID " . $self->{'process'}{'pid'} . ' writer DESTROY called' .  " FD " . $self->{'fd'};
-                  
+        say "PID " . $self->{'process'}{'pid'} . " FD " . $self->{'fd'}.' writer DESTROY called';                  
     }
     
     1;
@@ -2016,21 +2046,21 @@ package HTTP::BS::Server::Process {
     use Carp;
     $SIG{ __DIE__ } = sub { Carp::confess( @_ ) };
     
-    my %CHILDREN;
-    $SIG{CHLD} = sub {
-        while((my $child = waitpid(-1, WNOHANG)) > 0) {
-            my ($wstatus, $exitcode) = ($?, $?>> 8);
-            if(defined $CHILDREN{$child}) {                
-                say "PID $child reaped (func) $exitcode"; 
-                $CHILDREN{$child}->($exitcode);
-                # remove file handles here?
-                $CHILDREN{$child} = undef;
-            }
-            else {
-                say "PID $child reaped (No func) $exitcode"; 
-            }        
-        }    
-    };
+    #my %CHILDREN;
+    #$SIG{CHLD} = sub {
+    #    while((my $child = waitpid(-1, WNOHANG)) > 0) {
+    #        my ($wstatus, $exitcode) = ($?, $?>> 8);
+    #        if(defined $CHILDREN{$child}) {                
+    #            say "PID $child reaped (func) $exitcode"; 
+    #            $CHILDREN{$child}->($exitcode);
+    #            # remove file handles here?
+    #            $CHILDREN{$child} = undef;
+    #        }
+    #        else {
+    #            say "PID $child reaped (No func) $exitcode"; 
+    #        }        
+    #    }    
+    #};
 
     sub _setup_handlers {
         my ($self, $in, $out, $err, $fddispatch, $handlesettings) = @_;
@@ -2039,7 +2069,8 @@ package HTTP::BS::Server::Process {
 
         if($fddispatch->{'SIGCHLD'}) {
             say "PID $pid custom SIGCHLD handler";
-            $CHILDREN{$pid} = $fddispatch->{'SIGCHLD'};            
+            #$CHILDREN{$pid} = $fddispatch->{'SIGCHLD'};
+            $evp->register_child($pid, $fddispatch->{'SIGCHLD'});            
         }    
         if($fddispatch->{'STDIN'}) {            
             $self->{'fd'}{'stdin'} = HTTP::BS::Server::FD::Writer->new($self, $in, $fddispatch->{'STDIN'});
@@ -2080,6 +2111,14 @@ package HTTP::BS::Server::Process {
             #(0 == fcntl($in, Fcntl::F_SETFL, $flags)) or die;#return undef;
             return $self;
         }
+    }
+
+    sub sigkill {
+        my ($self, $cb) = @_;
+        if($cb) {
+            $self->{'evp'}{'children'}{$self->{'pid'}} = $cb;
+        }
+        kill('KILL', $self->{'pid'});       
     }
 
     sub stopSTDOUT {
@@ -3304,7 +3343,7 @@ package MusicLibrary {
 
         $self->{'timers'} = [
             # update the library at start and periodically
-            [0, 30, sub {
+            [0, 300, sub {
                 my ($timer, $current_time, $evp) = @_;
                 say "$pstart  library timer";                
                 UpdateLibrariesAsync($self, $evp, sub {
@@ -4300,7 +4339,11 @@ sub hls_audio_aac {
         }
         if($sesh->{'segnum'} != $seg) {
             say "sesh segnum differing, recreating process, expected " . $sesh->{'segnum'} . ' got ' . $seg;
-            $sesh->{'process'} = undef;
+            $sesh->{'segnum'} = $seg;
+            if($sesh->{'process'}) {
+                $sesh->{'process'}->sigkill(sub{});
+                $sesh->{'process'} = undef;
+            }
         }
 
         $sesh->{'request'} = $request;
@@ -4325,8 +4368,7 @@ sub hls_audio_aac {
                 my ($context) = @_;
             };
 
-            $request->{'outheaders'}{'Connection'} = 'close';
-            #$request->Send404;
+            #$request->{'outheaders'}{'Connection'} = 'close';
 
             my $weaksesh = $sesh;
             weaken($weaksesh);
@@ -4348,7 +4390,11 @@ sub hls_audio_aac {
                         return $_[0];
                     };
                     my $data = matroska_read_track($matroska, $atrack, $seginfo->{'sframe'}, $seginfo->{'sduration'}, $muxsub);
-                    say "bad read" if(! $data);
+                    if(! $data) {
+                        say "bad read";
+                        return undef;
+                    }
+                    say "packcnt $packcnt";
                     push @expectedduration, ($packcnt * $atrack->{'PCMFrameLength'});
                     push @stimes, $seginfo->{'stime'};
                     $seginfo->{'sframe'} += ($packcnt * $atrack->{'PCMFrameLength'});
@@ -4359,35 +4405,41 @@ sub hls_audio_aac {
                 
                 'on_stdout_data' => sub {
                     my ($context) = @_;
+                    if(! scalar(@expectedduration)) {
+                        say "on_stdout_data no expected duration";
+                        return;
+                    }
                     # parse aac frames
 
-                    say "on_stdout_data called";
-
+                    say "on_stdout_data, expecting: " . (6*2*$expectedduration[0]). " current " . length($context->{'stdout'});
                     # send if enough have been read and disable read
                     my $dbytes = (6*2*$expectedduration[0]);
                     if(length($context->{'stdout'}) >= $dbytes) {
-                        unshift @expectedduration;
+                        shift @expectedduration;
                         my $tosend = substr($context->{'stdout'}, 0, $dbytes, '');
                         $weaksesh->{'request'}{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
                         $weaksesh->{'request'}->SendLocalBuf($tosend, 'application/octet-stream');
-                        #my $stime = unshift @stimes;
+                        #my $stime = shift @stimes;
                         #$weaksesh->{'request'}->SendLocalBuf(hls_audio_get_id3($stime).$tosend, 'audio/aac');
                         $weaksesh->{'process'}->stopSTDOUT();
                         $weaksesh->{'request'} = undef;
                         $weaksesh->{'segnum'}++;
+                        say "segnum is now " . $weaksesh->{'segnum'};
                     }                
                 },
                 #'at_exit' => \&context_at_exit  
                 'at_exit' => sub {
                     say "sesh proc over";
-                    #Dump($weaksesh->{'process'});
-                    $weaksesh->{'request'} = undef; # fix me, should only do this on error
+                    if($weaksesh->{'request'}) {
+                        $weaksesh->{'request'}->Send404;
+                        $weaksesh->{'request'} = undef;
+                    }                 
                     $weaksesh->{'process'} = undef;
                 }            
             };
             #$sesh->{'process'} = HTTP::BS::Server::Process->new_cmd_process($evp, ['ffmpeg', '-f', $ffmpegcodecname, '-i', '-', '-f', 'adts', '-c:a', 'aac', '-b:a', '160k', '-'], $ctx);
             say "poll handles " . scalar($evp->{'poll'}->handles());
-            $sesh->{'process'} = HTTP::BS::Server::Process->new_cmd_process($evp, ['ffmpeg', '-f', $ffmpegcodecname, '-i', 'aaa', '-f', 's16le', '-c:a', 'pcm_s16le', '-'], $ctx);
+            $sesh->{'process'} = HTTP::BS::Server::Process->new_cmd_process($evp, ['ffmpeg', '-f', $ffmpegcodecname, '-i', '-', '-f', 's16le', '-c:a', 'pcm_s16le', '-'], $ctx);
         }        
 
         # enable read
