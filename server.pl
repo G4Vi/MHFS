@@ -90,6 +90,7 @@ package EventLoop::Poll {
     use Scalar::Util qw(looks_like_number);
     use Data::Dumper;    
     use Devel::Peek;
+    #use Devel::Refcount qw( refcount );
 
     our $POLLRDHUP = 0;
     our $ALWAYSMASK = ($POLLRDHUP | POLLHUP);
@@ -2290,7 +2291,14 @@ package HTTP::BS::Server::Process {
     
     sub DESTROY {
         my $self = shift;
-        say "PID " . $self->{'pid'} . ' DESTROY called';              
+        say "PID " . $self->{'pid'} . ' DESTROY called';
+        foreach my $key (keys %{$self->{'fd'}}) {
+            if(defined($self->{'fd'}{$key}{'fd'})) {
+                #Dump($self->{'fd'}{$key});
+                $self->{'evp'}->remove($self->{'fd'}{$key}{'fd'});
+                $self->{'fd'}{$key} = undef;
+            }
+        }
     }
     
     1;    
@@ -4320,12 +4328,15 @@ sub hls_audio_aac {
             $request->{'outheaders'}{'Connection'} = 'close';
             #$request->Send404;
 
+            my $weaksesh = $sesh;
+            weaken($weaksesh);
 
             my $ctx = {
                 #'input' => \&context_input,
                 
                 'input' => sub {
                     my ($context) = @_;
+                    die if(! $weaksesh->{'process'});
                     $matroska = matroska_open($fileinfo->{'fileabspath'});
                     if(!$matroska) {
                         return undef;
@@ -4341,6 +4352,7 @@ sub hls_audio_aac {
                     push @expectedduration, ($packcnt * $atrack->{'PCMFrameLength'});
                     push @stimes, $seginfo->{'stime'};
                     $seginfo->{'sframe'} += ($packcnt * $atrack->{'PCMFrameLength'});
+                    die if(! $weaksesh->{'process'});
                     return $data;
                 },
                 #'on_stdout_data' => \&context_on_stdout_data,
@@ -4356,20 +4368,21 @@ sub hls_audio_aac {
                     if(length($context->{'stdout'}) >= $dbytes) {
                         unshift @expectedduration;
                         my $tosend = substr($context->{'stdout'}, 0, $dbytes, '');
-                        $sesh->{'request'}{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
-                        $sesh->{'request'}->SendLocalBuf($tosend, 'application/octet-stream');
+                        $weaksesh->{'request'}{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
+                        $weaksesh->{'request'}->SendLocalBuf($tosend, 'application/octet-stream');
                         #my $stime = unshift @stimes;
-                        #$sesh->{'request'}->SendLocalBuf(hls_audio_get_id3($stime).$tosend, 'audio/aac');
-                        $sesh->{'process'}->stopSTDOUT();
-                        $sesh->{'request'} = undef;
-                        $sesh->{'segnum'}++;   
+                        #$weaksesh->{'request'}->SendLocalBuf(hls_audio_get_id3($stime).$tosend, 'audio/aac');
+                        $weaksesh->{'process'}->stopSTDOUT();
+                        $weaksesh->{'request'} = undef;
+                        $weaksesh->{'segnum'}++;
                     }                
                 },
                 #'at_exit' => \&context_at_exit  
                 'at_exit' => sub {
                     say "sesh proc over";
-                    #$sesh->{'request'} = undef;
-                    #$sesh->{'process'} = undef;
+                    #Dump($weaksesh->{'process'});
+                    $weaksesh->{'request'} = undef; # fix me, should only do this on error
+                    $weaksesh->{'process'} = undef;
                 }            
             };
             #$sesh->{'process'} = HTTP::BS::Server::Process->new_cmd_process($evp, ['ffmpeg', '-f', $ffmpegcodecname, '-i', '-', '-f', 'adts', '-c:a', 'aac', '-b:a', '160k', '-'], $ctx);
