@@ -4290,6 +4290,22 @@ sub mux_aac_packet_to_adts_packet {
     return $adtsheader.$packet;
 }
 
+sub adts_get_packet_size {
+    my ($buf) = @_;
+    my ($sync, $stuff, $rest) = unpack('nCN', $buf);
+    if(!defined($sync)) {
+        say "no pack, len " . length($buf);
+        return undef;
+    }
+    if($sync != 0xFFF1) {
+        say "bad sync";
+        return undef;
+    }
+
+    my $size = ($rest >> 13) & 0x1FFF;
+    return $size;
+}
+
 sub hls_audio_aac {
     my ($request, $fileinfo) = @_;
     my $seg = $fileinfo->{'segmentnumber'};
@@ -4351,7 +4367,6 @@ sub hls_audio_aac {
         my $ffmpegcodecname = lc $atrack->{'CodecID_Major'};
         my $evp = $request->{'client'}{'server'}{'evp'};
         my $aacdata;
-        my @expectedduration;
         my @stimes;
         if(! $sesh->{'process'}) {
 
@@ -4373,59 +4388,95 @@ sub hls_audio_aac {
             my $weaksesh = $sesh;
             weaken($weaksesh);
 
+            $weaksesh->{'read_pcm_frames'} = 0;
+            $weaksesh->{'sframe'} = $seginfo->{'sframe'};
+            $weaksesh->{'target_frames'} =  $seginfo->{'sduration'};
+            $weaksesh->{'target_decode_frames'} = $seginfo->{'fakesduration'};
+            $weaksesh->{'total_expected'} = 0;
+            $weaksesh->{'decoded'} = 0;
+            print Dumper($weaksesh->{'sframe'} , $weaksesh->{'target_frames'}, $weaksesh->{'target_decode_frames'});
+
             my $ctx = {
                 #'input' => \&context_input,
 
                 'input' => sub {
                     my ($context) = @_;
-                    die if(! $weaksesh->{'process'});
                     $matroska = matroska_open($fileinfo->{'fileabspath'});
                     if(!$matroska) {
                         return undef;
                     }
-                    say "matroska_read_track read: start ".$seginfo->{'sframe'} . " duration " . $seginfo->{'sduration'};
+                    say "matroska_read_track read: start ".$weaksesh->{'sframe'} . " duration " . $weaksesh->{'target_frames'};
                     my $packcnt = 0;
                     $muxsub = sub {
                         $packcnt++;
                         return $_[0];
                     };
-                    my $data = matroska_read_track($matroska, $atrack, $seginfo->{'sframe'}, $seginfo->{'sduration'}, $muxsub);
+                    my $data = matroska_read_track($matroska, $atrack, $weaksesh->{'sframe'}, $weaksesh->{'target_frames'}, $muxsub);
                     if(! $data) {
                         say "bad read";
                         return undef;
                     }
                     say "packcnt $packcnt";
-                    push @expectedduration, ($packcnt * $atrack->{'PCMFrameLength'});
-                    push @stimes, $seginfo->{'stime'};
-                    $seginfo->{'sframe'} += ($packcnt * $atrack->{'PCMFrameLength'});
-                    die if(! $weaksesh->{'process'});
+                    $weaksesh->{'read_pcm_frames'} += ($packcnt * $atrack->{'PCMFrameLength'});
+                    $weaksesh->{'sframe'} += ($packcnt * $atrack->{'PCMFrameLength'});
+                    my $expected_frame_len = $atrack->{'outPCMFrameLength'};
+                    $weaksesh->{'total_expected'} = ceil_div($weaksesh->{'read_pcm_frames'}, $expected_frame_len)*$expected_frame_len;
+                    print Dumper($weaksesh->{'sframe'} , $weaksesh->{'read_pcm_frames'}, $weaksesh->{'total_expected'});
                     return $data;
                 },
                 #'on_stdout_data' => \&context_on_stdout_data,
 
                 'on_stdout_data' => sub {
                     my ($context) = @_;
-                    if(! scalar(@expectedduration)) {
+                    my $frames_avail = ($weaksesh->{'total_expected'} - $weaksesh->{'decoded'});
+                    if($frames_avail == 0) {
                         say "on_stdout_data no expected duration";
                         return;
                     }
-                    # parse aac frames
 
-                    say "on_stdout_data, expecting: " . (6*2*$expectedduration[0]). " current " . length($context->{'stdout'});
-                    # send if enough have been read and disable read
-                    my $dbytes = (6*2*$expectedduration[0]);
-                    if(length($context->{'stdout'}) >= $dbytes) {
-                        shift @expectedduration;
-                        my $tosend = substr($context->{'stdout'}, 0, $dbytes, '');
+                    #if(defined $weaksesh->{'request'}) {
+                    #    $weaksesh->{'request'}->SendLocalBuf('aaa', 'text/plain');
+                    #    $weaksesh->{'request'} = undef;
+                    #    return;
+                    #}
+
+
+                    my $expected = $frames_avail > $weaksesh->{'target_decode_frames'} ? $weaksesh->{'target_decode_frames'} : $frames_avail;
+
+                    my $segment = $atrack->{'outGetSegment'}->( {
+                        'channels' => $atrack->{'outChannels'},
+                        'expected' => $expected,
+                        'stime' => ($seginfo->{'fakesframe'}+$weaksesh->{'decoded'})/48000
+                    }, \$context->{'stdout'});
+                    if($segment) {
+                        $weaksesh->{'decoded'} += $expected;
                         $weaksesh->{'request'}{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
-                        $weaksesh->{'request'}->SendLocalBuf($tosend, 'application/octet-stream');
-                        #my $stime = shift @stimes;
-                        #$weaksesh->{'request'}->SendLocalBuf(hls_audio_get_id3($stime).$tosend, 'audio/aac');
+                        $weaksesh->{'request'}->SendLocalBuf($segment->{'data'}, $segment->{'mime'});
                         $weaksesh->{'process'}->stopSTDOUT();
                         $weaksesh->{'request'} = undef;
                         $weaksesh->{'segnum'}++;
                         say "segnum is now " . $weaksesh->{'segnum'};
                     }
+
+
+
+                    #my $dbytes = ($expected * 2 * 6);
+#
+                    #say "on_stdout_data, expecting: " . ($dbytes). " current " . length($context->{'stdout'});
+#
+                    ## send if enough have been read and disable read
+                    #if(length($context->{'stdout'}) >= $dbytes) {
+                    #    $weaksesh->{'decoded'} += $expected;
+                    #    my $tosend = substr($context->{'stdout'}, 0, $dbytes, '');
+                    #    $weaksesh->{'request'}{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
+                    #    $weaksesh->{'request'}->SendLocalBuf($tosend, 'application/octet-stream');
+                    #    #my $stime = shift @stimes;
+                    #    #$weaksesh->{'request'}->SendLocalBuf(hls_audio_get_id3($stime).$tosend, 'audio/aac');
+                    #    $weaksesh->{'process'}->stopSTDOUT();
+                    #    $weaksesh->{'request'} = undef;
+                    #    $weaksesh->{'segnum'}++;
+                    #    say "segnum is now " . $weaksesh->{'segnum'};
+                    #}
                 },
                 #'at_exit' => \&context_at_exit
                 'at_exit' => sub {
@@ -4437,9 +4488,9 @@ sub hls_audio_aac {
                     $weaksesh->{'process'} = undef;
                 }
             };
-            #$sesh->{'process'} = HTTP::BS::Server::Process->new_cmd_process($evp, ['ffmpeg', '-f', $ffmpegcodecname, '-i', '-', '-f', 'adts', '-c:a', 'aac', '-b:a', '160k', '-'], $ctx);
             say "poll handles " . scalar($evp->{'poll'}->handles());
-            $sesh->{'process'} = HTTP::BS::Server::Process->new_cmd_process($evp, ['ffmpeg', '-f', $ffmpegcodecname, '-i', '-', '-f', 's16le', '-c:a', 'pcm_s16le', '-'], $ctx);
+            $sesh->{'process'} = HTTP::BS::Server::Process->new_cmd_process($evp, ['ffmpeg', '-f', $ffmpegcodecname, '-i', '-', '-c:a', 'aac', '-ac' , '2', '-b:a', '160k', '-f', 'adts', '-'], $ctx);
+            #$sesh->{'process'} = HTTP::BS::Server::Process->new_cmd_process($evp, ['ffmpeg', '-f', $ffmpegcodecname, '-i', '-', '-f', 's16le', '-c:a', 'pcm_s16le', '-'], $ctx);
         }
 
         # enable read
@@ -4528,7 +4579,7 @@ sub hls_audio_get_decode_sample_range {
     my $sduration = ceil_div($skipframes + $finfo->{'sduration'}, $pcmFrameLen)*$pcmFrameLen;
     my $chopframes = $sduration - $skipframes  - $finfo->{'sduration'};
 
-    return { 'sframe' => $sframe, 'sduration' => $sduration, 'skip' => $skipframes, 'chop' => $chopframes };
+    return { 'sframe' => $sframe, 'sduration' => $sduration, 'skip' => $skipframes, 'chop' => $chopframes, 'fakesduration' =>  $finfo->{'sduration'}, 'fakesframe' => $finfo->{'sframe'}};
 }
 
 sub hls_audio_m3u8 {
@@ -4558,19 +4609,21 @@ sub hls_audio_m3u8 {
     }
     my $duration = $matroska->{'duration'};
     my $atrack = matroska_get_audio_track($matroska);
-    if(! $duration) {
+    if(! $duration || !$atrack) {
         $request->Send404;
         return;
     }
 
     my $segnameextra = '';
     my $playlisttrack = $atrack;
+    my $sesh;
     if($atrack->{'faketrack'}) {
         $playlisttrack = $atrack->{'faketrack'};
         my $seshs = $request->{'client'}{'server'}{'sesh'};
         $seshs->{'sessions'}{$seshs->{'newindex'}} = {
             'segnum' => 0
         };
+        $sesh = $seshs->{'sessions'}{$seshs->{'newindex'}};
         $segnameextra = '?sesh='.$seshs->{'newindex'};
         $seshs->{'newindex'}++;
     }
@@ -4591,6 +4644,7 @@ sub hls_audio_m3u8 {
         $duration -= $scalc;
     }
     $m3u8 .= "#EXT-X-ENDLIST\n";
+    $sesh->{'lastindex'} = ($seg-1) if($sesh);
     $request->SendLocalBuf($m3u8, 'application/x-mpegURL');
 }
 
@@ -5619,7 +5673,31 @@ sub matroska_open {
         return undef;
     }
     # loop through the Tracks
-    my %CodecPCMFrameLength = ( 'AAC' => 1024, 'EAC3' => 1536, 'AC3' => 1536);
+    my %CodecPCMFrameLength = ( 'AAC' => 1024, 'EAC3' => 1536, 'AC3' => 1536, 'PCM' => 1);
+    my %CodecGetSegment = ('AAC' => sub {
+        my ($seginfo, $dataref) = @_;
+        my $targetpackets = $seginfo->{'expected'} / $CodecPCMFrameLength{'AAC'};
+        my $start = 0;
+        my $packetsread = 0;
+        while(1) {
+            my $packetsize = adts_get_packet_size(substr($$dataref, $start, 7));
+            $packetsize or return undef;
+            say "packet size $packetsize";
+            $start += $packetsize;
+            $packetsread++;
+            if($packetsread == $targetpackets) {
+                return {'mime' => 'audio/aac', 'data' => hls_audio_get_id3($seginfo->{'stime'}).substr($$dataref, 0, $start, '')};
+            }
+        }
+        return undef;
+    }, 'PCM' => sub {
+        my ($seginfo, $dataref) = @_;
+        my $targetsize = 2 * $seginfo->{'channels'}* $seginfo->{'expected'};
+        if(length($$dataref) >= $targetsize) {
+            return {'mime' => 'application/octet-stream', 'data' => substr($$dataref, 0, $targetsize, '')};
+        }
+        return undef;
+    });
     my @tracks;
     for(;;) {
         my $in_track = ebml_find_id($ebml, EBMLID_Track);
@@ -5710,6 +5788,14 @@ sub matroska_open {
                 &EBMLID_AudioSampleRate => $track{&EBMLID_AudioSampleRate},
                 &EBMLID_AudioChannels => $track{&EBMLID_AudioChannels}
             };
+            #$track{'outfmt'} = 'PCM';
+            #$track{'outChannels'} = $track{&EBMLID_AudioChannels};
+            $track{'outfmt'} = 'AAC';
+            $track{'outChannels'} = 2;
+
+            $track{'outPCMFrameLength'} = $CodecPCMFrameLength{$track{'outfmt'}};
+            $track{'outGetSegment'} = $CodecGetSegment{$track{'outfmt'}};
+
         }
         push @tracks, \%track;
     }
