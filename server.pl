@@ -4192,12 +4192,8 @@ sub hls {
         return;
     }
     elsif($request->{'path'}{'unsafecollapse'} =~ /\/audio(\d+)\.aac$/) {
-        #my $pfile = $request->{'client'}{'server'}{'settings'}{'TMPDIR'} . '/'.$fileinfo->{'tmpname'} . '/'.$1;
-        #say "pfile $pfile";
-        #$request->{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
-        #$request->SendLocalFile($pfile, 'audio/mp2t');
         $fileinfo->{'segmentnumber'} = $1;
-        hls_audio_aac($request, $fileinfo);
+        hls_audio($request, $fileinfo);
         return;
     }
 
@@ -4306,10 +4302,151 @@ sub adts_get_packet_size {
     return $size;
 }
 
-sub hls_audio_aac {
+sub hls_audio {
+    my ($request) = @_;
+    if(! defined $request->{'qs'}{'sesh'}) {
+        goto &hls_audio_noconv;
+    }
+
+    goto &hls_audio_process;
+}
+
+sub hls_audio_process {
+    my ($request, $fileinfo) = @_;
+    my $sesh = $request->{'client'}{'server'}{'sesh'}{'sessions'}{$request->{'qs'}{'sesh'}};
+    if(! defined $sesh) {
+        say 'sesh required';
+        $request->Send404;
+        return;
+    }
+    if($sesh->{'request'}) {
+        say "sesh busy, try again";
+        $request->{'outheaders'}{'Retry-After'} = '5';
+        $request->Send503;
+        return;
+    }
+    my $seg = $fileinfo->{'segmentnumber'};
+    if($sesh->{'segnum'} != $seg) {
+        say "sesh segnum differing, recreating process, expected " . $sesh->{'segnum'} . ' got ' . $seg;
+        $sesh->{'segnum'} = $seg;
+        if($sesh->{'process'}) {
+            $sesh->{'process'}->sigkill(sub{});
+            $sesh->{'process'} = undef;
+        }
+    }
+
+    # process already running, ready more data and send it.
+    $sesh->{'request'} = $request;
+    if($sesh->{'process'}) {
+        $sesh->{'process'}->resumeSTDOUT();
+        return;
+    }
+
+    # setup callbacks for process
+
+
+    my $matroska = matroska_open($fileinfo->{'fileabspath'});
+    if(!$matroska) {
+        $request->Send404;
+        return;
+    }
+    my $atrack = matroska_get_audio_track($matroska);
+    if(! $atrack) {
+        $request->Send404;
+        return;
+    }
+    elsif(($atrack->{'CodecID_Major'} ne 'EAC3') && ($atrack->{'CodecID_Major'} ne 'AC3')) {
+        $request->Send404;
+        return;
+    }
+    my $seginfo = hls_audio_get_decode_sample_range($atrack, $seg);
+    if(! $seginfo) {
+        $request->Send404;
+        return;
+    }
+
+    my $weaksesh = $sesh;
+    weaken($weaksesh);
+    $weaksesh->{'read_pcm_frames'} = 0;
+    $weaksesh->{'sframe'} = $seginfo->{'sframe'};
+    $weaksesh->{'target_frames'} =  $seginfo->{'sduration'};
+    $weaksesh->{'target_decode_frames'} = $seginfo->{'fakesduration'};
+    $weaksesh->{'total_expected'} = 0;
+    $weaksesh->{'decoded'} = 0;
+    print Dumper($weaksesh->{'sframe'} , $weaksesh->{'target_frames'}, $weaksesh->{'target_decode_frames'});
+    my $ctx = {
+        'input' => sub {
+            my ($context) = @_;
+            $matroska = matroska_open($fileinfo->{'fileabspath'});
+            if(!$matroska) {
+                return undef;
+            }
+            say "matroska_read_track read: start ".$weaksesh->{'sframe'} . " duration " . $weaksesh->{'target_frames'};
+            my $packcnt = 0;
+            my $muxsub = sub {
+                $packcnt++;
+                return $_[0];
+            };
+            my $data = matroska_read_track($matroska, $atrack, $weaksesh->{'sframe'}, $weaksesh->{'target_frames'}, $muxsub);
+            if(! $data) {
+                say "bad read";
+                return undef;
+            }
+            say "packcnt $packcnt";
+            $weaksesh->{'read_pcm_frames'} += ($packcnt * $atrack->{'PCMFrameLength'});
+            $weaksesh->{'sframe'} += ($packcnt * $atrack->{'PCMFrameLength'});
+            my $expected_frame_len = $atrack->{'outPCMFrameLength'};
+            $weaksesh->{'total_expected'} = ceil_div($weaksesh->{'read_pcm_frames'}, $expected_frame_len)*$expected_frame_len;
+            print Dumper($weaksesh->{'sframe'} , $weaksesh->{'read_pcm_frames'}, $weaksesh->{'total_expected'});
+            return $data;
+        },
+        'on_stdout_data' => sub {
+            my ($context) = @_;
+            my $frames_avail = ($weaksesh->{'total_expected'} - $weaksesh->{'decoded'});
+            if($frames_avail == 0) {
+                say "on_stdout_data no expected duration";
+                return;
+            }
+            my $expected = $frames_avail > $weaksesh->{'target_decode_frames'} ? $weaksesh->{'target_decode_frames'} : $frames_avail;
+            my $segment = $atrack->{'outGetSegment'}->( {
+                'channels' => $atrack->{'outChannels'},
+                'expected' => $expected,
+                'stime' => ($seginfo->{'fakesframe'}+$weaksesh->{'decoded'})/48000
+            }, \$context->{'stdout'});
+            if($segment) {
+                $weaksesh->{'decoded'} += $expected;
+                $weaksesh->{'request'}{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
+                $weaksesh->{'request'}->SendLocalBuf($segment->{'data'}, $segment->{'mime'});
+                $weaksesh->{'process'}->stopSTDOUT();
+                $weaksesh->{'request'} = undef;
+                $weaksesh->{'segnum'}++;
+                say "segnum is now " . $weaksesh->{'segnum'};
+            }
+        },
+        'at_exit' => sub {
+            say "sesh proc over";
+            if($weaksesh->{'request'}) {
+                $weaksesh->{'request'}->Send404;
+                $weaksesh->{'request'} = undef;
+            }
+            $weaksesh->{'process'} = undef;
+        }
+    };
+
+    # finally create the process
+    my $ffmpegcodecname = lc $atrack->{'CodecID_Major'};
+    my $evp = $request->{'client'}{'server'}{'evp'};
+    say "poll handles " . scalar($evp->{'poll'}->handles());
+    $sesh->{'process'} = HTTP::BS::Server::Process->new_cmd_process($evp, ['ffmpeg', '-f', $ffmpegcodecname, '-i', '-', '-c:a', 'aac', '-ac' , '2', '-b:a', '160k', '-f', 'adts', '-'], $ctx);
+    #$sesh->{'process'} = HTTP::BS::Server::Process->new_cmd_process($evp, ['ffmpeg', '-f', $ffmpegcodecname, '-i', '-', '-f', 's16le', '-c:a', 'pcm_s16le', '-'], $ctx);
+
+    # enable read
+    $sesh->{'process'}->resumeSTDOUT();
+}
+
+sub hls_audio_noconv {
     my ($request, $fileinfo) = @_;
     my $seg = $fileinfo->{'segmentnumber'};
-    my $seconds = $seg * $fileinfo->{'segmentlength'};
 
     my $matroska = matroska_open($fileinfo->{'fileabspath'});
     if(!$matroska) {
@@ -4326,12 +4463,9 @@ sub hls_audio_aac {
         $request->Send404;
         return;
     }
-    my $muxsub = sub {
-        return $_[0];
-    };
+
     if($atrack->{'CodecID_Major'} eq 'AAC') {
-        $muxsub = \&mux_aac_packet_to_adts_packet;
-        my $data = matroska_read_track($matroska, $atrack, $seginfo->{'sframe'}, $seginfo->{'sduration'}, $muxsub);
+        my $data = matroska_read_track($matroska, $atrack, $seginfo->{'sframe'}, $seginfo->{'sduration'}, \&mux_aac_packet_to_adts_packet);
         if(! defined $data) {
             $request->Send404;
             return;
@@ -4339,162 +4473,6 @@ sub hls_audio_aac {
 
         $request->{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
         $request->SendLocalBuf(hls_audio_get_id3($seginfo->{'stime'}).$data, 'audio/aac');
-    }
-    elsif(($atrack->{'CodecID_Major'} eq 'EAC3') || ($atrack->{'CodecID_Major'} eq 'AC3')) {
-        my $sesh = $request->{'client'}{'server'}{'sesh'}{'sessions'}{$request->{'qs'}{'sesh'}};
-        if(! defined $sesh) {
-            say 'sesh required';
-            $request->Send404;
-            return;
-        }
-        if($sesh->{'request'}) {
-            say "sesh busy, try again";
-            $request->{'outheaders'}{'Retry-After'} = '5';
-            $request->Send503;
-            return;
-        }
-        if($sesh->{'segnum'} != $seg) {
-            say "sesh segnum differing, recreating process, expected " . $sesh->{'segnum'} . ' got ' . $seg;
-            $sesh->{'segnum'} = $seg;
-            if($sesh->{'process'}) {
-                $sesh->{'process'}->sigkill(sub{});
-                $sesh->{'process'} = undef;
-            }
-        }
-
-        $sesh->{'request'} = $request;
-
-        my $ffmpegcodecname = lc $atrack->{'CodecID_Major'};
-        my $evp = $request->{'client'}{'server'}{'evp'};
-        my $aacdata;
-        my @stimes;
-        if(! $sesh->{'process'}) {
-
-            sub context_input {
-                my ($context) = @_;
-                return undef;
-            };
-
-            sub context_on_stdout_data {
-                my ($context) = @_;
-            };
-
-            sub context_at_exit {
-                my ($context) = @_;
-            };
-
-            #$request->{'outheaders'}{'Connection'} = 'close';
-
-            my $weaksesh = $sesh;
-            weaken($weaksesh);
-
-            $weaksesh->{'read_pcm_frames'} = 0;
-            $weaksesh->{'sframe'} = $seginfo->{'sframe'};
-            $weaksesh->{'target_frames'} =  $seginfo->{'sduration'};
-            $weaksesh->{'target_decode_frames'} = $seginfo->{'fakesduration'};
-            $weaksesh->{'total_expected'} = 0;
-            $weaksesh->{'decoded'} = 0;
-            print Dumper($weaksesh->{'sframe'} , $weaksesh->{'target_frames'}, $weaksesh->{'target_decode_frames'});
-
-            my $ctx = {
-                #'input' => \&context_input,
-
-                'input' => sub {
-                    my ($context) = @_;
-                    $matroska = matroska_open($fileinfo->{'fileabspath'});
-                    if(!$matroska) {
-                        return undef;
-                    }
-                    say "matroska_read_track read: start ".$weaksesh->{'sframe'} . " duration " . $weaksesh->{'target_frames'};
-                    my $packcnt = 0;
-                    $muxsub = sub {
-                        $packcnt++;
-                        return $_[0];
-                    };
-                    my $data = matroska_read_track($matroska, $atrack, $weaksesh->{'sframe'}, $weaksesh->{'target_frames'}, $muxsub);
-                    if(! $data) {
-                        say "bad read";
-                        return undef;
-                    }
-                    say "packcnt $packcnt";
-                    $weaksesh->{'read_pcm_frames'} += ($packcnt * $atrack->{'PCMFrameLength'});
-                    $weaksesh->{'sframe'} += ($packcnt * $atrack->{'PCMFrameLength'});
-                    my $expected_frame_len = $atrack->{'outPCMFrameLength'};
-                    $weaksesh->{'total_expected'} = ceil_div($weaksesh->{'read_pcm_frames'}, $expected_frame_len)*$expected_frame_len;
-                    print Dumper($weaksesh->{'sframe'} , $weaksesh->{'read_pcm_frames'}, $weaksesh->{'total_expected'});
-                    return $data;
-                },
-                #'on_stdout_data' => \&context_on_stdout_data,
-
-                'on_stdout_data' => sub {
-                    my ($context) = @_;
-                    my $frames_avail = ($weaksesh->{'total_expected'} - $weaksesh->{'decoded'});
-                    if($frames_avail == 0) {
-                        say "on_stdout_data no expected duration";
-                        return;
-                    }
-
-                    #if(defined $weaksesh->{'request'}) {
-                    #    $weaksesh->{'request'}->SendLocalBuf('aaa', 'text/plain');
-                    #    $weaksesh->{'request'} = undef;
-                    #    return;
-                    #}
-
-
-                    my $expected = $frames_avail > $weaksesh->{'target_decode_frames'} ? $weaksesh->{'target_decode_frames'} : $frames_avail;
-
-                    my $segment = $atrack->{'outGetSegment'}->( {
-                        'channels' => $atrack->{'outChannels'},
-                        'expected' => $expected,
-                        'stime' => ($seginfo->{'fakesframe'}+$weaksesh->{'decoded'})/48000
-                    }, \$context->{'stdout'});
-                    if($segment) {
-                        $weaksesh->{'decoded'} += $expected;
-                        $weaksesh->{'request'}{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
-                        $weaksesh->{'request'}->SendLocalBuf($segment->{'data'}, $segment->{'mime'});
-                        $weaksesh->{'process'}->stopSTDOUT();
-                        $weaksesh->{'request'} = undef;
-                        $weaksesh->{'segnum'}++;
-                        say "segnum is now " . $weaksesh->{'segnum'};
-                    }
-
-
-
-                    #my $dbytes = ($expected * 2 * 6);
-#
-                    #say "on_stdout_data, expecting: " . ($dbytes). " current " . length($context->{'stdout'});
-#
-                    ## send if enough have been read and disable read
-                    #if(length($context->{'stdout'}) >= $dbytes) {
-                    #    $weaksesh->{'decoded'} += $expected;
-                    #    my $tosend = substr($context->{'stdout'}, 0, $dbytes, '');
-                    #    $weaksesh->{'request'}{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
-                    #    $weaksesh->{'request'}->SendLocalBuf($tosend, 'application/octet-stream');
-                    #    #my $stime = shift @stimes;
-                    #    #$weaksesh->{'request'}->SendLocalBuf(hls_audio_get_id3($stime).$tosend, 'audio/aac');
-                    #    $weaksesh->{'process'}->stopSTDOUT();
-                    #    $weaksesh->{'request'} = undef;
-                    #    $weaksesh->{'segnum'}++;
-                    #    say "segnum is now " . $weaksesh->{'segnum'};
-                    #}
-                },
-                #'at_exit' => \&context_at_exit
-                'at_exit' => sub {
-                    say "sesh proc over";
-                    if($weaksesh->{'request'}) {
-                        $weaksesh->{'request'}->Send404;
-                        $weaksesh->{'request'} = undef;
-                    }
-                    $weaksesh->{'process'} = undef;
-                }
-            };
-            say "poll handles " . scalar($evp->{'poll'}->handles());
-            $sesh->{'process'} = HTTP::BS::Server::Process->new_cmd_process($evp, ['ffmpeg', '-f', $ffmpegcodecname, '-i', '-', '-c:a', 'aac', '-ac' , '2', '-b:a', '160k', '-f', 'adts', '-'], $ctx);
-            #$sesh->{'process'} = HTTP::BS::Server::Process->new_cmd_process($evp, ['ffmpeg', '-f', $ffmpegcodecname, '-i', '-', '-f', 's16le', '-c:a', 'pcm_s16le', '-'], $ctx);
-        }
-
-        # enable read
-        $sesh->{'process'}->resumeSTDOUT();
     }
     else {
         $request->Send404;
@@ -5803,8 +5781,8 @@ sub matroska_open {
         return undef;
     }
 
-
-    my %matroska = ('ebml' => $ebml, 'tsscale' => $tsval, 'rawduration' => $scaledduration, 'duration' => $duration, 'tracks' => \@tracks);
+    my $segmentelm = $ebml->{'elements'}[0];
+    my %matroska = ('ebml' => $ebml, 'tsscale' => $tsval, 'rawduration' => $scaledduration, 'duration' => $duration, 'tracks' => \@tracks, 'segment_data_start' => {'size' => $segmentelm->{'size'}, 'id' => $segmentelm->{'id'}, 'fileoffset' => tell($ebml->{'fh'})}, 'curframe' => -1, 'curpaks' => []);
     return \%matroska;
 }
 
@@ -5908,18 +5886,14 @@ sub ceil_div {
 }
 
 
-
-sub matroska_read_track {
-    my ($matroska, $track, $aacFrameIndex, $numsamples, $formatpacket) = @_;
-    my $tid = $track->{&EBMLID_TrackNumber}{'value'};
+sub matroska_seek_track {
+    my ($matroska, $track, $pcmFrameIndex) = @_;
     my $samplerate = $track->{&EBMLID_AudioSampleRate};
     my $pcmFrameLen = $track->{'PCMFrameLength'};
     if(!$pcmFrameLen) {
         warn("Unknown codec");
         return undef;
     }
-
-    # find the cluster that might have the start of our audio
     my $desiredcluster;
     while(1) {
         my $cluster = matroska_read_cluster_metadata($matroska);
@@ -5929,7 +5903,7 @@ sub matroska_read_track {
         $curframe = ceil_div($curframe, $pcmFrameLen) * $pcmFrameLen;
 
         # this cluster could contain our frame, save it's info
-        if($curframe <= $aacFrameIndex) {
+        if($curframe <= $pcmFrameIndex) {
             my $prevcluster = $desiredcluster;
             $desiredcluster = $cluster;
             $desiredcluster->{'frameIndex'} = $curframe;
@@ -5939,7 +5913,7 @@ sub matroska_read_track {
             }
         }
         # this cluster is at or past the frame, breakout
-        if($curframe >= $aacFrameIndex){
+        if($curframe >= $pcmFrameIndex){
             last;
         }
     }
@@ -5953,8 +5927,39 @@ sub matroska_read_track {
     my $ebml = $matroska->{'ebml'};
     ebml_set_cluster($ebml, $desiredcluster);
 
+    $matroska->{'dc'} = $desiredcluster;
+    return 1;
+}
+
+
+sub matroska_read_track {
+    my ($matroska, $track, $aacFrameIndex, $numsamples, $formatpacket) = @_;
+    my $tid = $track->{&EBMLID_TrackNumber}{'value'};
+    my $samplerate = $track->{&EBMLID_AudioSampleRate};
+    my $pcmFrameLen = $track->{'PCMFrameLength'};
+    if(!$pcmFrameLen) {
+        warn("Unknown codec");
+        return undef;
+    }
+
+    # find the cluster that might have the start of our audio
+    if($matroska->{'curframe'} != $aacFrameIndex) {
+        $matroska->{'curframe'} = 0;
+        $matroska->{'curpaks'} = [];
+        if(!matroska_seek_track($matroska, $track, $aacFrameIndex)) {
+            return undef;
+        }
+    }
+
+    # serve already cached audio
+    #while(@{$matroska->{'curpaks'}}) {
+    #
+    #}
+
+
     my $outdata;
     say 'aac frameIndex ' .  $aacFrameIndex;
+    my $ebml = $matroska->{'ebml'};
     # search for the block
     for(;;) {
         # load a block
@@ -5963,9 +5968,9 @@ sub matroska_read_track {
         my $curframe;
         if($block) {
             # check ts
-            say 'clusterts ' . ($desiredcluster->{'ts'}/1000000000);
+            say 'clusterts ' . ($matroska->{'dc'}->{'ts'}/1000000000);
             say 'blockts ' . $block->{'ts'};
-            my $time = ($desiredcluster->{'rawts'} + $block->{'ts'}) * $matroska->{'tsscale'};
+            my $time = ($matroska->{'dc'}->{'rawts'} + $block->{'ts'}) * $matroska->{'tsscale'};
             say 'blocktime ' . ($time/1000000000);
             $curframe = matroska_ts_to_sample($matroska, $samplerate, $time);
             $curframe = round($curframe/$pcmFrameLen)*$pcmFrameLen;
@@ -5974,15 +5979,15 @@ sub matroska_read_track {
                 $block = undef;
             }
             else {
-                $desiredcluster->{'prevcluster'} = undef;
+                $matroska->{'dc'}->{'prevcluster'} = undef;
             }
         }
         if(!$block) {
-            if($desiredcluster->{'prevcluster'}) {
+            if($matroska->{'dc'}->{'prevcluster'}) {
                 say "revert cluster";
                 #die;
-                $desiredcluster = $desiredcluster->{'prevcluster'};
-                ebml_set_cluster($ebml, $desiredcluster);
+                $matroska->{'dc'} = $matroska->{'dc'}->{'prevcluster'};
+                ebml_set_cluster($ebml, $matroska->{'dc'});
                 next;
             }
 
@@ -5991,8 +5996,8 @@ sub matroska_read_track {
                 my $cluster = matroska_read_cluster_metadata($matroska);
                 if($cluster) {
                     say "advancing cluster";
-                    $desiredcluster = $cluster;
-                    ebml_set_cluster($ebml, $desiredcluster);
+                    $matroska->{'dc'} = $cluster;
+                    ebml_set_cluster($ebml, $matroska->{'dc'});
                     next;
                 }
                 if(($matroska->{'ebml'}{'elements'}[0]{'id'} == EBMLID_Segment) && ($matroska->{'ebml'}{'elements'}[0]{'size'} == 0)) {
