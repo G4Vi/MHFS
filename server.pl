@@ -4377,10 +4377,10 @@ sub hls_audio_process {
     my $ctx = {
         'input' => sub {
             my ($context) = @_;
-            $matroska = matroska_open($fileinfo->{'fileabspath'});
-            if(!$matroska) {
-                return undef;
-            }
+            #$matroska = matroska_open($fileinfo->{'fileabspath'});
+            #if(!$matroska) {
+            #    return undef;
+            #}
             say "matroska_read_track read: start ".$weaksesh->{'sframe'} . " duration " . $weaksesh->{'target_frames'};
             my $packcnt = 0;
             my $muxsub = sub {
@@ -5852,7 +5852,14 @@ sub matroska_get_track_block {
     for(;;) {
         my $belm = ebml_read_element($ebml);
         if(!$belm) {
-            ebml_skip($ebml);
+            ebml_skip($ebml); # leave cluster
+            my $cluster = matroska_read_cluster_metadata($matroska);
+            if($cluster) {
+                say "advancing cluster";
+                $matroska->{'dc'} = $cluster;
+                ebml_set_cluster($ebml, $matroska->{'dc'});
+                next;
+            }
             last;
         }
         my %elm = ('id' => $belm->{'id'}, 'data' => '');
@@ -5888,12 +5895,16 @@ sub ceil_div {
 
 sub matroska_seek_track {
     my ($matroska, $track, $pcmFrameIndex) = @_;
+    my $tid = $track->{&EBMLID_TrackNumber}{'value'};
+    $matroska->{'curframe'} = 0;
+    $matroska->{'curpaks'} = [];
     my $samplerate = $track->{&EBMLID_AudioSampleRate};
     my $pcmFrameLen = $track->{'PCMFrameLength'};
     if(!$pcmFrameLen) {
         warn("Unknown codec");
         return undef;
     }
+    my $prevcluster;
     my $desiredcluster;
     while(1) {
         my $cluster = matroska_read_cluster_metadata($matroska);
@@ -5904,7 +5915,7 @@ sub matroska_seek_track {
 
         # this cluster could contain our frame, save it's info
         if($curframe <= $pcmFrameIndex) {
-            my $prevcluster = $desiredcluster;
+            $prevcluster = $desiredcluster;
             $desiredcluster = $cluster;
             $desiredcluster->{'frameIndex'} = $curframe;
             if($prevcluster) {
@@ -5923,17 +5934,72 @@ sub matroska_seek_track {
     say "cur rawts " . $desiredcluster->{'rawts'};
     say "last rawts " . $desiredcluster->{'prevcluster'}{'rawts'} if($desiredcluster->{'prevcluster'});
 
-    # restore to the the cluster that (probably has our audio)
+    # restore to the the cluster that probably has our audio
     my $ebml = $matroska->{'ebml'};
     ebml_set_cluster($ebml, $desiredcluster);
-
     $matroska->{'dc'} = $desiredcluster;
+
+    # find a valid track block that includes pcmFrameIndex;
+    my $block;
+    my $blockframe;
+    while(1) {
+        $block = matroska_get_track_block($matroska, $tid);
+        $blockframe;
+        if($block) {
+            $blockframe = matroska_block_calc_frame($matroska, $block, $samplerate, $pcmFrameLen);
+            if($blockframe > $pcmFrameIndex) {
+                $block = undef;
+            }
+        }
+        if(! $block) {
+            if(! $prevcluster) {
+                return undef;
+            }
+            say "revert cluster";
+            $matroska->{'dc'} = $prevcluster;
+            ebml_set_cluster($ebml, $matroska->{'dc'});
+            next;
+        }
+
+        $prevcluster = undef;
+
+        my $pcmSampleCount = ($pcmFrameLen * scalar(@{$block->{'frame_lengths'}}));
+        if($pcmFrameIndex < ($blockframe +  $pcmSampleCount)) {
+            if((($pcmFrameIndex - $blockframe) % $pcmFrameLen) != 0) {
+                say "Frame index does not align with block!";
+                return undef;
+            }
+            last;
+        }
+    }
+
+    # add the data to packs
+    my $offset = 0;
+    while($blockframe < $pcmFrameIndex) {
+        my $len = shift @{$block->{'frame_lengths'}};
+        $offset += $len;
+        $blockframe += $pcmFrameLen;
+    }
+    $matroska->{'curframe'} = $pcmFrameIndex;
+    foreach my $len (@{$block->{'frame_lengths'}}) {
+        push @{$matroska->{'curpaks'}}, substr($block->{'data'}, $offset, $len);
+        $offset += $len;
+    }
     return 1;
 }
 
+sub matroska_block_calc_frame {
+    my ($matroska, $block, $samplerate, $pcmFrameLen) = @_;
+    say 'clusterts ' . ($matroska->{'dc'}->{'ts'}/1000000000);
+    say 'blockts ' . $block->{'ts'};
+    my $time = ($matroska->{'dc'}->{'rawts'} + $block->{'ts'}) * $matroska->{'tsscale'};
+    say 'blocktime ' . ($time/1000000000);
+    my $calcframe = matroska_ts_to_sample($matroska, $samplerate, $time);
+    return round($calcframe/$pcmFrameLen)*$pcmFrameLen;
+}
 
 sub matroska_read_track {
-    my ($matroska, $track, $aacFrameIndex, $numsamples, $formatpacket) = @_;
+    my ($matroska, $track, $pcmFrameIndex, $numsamples, $formatpacket) = @_;
     my $tid = $track->{&EBMLID_TrackNumber}{'value'};
     my $samplerate = $track->{&EBMLID_AudioSampleRate};
     my $pcmFrameLen = $track->{'PCMFrameLength'};
@@ -5943,105 +6009,47 @@ sub matroska_read_track {
     }
 
     # find the cluster that might have the start of our audio
-    if($matroska->{'curframe'} != $aacFrameIndex) {
-        $matroska->{'curframe'} = 0;
-        $matroska->{'curpaks'} = [];
-        if(!matroska_seek_track($matroska, $track, $aacFrameIndex)) {
+    if($matroska->{'curframe'} != $pcmFrameIndex) {
+        say "do seek";
+        if(!matroska_seek_track($matroska, $track, $pcmFrameIndex)) {
             return undef;
         }
     }
-
-    # serve already cached audio
-    #while(@{$matroska->{'curpaks'}}) {
-    #
-    #}
-
 
     my $outdata;
-    say 'aac frameIndex ' .  $aacFrameIndex;
-    my $ebml = $matroska->{'ebml'};
-    # search for the block
-    for(;;) {
-        # load a block
-        my $block = matroska_get_track_block($matroska, $tid);
+    my $destframe = $matroska->{'curframe'} + $numsamples;
 
-        my $curframe;
-        if($block) {
-            # check ts
-            say 'clusterts ' . ($matroska->{'dc'}->{'ts'}/1000000000);
-            say 'blockts ' . $block->{'ts'};
-            my $time = ($matroska->{'dc'}->{'rawts'} + $block->{'ts'}) * $matroska->{'tsscale'};
-            say 'blocktime ' . ($time/1000000000);
-            $curframe = matroska_ts_to_sample($matroska, $samplerate, $time);
-            $curframe = round($curframe/$pcmFrameLen)*$pcmFrameLen;
-            if($curframe > $aacFrameIndex) {
-                say "too far";
-                $block = undef;
-            }
-            else {
-                $matroska->{'dc'}->{'prevcluster'} = undef;
-            }
-        }
-        if(!$block) {
-            if($matroska->{'dc'}->{'prevcluster'}) {
-                say "revert cluster";
-                #die;
-                $matroska->{'dc'} = $matroska->{'dc'}->{'prevcluster'};
-                ebml_set_cluster($ebml, $matroska->{'dc'});
-                next;
-            }
-
-            #if($matroska->{'ebml'}{'elements'}[1]{'id'} != EBMLID_Cluster) {
-            if(!$matroska->{'ebml'}{'elements'}[1]) {
-                my $cluster = matroska_read_cluster_metadata($matroska);
-                if($cluster) {
-                    say "advancing cluster";
-                    $matroska->{'dc'} = $cluster;
-                    ebml_set_cluster($ebml, $matroska->{'dc'});
-                    next;
-                }
-                if(($matroska->{'ebml'}{'elements'}[0]{'id'} == EBMLID_Segment) && ($matroska->{'ebml'}{'elements'}[0]{'size'} == 0)) {
-                    say "done, EOF";
-                    return $outdata;
-                }
-            }
-            print Dumper($matroska->{'ebml'});
-            return undef;
-        }
-
-
-        # check range
-        my $aacSampleCount = ($pcmFrameLen * scalar(@{$block->{'frame_lengths'}}));
-        if($aacFrameIndex < ($curframe +  $aacSampleCount)) {
-            say "found start block: curframe $curframe desired $aacFrameIndex";
-            my $sindex = ($aacFrameIndex - $curframe) / $pcmFrameLen;
-            my $skip = 0;
-            for(my $i = 0; $i < $sindex; $i++) {
-                $skip += $block->{'frame_lengths'}[$i];
-            }
-
-            my $totalend = $aacFrameIndex+$numsamples;
-            my $blockend = $curframe + $aacSampleCount;
-            my $aend = $totalend > $blockend ? $blockend : $totalend;
-            $curframe += ($aacFrameIndex - $curframe);
-            my $toread = 0;
-            for(my $i = $sindex; $curframe < $aend; $i++) {
-                $curframe += $pcmFrameLen;
-                my $packetlen = $block->{'frame_lengths'}[$i];
-                $outdata .= $formatpacket->(substr($block->{'data'}, $skip, $packetlen), $samplerate);
-                $skip += $packetlen;
-                $toread += $block->{'frame_lengths'}[$i];
-            }
-            $numsamples -= ($aend - $aacFrameIndex);
-            if($numsamples == 0) {
-                say "done gathering data";
+    while(1) {
+        # add read audio
+        while(@{$matroska->{'curpaks'}}) {
+            my $pak = shift @{$matroska->{'curpaks'}};
+            $outdata .= $formatpacket->($pak, $samplerate);
+            $matroska->{'curframe'} += $pcmFrameLen;
+            if($matroska->{'curframe'} == $destframe) {
+                say "done, read enough";
                 return $outdata;
             }
-            $aacFrameIndex = $aend;
-            say "need more data,  $numsamples left";
+        }
+
+        # load a block
+        my $block = matroska_get_track_block($matroska, $tid);
+        if(! $block) {
+            if(($matroska->{'ebml'}{'elements'}[0]{'id'} == EBMLID_Segment) && ($matroska->{'ebml'}{'elements'}[0]{'size'} == 0)) {
+                say "done, EOF";
+            }
+            else {
+                say "done, Error";
+            }
+            return $outdata;
+        }
+
+        # add the data to paks
+        my $offset = 0;
+        foreach my $len (@{$block->{'frame_lengths'}}) {
+            push @{$matroska->{'curpaks'}}, substr($block->{'data'}, $offset, $len);
+            $offset += $len;
         }
     }
-    return undef;
 }
 
 sub video_matroska {
