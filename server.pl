@@ -2303,6 +2303,16 @@ package HTTP::BS::Server::Process {
         return bless \%self, $mpa->{'class'};
     }
 
+    sub cmd_to_sock {
+        my ($name, $cmd, $sockfh) = @_;
+        if(fork() == 0) {
+            open(STDOUT, ">&", $sockfh) or die("Can't dup \$sockfh to STDOUT");
+            exec(@$cmd);
+            die;
+        }
+        close($sockfh);
+    }
+
     # launch a process without a new exe with just sigchld handler
     sub new_output_child {
         my ($class, $evp, $func, $handler) = @_;
@@ -4080,6 +4090,10 @@ my @routes = (
                 hls($request);
                 return;
             }
+            elsif(rindex($request->{'path'}{'unsafepath'}, '/video/fmp4', 0) == 0) {
+                fmp4($request);
+                return;
+            }
             $request->Send404;
         }
     ],
@@ -4139,6 +4153,105 @@ my @routes = (
 
 # finally start the server
 my $server = HTTP::BS::Server->new($SETTINGS, \@routes, \@plugins);
+
+sub fmp4 {
+    my ($request) = @_;
+
+    my $extpos = rindex($request->{'path'}{'unsafecollapse'}, '/');
+    if($extpos == -1) {
+        $request->Send404;
+        return;
+    }
+
+    # find the video file it refers to
+    my $withoutlastext = substr($request->{'path'}{'unsafecollapse'}, 0, $extpos);
+    say "withoutext: $withoutlastext";
+    my %libraries = (
+        "/video/fmp4/tv/" => $SETTINGS->{'MEDIALIBRARIES'}{'tv'},
+        "/video/fmp4/movies/" => $SETTINGS->{'MEDIALIBRARIES'}{'movies'}
+    );
+    my $fileabspath;
+    my $tmpname;
+    foreach my $lib (keys %libraries) {
+        next if(rindex($withoutlastext, $lib, length($lib)) == -1);
+        my $tname = substr($withoutlastext, length($lib));
+        my $tocheck = $libraries{$lib} .'/'. $tname;
+        say "tocheck $tocheck";
+        my $abspath = abs_path($tocheck);
+        last if(! $abspath);
+        last if(rindex($abspath, $libraries{$lib}, 0) != 0);
+        $fileabspath = $abspath;
+        $tmpname = $tname;
+    }
+    if(! $fileabspath) {
+        $request->Send404;
+        return;
+    }
+
+    # only mkv supported right now
+    if(index($fileabspath, '.mkv', length($fileabspath)-4) == -1) {
+        $request->Send404;
+        return;
+    }
+    my $fileinfo = { 'fileabspath' => $fileabspath, 'tmpname' => $tmpname};
+
+    if($request->{'path'}{'unsafecollapse'} =~ /.json$/) {
+        my $matroska = matroska_open($fileabspath);
+        my $obj = {
+            'duration' => $matroska->{'duration'}
+        };
+        $request->SendLocalBuf(encode_utf8(encode_json($obj)), "text/json; charset=utf-8");
+        return;
+    }
+
+
+
+    my @command = ('ffmpeg', '-loglevel', 'fatal');
+    if($request->{'qs'}{'t'}) {
+        push @command, ('-ss', $request->{'qs'}{'t'});
+    }
+    push @command, ('-i', $fileinfo->{'fileabspath'}, '-c:v', 'copy', '-c:a', 'aac', '-f', 'mp4', '-movflags', 'frag_keyframe+empty_moov', '-');
+    my $evp = $request->{'client'}{'server'}{'evp'};
+    my $sent;
+    print "$_ " foreach @command;
+    $request->{'outheaders'}{'Accept-Ranges'} = 'none';
+
+    # avoid bookkeeping, have ffmpeg output straight to the socket
+    $request->{'outheaders'}{'Connection'} = 'close';
+    $request->{'outheaders'}{'Content-Type'} = 'video/mp4';
+    my $sock = $request->{'client'}{'sock'};
+    print  $sock  "HTTP/1.0 200 OK\r\n";
+    my $headtext = '';
+    foreach my $header (keys %{$request->{'outheaders'}}) {
+        $headtext .= "$header: " . $request->{'outheaders'}{$header} . "\r\n";
+    }
+    print $sock $headtext."\r\n";
+    $evp->remove($sock);
+    $request->{'client'} = undef;
+    HTTP::BS::Server::Process->cmd_to_sock(\@command, $sock);
+
+    #$request->{'process'} = HTTP::BS::Server::Process->new(\@command, $evp, {
+    #    'STDERR' => sub {
+    #        my ($err) = @_;
+    #        my $buf;
+    #        read($err, $buf, 4096);
+    #        return 1;
+    #    },
+    #    'STDOUT' => sub {
+    #        my ($out) = @_;
+    #        if(! $sent) {
+    #            $sent = 1;
+    #            say "proc sending response";
+    #            my %fileitem = ('fh' => $out);
+    #            $fileitem{'get_current_length'} = sub { return undef };
+    #            $request->_SendDataItem(\%fileitem, {'mime' => 'video/mp4'});
+    #        }
+    #
+    #        return 1;
+    #    }
+    #});
+
+}
 
 # hls on demand
 sub hls {
