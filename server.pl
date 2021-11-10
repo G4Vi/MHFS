@@ -4208,7 +4208,8 @@ sub fmp4 {
 
     my @command = ('ffmpeg', '-loglevel', 'fatal');
     if($request->{'qs'}{'t'}) {
-        push @command, ('-ss', $request->{'qs'}{'t'});
+        my $formattedtime = hls_audio_formattime($request->{'qs'}{'t'});
+        push @command, ('-ss', $formattedtime);
     }
     push @command, ('-i', $fileinfo->{'fileabspath'}, '-c:v', 'copy', '-c:a', 'aac', '-f', 'mp4', '-movflags', 'frag_keyframe+empty_moov', '-');
     my $evp = $request->{'client'}{'server'}{'evp'};

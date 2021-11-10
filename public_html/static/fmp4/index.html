@@ -92,7 +92,8 @@
         const seektime = Number(seekbar.value);
         console.log('seeking to ' + seektime);
         url = new URL(mainvideo.currentSrc);
-        url.searchParams.set('t', seektime.toHHMMSS());
+        //url.searchParams.set('t', seektime.toHHMMSS());
+        url.searchParams.set('t', seektime);
         BaseTime = seektime;
         mainvideo.src = url.href;
         mainvideo.play();
@@ -158,6 +159,12 @@
         return str + minutes + ':' + seconds;
     }
 
+    const UpdateCurTime = function() {
+        const curTime = BaseTime + mainvideo.currentTime;
+        curtime.value = curTime.toHHMMSS();
+        SetSeekbarValue(curTime);
+    };
+
 
     const GraphicsLoop = function() {
         if(SBAR_UPDATING) {
@@ -165,9 +172,7 @@
         }
         // display the tracktime
         else if(!mainvideo.paused) {
-            const curTime = BaseTime + mainvideo.currentTime;
-            curtime.value = curTime.toHHMMSS();
-            SetSeekbarValue(curTime);
+            UpdateCurTime();
         }
         window.requestAnimationFrame(GraphicsLoop);
     };
@@ -180,9 +185,31 @@
         videotitle.textContent = videoname;
 
         const rawurl = "../../video/fmp4/"+videoname;
-        const mp4url = rawurl+"/video.mp4";
+        let mp4url = rawurl+"/video.mp4";
+
+        const starttime = pageurl.searchParams.get('t');
+        if(starttime) {
+            console.log(starttime);
+            mp4url += '?t='+starttime;
+            BaseTime = Number(starttime);
+            UpdateCurTime();
+
+            /*
+            function toRemove() {
+                console.log('fired');
+                //mainvideo.currentTime = 3.792018;
+                mainvideo.removeEventListener('canplay', toRemove);
+            }
+            mainvideo.addEventListener('canplay', toRemove);
+            */
+        }
+
+
+
+
         const jsonurl = rawurl+"/meta.json";
         mainvideo.src = mp4url;
+
 
         let xhr = new XMLHttpRequest();
         xhr.open('GET', jsonurl);
@@ -200,6 +227,9 @@
                 endtime.value = meta.duration.toHHMMSS();
             }
         };
+
+
+
 
     }
 
