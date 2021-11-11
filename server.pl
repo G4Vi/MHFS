@@ -475,6 +475,7 @@ package HTTP::BS::Server::Util {
     use File::Basename;
     use POSIX ();
     use Cwd qw(abs_path getcwd);
+    use Encode qw(decode encode);
     our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'shell_stdout', 'shell_escape', 'ssh_stdout', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME');
     # single threaded locks
     sub LOCK_GET_LOCKDATA {
@@ -653,6 +654,7 @@ package HTTP::BS::Server::Util {
         $options->{'min_file_size'} //= 0;
 
         my @files;
+        $path = decode("utf8", $path);
         ON_DIR:
         # get the list of files and sort
         my $dir;
@@ -665,7 +667,7 @@ package HTTP::BS::Server::Util {
         my @newpaths = ();
         foreach my $file (@newfiles) {
             next if($file =~ /^..?$/);
-            push @newpaths, "$path/$file";
+            push @newpaths,  "$path/".decode("utf8", $file);
         }
         @files = @files ? (@newpaths, undef, @files) : @newpaths;
         while(@files)
@@ -687,7 +689,7 @@ package HTTP::BS::Server::Util {
             }
             my $size = -s $path;
             if(! defined $size) {
-                say "size  not defined path $path file $file";
+                say "size not defined path $path file $file";
                 next;
             }
             next if( $size < $options->{'min_file_size'});
