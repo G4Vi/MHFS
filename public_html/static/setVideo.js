@@ -1,20 +1,25 @@
 var theParent = document.getElementById('medialist');
 theParent.addEventListener("click", SetVideo, false);
 
-function SetVideo(e){    
+function SetVideo(e){
 	if(e.target === e.currentTarget) {
             return;
 	}
-	console.log('SetVideo - target: ' + e.target);
-	var path = e.target.getAttribute('data-file');
-	if(path === null) {
-	    return;
+
+	if(e.target.getAttribute('class') !== 'mediafile') {
+		return;
 	}
+
+	console.log('SetVideo - target: ' + e.target);
+	let targeturl = e.target.getAttribute('href');
+	if(targeturl === null) {
+		return;
+	}
+	targeturl = targeturl.replace('video', 'get_video')
+	console.log('SetVideo - url: ' + targeturl)
     e.stopPropagation();
     e.preventDefault();
-    
-	path = decodeURIComponent(path);
-    console.log('path ' + path)  
-    _SetVideo("get_video?name=" + path + "&fmt=" + CURRENT_FORMAT);
+
+    _SetVideo(targeturl);
     window.location.hash = '#video';
 }

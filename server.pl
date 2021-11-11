@@ -654,7 +654,6 @@ package HTTP::BS::Server::Util {
         $options->{'min_file_size'} //= 0;
 
         my @files;
-        $path = decode("utf8", $path);
         ON_DIR:
         # get the list of files and sort
         my $dir;
@@ -667,7 +666,7 @@ package HTTP::BS::Server::Util {
         my @newpaths = ();
         foreach my $file (@newfiles) {
             next if($file =~ /^..?$/);
-            push @newpaths,  "$path/".decode("utf8", $file);
+            push @newpaths,  "$path/$file";
         }
         @files = @files ? (@newpaths, undef, @files) : @newpaths;
         while(@files)
@@ -2585,7 +2584,7 @@ package MusicLibrary {
             warn "plugin(MusicLibrary): Using PurePerl version of JSON (JSON::PP), see doc/dependencies.txt about installing faster version";
         }
     }
-    use Encode qw(decode encode);
+    use Encode qw(decode encode encode_utf8);
     use URI::Escape;
     use Storable qw(dclone);
     use Fcntl ':mode';
@@ -2593,7 +2592,6 @@ package MusicLibrary {
     use Scalar::Util qw(looks_like_number weaken);
     use POSIX qw/ceil/;
     use Storable qw( freeze thaw);
-    use Encode qw(encode_utf8);
     #use ExtUtils::testlib;
     use FindBin;
     use File::Spec;
@@ -3973,7 +3971,7 @@ use File::Find;
 use File::Path qw(make_path);
 use File::Copy;
 use POSIX;
-use Encode qw(decode encode find_encoding);
+use Encode qw(decode encode find_encoding is_utf8);
 use URI::Escape;
 use Scalar::Util qw(looks_like_number weaken reftype);
 use Encode;
@@ -7346,26 +7344,44 @@ sub video_library_html {
         'root' => $dir,
         'min_file_size' => 100000,
         'on_dir_start' => sub {
-            my ($path, $file) = @_;
-            my $safename = escape_html($file);
+            my ($realpath, $unsafe_relpath) = @_;
+            my $relpath = uri_escape($unsafe_relpath);
+            my $disppath = escape_html(decode('UTF-8', $unsafe_relpath));
             $buf .= '<li><div class="row">';
-            $buf .= '<a href="#' . $$safename . '_hide" class="hide" id="' . $$safename . '_hide">' . "$$safename</a>";
-            $buf .= '<a href="#' . $$safename . '_show" class="show" id="' . $$safename . '_show">' . "$$safename</a>";
-            $buf .= '    <a href="get_video?name=' . $$safename . '&fmt=m3u8">M3U</a>';
+            $buf .= '<a href="#' . $relpath . '_hide" class="hide" id="' . $$disppath . '_hide">' . "$$disppath</a>";
+            $buf .= '<a href="#' . $relpath . '_show" class="show" id="' . $$disppath . '_show">' . "$$disppath</a>";
+            $buf .= '    <a href="get_video?name=' . $relpath . '&fmt=m3u8">M3U</a>';
             $buf .= '<div class="list"><ul>';
         },
         'on_dir_end' => sub {
             $buf .= '</ul></div></div></li>';
         },
         'on_file' => sub {
-            my ($path, $unsafePath, $file) = @_;
-            my $safe_item_basename = escape_html($file);
-            my $item_path = escape_html($unsafePath);
-            $buf .= '<li><a href="video?name='.$$item_path.'&fmt=' . $fmt . '" data-file="'. $$item_path . '">' . $$safe_item_basename . '</a>    <a href="get_video?name=' . $$item_path . '&fmt=' . $fmt . '">DL</a>    <a href="get_video?name=' . $$item_path . '&fmt=m3u8">M3U</a></li>';
+            my ($realpath, $unsafe_relpath, $unsafe_name) = @_;
+            my $relpath = uri_escape($unsafe_relpath);
+            my $filename = escape_html(decode('UTF-8', $unsafe_name));
+            $buf .= '<li><a href="video?name='.$relpath.'&fmt=' . $fmt . '" class="mediafile">' . $$filename . '</a>    <a href="get_video?name=' . $relpath . '&fmt=' . $fmt . '">DL</a>    <a href="get_video?name=' . $relpath . '&fmt=m3u8">M3U</a></li>';
         }
     });
     $buf .=  '</ul>';
     return \$buf;
+}
+
+# save space by not precent encoding valid UTF-8 characters
+sub small_url_encode {
+    my ($octets) = @_;
+    say "before $octets";
+
+    my $escapedoctets = ${escape_html($octets)};
+    my $res;
+    while(length($escapedoctets)) {
+        $res .= decode('UTF-8', $escapedoctets, Encode::FB_QUIET);
+        last if(!length($escapedoctets));
+        my $oct = ord(substr($escapedoctets, 0, 1, ''));
+        $res .= sprintf ("%%%02X", $oct);
+    }
+    say "now: $res";
+    return $res;
 }
 
 sub video_get_m3u8 {
@@ -7391,8 +7407,9 @@ M3U8END
     }
 
     foreach my $file (@files) {
-        $m3u8 .= '#EXTINF:0, ' . $file . "\n";
-        $m3u8 .= $urlstart . $file . "\n";
+        $m3u8 .= '#EXTINF:0, ' . decode('UTF-8', $file, Encode::LEAVE_SRC) . "\n";
+        #$m3u8 .= $urlstart . uri_escape($file) . "\n";
+        $m3u8 .= $urlstart . small_url_encode($file) . "\n";
     }
     return \$m3u8;
 }
