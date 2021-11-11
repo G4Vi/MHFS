@@ -83,6 +83,21 @@
         SBAR_UPDATING = 1;
     });
 
+    const seekVideo = function(rawurl, seektime, onload) {
+        console.log('seeking to ' + seektime);
+        BaseTime = seektime;
+        UpdateCurTime();
+        doJSON(rawurl+'/gop.json'+'?t='+seektime, function(gopjson) {
+            console.log('gopjson goptime' + gopjson.goptime);
+            BaseTime = Number(gopjson.goptime);
+            UpdateCurTime();
+            let videourl = rawurl + '/video.mp4?t='+gopjson.goptime;
+            console.log('videourl ' + videourl);
+            mainvideo.src =  videourl;
+            onload();
+        });
+    }
+
     seekbar.addEventListener('change', function (e) {
         if(!SBAR_UPDATING) {
             return;
@@ -90,13 +105,14 @@
         SBAR_UPDATING = 0;
 
         const seektime = Number(seekbar.value);
-        console.log('seeking to ' + seektime);
-        url = new URL(mainvideo.currentSrc);
-        //url.searchParams.set('t', seektime.toHHMMSS());
-        url.searchParams.set('t', seektime);
-        BaseTime = seektime;
-        mainvideo.src = url.href;
-        mainvideo.play();
+        let rawurl = mainvideo.currentSrc;
+        let pat = /\/[^\/]+$/;
+        rawurl = rawurl.replace(pat, '');
+        console.log('rawurl ' + rawurl);
+
+        seekVideo(rawurl, seektime, function() {
+            mainvideo.play();
+        });
     });
 
     document.addEventListener('keydown', function(event) {
@@ -178,6 +194,21 @@
     };
     window.requestAnimationFrame(GraphicsLoop);
 
+    const doJSON = function(url, onload) {
+        let xhr = new XMLHttpRequest();
+        xhr.open('GET', url);
+        xhr.responseType = 'json';
+        xhr.send();
+        xhr.onload = function() {
+            if (xhr.status != 200) {
+                console.log(`Error ${xhr.status}: ${xhr.statusText}`);
+            }
+            else {
+                onload(xhr.response);
+            }
+        }
+    };
+
     let pageurl = new URL(window.location);
     const videoname = pageurl.searchParams.get('name');
     console.log(videoname);
@@ -190,9 +221,11 @@
         const starttime = pageurl.searchParams.get('t');
         if(starttime) {
             console.log(starttime);
-            mp4url += '?t='+starttime;
-            BaseTime = Number(starttime);
-            UpdateCurTime();
+            console.log('first rawurl ' + rawurl);
+            seekVideo(rawurl, Number(starttime), function(){});
+            //mp4url += '?t='+starttime;
+            //BaseTime = Number(starttime);
+            //UpdateCurTime();
 
             /*
             function toRemove() {
@@ -203,33 +236,18 @@
             mainvideo.addEventListener('canplay', toRemove);
             */
         }
+        else {
+            mainvideo.src = mp4url;
+        }
 
-
-
-
+        // load the metadata
         const jsonurl = rawurl+"/meta.json";
-        mainvideo.src = mp4url;
-
-
-        let xhr = new XMLHttpRequest();
-        xhr.open('GET', jsonurl);
-        xhr.responseType = 'json';
-        xhr.send();
-        xhr.onload = function() {
-            if (xhr.status != 200) {
-                console.log(`Error ${xhr.status}: ${xhr.statusText}`);
-            }
-            else {
-                const meta = xhr.response;
-                console.log('duration ' + meta.duration);
-                seekbar.min = 0;
-                seekbar.max = meta.duration;
-                endtime.value = meta.duration.toHHMMSS();
-            }
-        };
-
-
-
+        doJSON(jsonurl, function(meta) {
+            console.log('duration ' + meta.duration);
+            seekbar.min = 0;
+            seekbar.max = meta.duration;
+            endtime.value = meta.duration.toHHMMSS();
+        });
 
     }
 

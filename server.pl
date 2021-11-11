@@ -4199,10 +4199,25 @@ sub fmp4 {
 
     if($request->{'path'}{'unsafecollapse'} =~ /.json$/) {
         my $matroska = matroska_open($fileabspath);
-        my $obj = {
-            'duration' => $matroska->{'duration'}
-        };
-        $request->SendLocalBuf(encode_utf8(encode_json($obj)), "text/json; charset=utf-8");
+        if(! defined $request->{'qs'}{'t'}) {
+            my $obj = {
+                'duration' => $matroska->{'duration'}
+            };
+            $request->SendLocalBuf(encode_utf8(encode_json($obj)), "text/json; charset=utf-8");
+        }
+        else {
+            my $track = matroska_get_video_track($matroska);
+            if(! $track) {
+                $request->Send404;
+                return;
+            }
+            my $gopinfo = matroska_get_gop($matroska, $track, $request->{'qs'}{'t'});
+            if(! $gopinfo) {
+                $request->Send404;
+                return;
+            }
+            $request->SendLocalBuf(encode_utf8(encode_json($gopinfo)), "text/json; charset=utf-8");
+        }
         return;
     }
 
@@ -5913,6 +5928,17 @@ sub matroska_get_audio_track {
     return undef;
 }
 
+sub matroska_get_video_track {
+    my ($matroska) = @_;
+    foreach my $track (@{$matroska->{'tracks'}}) {
+        my $tt = $track->{&EBMLID_TrackType};
+        if(defined $tt && ($tt->{'value'} == 1)) {
+            return $track;
+        }
+    }
+    return undef;
+}
+
 sub matroska_read_cluster_metadata {
     my ($matroska) = @_;
     my $ebml = $matroska->{'ebml'};
@@ -6008,6 +6034,79 @@ sub ceil_div {
     return int(($_[0] + $_[1] - 1) / $_[1]);
 }
 
+sub matroska_get_gop {
+    my ($matroska, $track, $timeinseconds) = @_;
+    my $tid = $track->{&EBMLID_TrackNumber}{'value'};
+
+    my $prevcluster;
+    my $desiredcluster;
+    while(1) {
+        my $cluster = matroska_read_cluster_metadata($matroska);
+        last if(!$cluster);
+
+        my $ctime = $cluster->{'ts'} / 1000000000;
+
+        # this cluster could have our GOP, save it's info
+        if($ctime <= $timeinseconds) {
+            $prevcluster = $desiredcluster;
+            $desiredcluster = $cluster;
+            if($prevcluster) {
+                $prevcluster->{'prevcluster'} = undef;
+                $desiredcluster->{'prevcluster'} = $prevcluster;
+            }
+        }
+
+        if($ctime >= $timeinseconds) {
+            last;
+        }
+    }
+    say "before dc check";
+    return undef if(! $desiredcluster);
+
+    say "cur rawts " . $desiredcluster->{'rawts'};
+    say "last rawts " . $desiredcluster->{'prevcluster'}{'rawts'} if($desiredcluster->{'prevcluster'});
+
+    # restore to the the cluster that probably has the GOP
+    my $ebml = $matroska->{'ebml'};
+    ebml_set_cluster($ebml, $desiredcluster);
+    $matroska->{'dc'} = $desiredcluster;
+
+    # find a valid track block that includes pcmFrameIndex;
+    my $block;
+    my $blocktime;
+    while(1) {
+        $block = matroska_get_track_block($matroska, $tid);
+        $blocktime;
+        if($block) {
+            $blocktime = matroska_calc_block_fullts($matroska, $block);
+            if($blocktime > $timeinseconds) {
+                $block = undef;
+            }
+            if(! $matroska->{'dc'}{'firstblk'}) {
+                $matroska->{'dc'}{'firstblk'} = $blocktime;
+            }
+        }
+        if(! $block) {
+            if(! $prevcluster) {
+                return undef;
+            }
+            say "revert cluster";
+            $matroska->{'dc'} = $prevcluster;
+            ebml_set_cluster($ebml, $matroska->{'dc'});
+            next;
+        }
+
+        $prevcluster = undef;
+
+        my $blockduration = ((1/24) * scalar(@{$block->{'frame_lengths'}}));
+        if($timeinseconds < ($blocktime +  $blockduration)) {
+            say 'got GOP at ' . $matroska->{'dc'}{'firstblk'};
+            return {'goptime' => $matroska->{'dc'}{'firstblk'}};
+            last;
+        }
+    }
+
+}
 
 sub matroska_seek_track {
     my ($matroska, $track, $pcmFrameIndex) = @_;
@@ -6102,6 +6201,14 @@ sub matroska_seek_track {
         $offset += $len;
     }
     return 1;
+}
+
+sub matroska_calc_block_fullts {
+    my ($matroska, $block) = @_;
+    say 'clusterts ' . ($matroska->{'dc'}->{'ts'}/1000000000);
+    say 'blockts ' . $block->{'ts'};
+    my $time = ($matroska->{'dc'}->{'rawts'} + $block->{'ts'}) * $matroska->{'tsscale'};
+    return ($time/1000000000);
 }
 
 sub matroska_block_calc_frame {
