@@ -1044,7 +1044,7 @@ package HTTP::BS::Server::Client::Request {
 
     sub _SendResponse {
         my ($self, $fileitem) = @_;
-        if(utf8::is_utf8($fileitem->{'buf'})) {
+        if(Encode::is_utf8($fileitem->{'buf'})) {
             warn "_SendResponse: UTF8 flag is set, turning off";
             Encode::_utf8_off($fileitem->{'buf'});
         }
@@ -1346,7 +1346,7 @@ package HTTP::BS::Server::Client::Request {
         # TODO less copying
 
         # we want to sent in increments of bytes not characters
-        if(utf8::is_utf8($buf)) {
+        if(Encode::is_utf8($buf)) {
             warn "SendLocalBuf: UTF8 flag is set, turning off";
             Encode::_utf8_off($buf);
         }
@@ -2585,7 +2585,7 @@ package MusicLibrary {
             warn "plugin(MusicLibrary): Using PurePerl version of JSON (JSON::PP), see doc/dependencies.txt about installing faster version";
         }
     }
-    use Encode qw(decode encode encode_utf8);
+    use Encode qw(decode encode);
     use URI::Escape;
     use Storable qw(dclone);
     use Fcntl ':mode';
@@ -2614,6 +2614,149 @@ package MusicLibrary {
         #our $HAS_MHFS_XS = 1;
     }
 
+    sub surrogatepairtochar {
+        my ($hi, $low) = @_;
+        my $codepoint = 0x10000 + (ord($hi) - 0xD800) * 0x400 + (ord($low) - 0xDC00);
+        return pack('U', $codepoint);
+    }
+
+    sub get_codepoint {
+        my ($octets) = @_;
+        my $codepoint;
+        my $state = 0;
+        my $maxstate;
+        my $torestore;
+        my $mincodepoint;
+        my $maxcodepoint;
+        while(length($$octets)) {
+            my $char = substr($$octets, 0, 1, '');
+            my $oct = ord($char);
+            if($state == 0) {
+                if($oct & 0x80) {
+                    return $oct;
+                }
+                if(($oct & 0xE0) == 0xC0) {
+                    say "len 2";
+                    $maxstate = 1;
+                    $codepoint = ($oct & 0x1F) << 6;
+
+                    $mincodepoint = 0x80;
+                    $maxcodepoint = 0x7FF;
+                }
+                elsif(($oct & 0xF0) == 0xE0) {
+                    say "len 3";
+                    $maxstate = 2;
+                    $codepoint = ($oct & 0x0F) << 12;
+
+                    $mincodepoint = 0x800;
+                    $maxcodepoint = 0xFFFF;
+                }
+                elsif(($oct & 0xF8) == 0xF0) {
+                    say "len 4";
+                    $maxstate = 3;
+                    $codepoint = ($oct & 0x07) << 18;
+                    $mincodepoint = 0x10000;
+                    $maxcodepoint = 0x10FFFF;
+                }
+                else {
+                    # invalid lead character, replacement character
+                    return 0xFFFD;
+                }
+            }
+            else {
+                $torestore .= $char;
+                if(($oct & 0xC0) != 0x80) {
+                    # invalid value in sequence
+                    $$octets = $torestore . $$octets;
+                    return 0xFFFD;
+                }
+                my $newshift = ($maxstate - $state)*6;
+                $codepoint |= ($oct & 0x3F) << $newshift;
+                if($state == $maxstate) {
+                    # todo check for overlong
+                    return $codepoint;
+                }
+            }
+
+            $state++;
+        }
+        if($state == 0) {
+            return undef;
+        }
+        # unexpected end of string, replacement character
+        else {
+            return 0xFFFD;
+        }
+    }
+
+    sub get_printable_utf8 {
+        my ($octets) = @_;
+
+        my $cp = ((0xF0 & 0x07) << 18) | ((0x9F & 0x3F) << 12) | ((0x8E & 0x3F) << 6) | (0x84 & 0x3F);
+        say "codepoint $cp";
+
+        my @tests = (
+            #(chr(1 << 7) . chr(1 << 7)),
+            #chr(0xED).chr(0xA0).chr(0xBC),
+            #chr(0xED).chr(0xA0).chr(0xBC) . chr(1 << 7) . chr(1 << 7),
+            #chr(0xED).chr(0xED).chr(0xED),
+            chr(0xF0).chr(0xBF).chr(0xBF).chr(0xBF),
+            chr(0xED).chr(0xA0),
+            chr(0xF0).chr(0x9F).chr(0x8E).chr(0x84),
+            chr(0xF0).chr(0x9F).chr(0x8E),
+            chr(0xF0).chr(0x9F).chr(0x8E).chr(0x60)
+        );
+
+        foreach my $test (@tests) {
+            my $unsafedec = decode("utf8", $test, Encode::LEAVE_SRC);
+            my $safedec = decode('UTF-8', $test);
+            say "udec $unsafedec len ".length($unsafedec)." sdec $safedec len ".length($safedec);
+        }
+        die;
+
+        my $replaceunprint;
+
+        my $res;
+
+        while(length($octets)) {
+            $res .= decode('UTF-8', $octets, Encode::FB_QUIET);
+            last if(!length($octets));
+
+            my $firstocts = substr($octets, 0, 3, '');
+
+            my $surrogate = decode("utf8", $firstocts, Encode::LEAVE_SRC);
+
+            if($surrogate !~ /^[\x{D800}-\x{DBFF}]$/) {
+                say "no surrogate";
+                $replaceunprint = 1;
+                $res .= $firstocts;
+                next;
+            }
+
+            my $secondocts = substr($octets, 0, 3, '');
+            my $secondsurrogate = decode("utf8", $secondocts, Encode::LEAVE_SRC);
+            if($secondsurrogate !~ /^[\x{DC00}-\x{DFFF}]$/) {
+                say "no surrogate pair end";
+                $replaceunprint = 1;
+                $res .= $firstocts;
+                $octets = $secondocts . $octets;
+                next;
+            }
+            my $spc = surrogatepairtochar($surrogate, $secondsurrogate);
+            say "spc $spc";
+            $res .= $spc;
+        }
+
+        if($replaceunprint) {
+            say "replaceunprint, before: $res";
+            Encode::_utf8_off($res);
+            $res = decode('UTF-8', $res, Encode::LEAVE_SRC);
+            say "replaceunprint, after: $res";
+        }
+
+        return $res;
+    }
+
 
     # read the directory tree from desk and store
     # this assumes filenames are UTF-8ish, the octlets will be the actual filename, but the printable filename is created by decoding it as UTF-8
@@ -2636,16 +2779,12 @@ package MusicLibrary {
         if(! $utf8name) {
             say "MusicLibrary: BuildLibrary slow path decode - " . decode('UTF-8', $basepath);
             my $loose = decode("utf8", $basepath);
-            my $surrogatepairtochar = sub {
-                my ($hi, $low) = @_;
-                my $codepoint = 0x10000 + (ord($hi) - 0xD800) * 0x400 + (ord($low) - 0xDC00);
-                return pack('U', $codepoint);
-            };
-            $loose =~ s/([\x{D800}-\x{DBFF}])([\x{DC00}-\x{DFFF}])/$surrogatepairtochar->($1, $2)/ueg; #uncode, expression replacement, global
+            $loose =~ s/([\x{D800}-\x{DBFF}])([\x{DC00}-\x{DFFF}])/surrogatepairtochar($1, $2)/ueg; #uncode, expression replacement, global
             Encode::_utf8_off($loose);
             $utf8name = decode('UTF-8', $loose);
             say "MusicLibrary: BuildLibrary slow path decode changed to : $utf8name";
         }
+        #my $utf8name = get_printable_utf8($basepath);
 
         #if($path =~ /Trucks.+07/) {
         #    say "time to die";
@@ -2773,14 +2912,14 @@ package MusicLibrary {
 
         my $legacy_template = HTML::Template->new(filename => 'templates/music_legacy.html', path => $self->{'settings'}{'APPDIR'} );
         $legacy_template->param(musicdb => $buf);
-        $self->{'html'} = encode_utf8($legacy_template->output);
+        $self->{'html'} = encode('UTF-8', $legacy_template->output, Encode::FB_CROAK);
 
         my $gapless_template = HTML::Template->new(filename => 'templates/music_gapless.html', path => $self->{'settings'}{'APPDIR'} );
         $gapless_template->param(INLINE => 1);
         $gapless_template->param(musicdb => $buf);
         #$gapless_template->param(musicdb => '');
-        $self->{'html_gapless'} = encode_utf8($gapless_template->output);
-        $self->{'musicdbhtml'} = encode_utf8($buf);
+        $self->{'html_gapless'} = encode('UTF-8', $gapless_template->output, Encode::FB_CROAK);
+        $self->{'musicdbhtml'} = encode('UTF-8', $buf, Encode::FB_CROAK);
         $self->{'musicdbjson'} = toJSON($self);
     }
 
@@ -3254,7 +3393,7 @@ package MusicLibrary {
                 my ($key, $value) = split('=', $comment);
                 $commenthash->{$key} = $value;
             }
-            $request->SendLocalBuf(encode_utf8(encode_json($commenthash)), "text/json; charset=utf-8");
+            $request->SendLocalBuf(encode('UTF-8', encode_json($commenthash), Encode::FB_CROAK), "text/json; charset=utf-8");
             return 1;
         }
         say "SendFromLibrary: did not find in library, 404ing";
@@ -3472,7 +3611,7 @@ package Youtube {
             vidlist.innerHTML = event.state;
         }
         </script>';
-        $request->SendLocalBuf(encode_utf8($html), "text/html; charset=utf-8");
+        $request->SendLocalBuf(encode('UTF-8', $html, Encode::FB_CROAK), "text/html; charset=utf-8");
     }
 
     sub onYoutube {
@@ -3972,7 +4111,7 @@ use File::Find;
 use File::Path qw(make_path);
 use File::Copy;
 use POSIX;
-use Encode qw(decode encode find_encoding is_utf8);
+use Encode qw(decode encode find_encoding);
 use URI::Escape;
 use Scalar::Util qw(looks_like_number weaken reftype);
 use Encode;
@@ -4202,7 +4341,7 @@ sub fmp4 {
             my $obj = {
                 'duration' => $matroska->{'duration'}
             };
-            $request->SendLocalBuf(encode_utf8(encode_json($obj)), "text/json; charset=utf-8");
+            $request->SendLocalBuf(encode('UTF-8', encode_json($obj), Encode::FB_CROAK), "text/json; charset=utf-8");
         }
         else {
             my $track = matroska_get_video_track($matroska);
@@ -4215,7 +4354,7 @@ sub fmp4 {
                 $request->Send404;
                 return;
             }
-            $request->SendLocalBuf(encode_utf8(encode_json($gopinfo)), "text/json; charset=utf-8");
+            $request->SendLocalBuf(encode('UTF-8', encode_json($gopinfo), Encode::FB_CROAK), "text/json; charset=utf-8");
         }
         return;
     }
@@ -7180,7 +7319,7 @@ sub torrent {
                 }
             }
             $buf   .= '</tbody></table>';
-            $request->SendLocalBuf(encode('UTF-8', $buf), 'text/html; charset=utf-8');
+            $request->SendLocalBuf(encode('UTF-8', $buf, Encode::FB_CROAK), 'text/html; charset=utf-8');
         });
     }
     else {
@@ -7268,7 +7407,7 @@ sub player_video_browsemovies {
         }
         $buf .= "</body>";
         $buf .= "</html>";
-        $request->SendLocalBuf(encode_utf8($buf), "text/html");
+        $request->SendLocalBuf(encode('UTF-8', $buf, Encode::FB_CROAK), "text/html; charset=utf-8");
 
     });
 }
@@ -7313,24 +7452,16 @@ sub player_video {
     }
     $buf .= '</div>';
 
+    # add the video player
     $temp = GetResource($VIDEOFORMATS{$fmt}->{'player_html'});
     $buf .= $$temp;
     $buf .= '<script>';
-    $buf .= "var CURRENT_FORMAT = '$fmt';\n";
     $temp = GetResource($SETTINGS->{'DOCUMENTROOT'} . '/static/' . 'setVideo.js');
     $buf .= $$temp;
-
-    if($qs->{'name'}) {
-        if($qs->{'fmt'} ne 'jsmpeg') {
-            $buf .= '_SetVideo("get_video?name=' .  uri_escape($qs->{'name'}) . '&fmt=" + CURRENT_FORMAT);';
-            $buf .= "window.location.hash = '#video';";
-        }
-    }
-
     $buf .= '</script>';
     $buf .= "</body>";
     $buf .= "</html>";
-    $request->SendLocalBuf(encode_utf8($buf), "text/html; charset=utf-8");
+    $request->SendLocalBuf(encode('UTF-8', $buf, Encode::FB_CROAK), "text/html; charset=utf-8");
 }
 
 sub video_library_html {

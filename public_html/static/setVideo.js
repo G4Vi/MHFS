@@ -23,3 +23,14 @@ function SetVideo(e){
     _SetVideo(targeturl);
     window.location.hash = '#video';
 }
+
+// set the video if provided
+let pageurl = new URL(window.location);
+const videoname = pageurl.searchParams.get('name');
+if(videoname) {
+	const fmt = pageurl.searchParams.get('fmt') || 'noconv';
+	if(fmt !== 'jsmpeg') {
+		_SetVideo('get_video?name='+videoname+'&fmt='+fmt);
+		window.location.hash = '#video';
+	}
+}
