@@ -789,6 +789,7 @@ package HTTP::BS::Server::Client::Request {
     use List::Util qw[min max];
     use Symbol 'gensym';
     use Devel::Peek;
+    use Encode qw(decode encode);
     use constant {
         MAX_REQUEST_SIZE => 8192,
     };
@@ -1442,12 +1443,12 @@ package HTTP::BS::Server::Client::Request {
                 while( ($filename = readdir($dh))) {
                    next if(($filename eq '.') || ($filename eq '..'));
                    next if(!(-s "$requestfile/$filename"));
-                   my $url = uri_escape_utf8($filename);
+                   my $url = uri_escape($filename);
                    $url .= '/' if(-d _);
-                   $buf .= '<a href="' . $url .'">'.${escape_html_noquote($filename)} .'</a><br><br>';
+                   $buf .= '<a href="' . $url .'">'.${escape_html_noquote(decode('UTF-8', $filename, Encode::LEAVE_SRC))} .'</a><br><br>';
                 }
                 closedir($dh);
-                $self->SendLocalBuf($buf, 'text/html');
+                $self->SendLocalBuf($buf, 'text/html; charset=utf-8');
                 return;
             }
             # redirect to slash path
@@ -4848,12 +4849,10 @@ sub kodi_tv {
     # locate the content
     if($request->{'path'}{'unsafepath'} ne $kodidir) {
         my $fullshowname = substr($request->{'path'}{'unsafepath'}, length($kodidir)+1);
-        say "fullshowname $fullshowname";
         my $slash = index($fullshowname, '/');
         @diritems = ();
         my $showname = ($slash != -1) ? substr($fullshowname, 0, $slash) : $fullshowname;
         my $showfilename = ($slash != -1) ? substr($fullshowname, $slash+1) : undef;
-        say "showname $showname";
 
         my $showitems = $shows{$showname};
         if(!$showitems) {
@@ -4920,11 +4919,11 @@ sub kodi_tv {
     my $buf = '';
     foreach my $show (@diritems) {
         my $showname = $show->{'item'};
-        my $url = uri_escape_utf8($showname);
+        my $url = uri_escape($showname);
         $url .= '/' if($show->{'isdir'});
-        $buf .= '<a href="' . $url .'">'.${escape_html_noquote($showname)} .'</a><br><br>';
+        $buf .= '<a href="' . $url .'">'.${escape_html_noquote(decode('UTF-8', $showname, Encode::LEAVE_SRC))} .'</a><br><br>';
     }
-    $request->SendLocalBuf($buf, 'text/html');
+    $request->SendLocalBuf($buf, 'text/html; charset=utf-8');
 }
 
 # format movies library for kodi http
@@ -5055,11 +5054,11 @@ sub kodi_movies {
     my $buf = '';
     foreach my $show (@diritems) {
         my $showname = $show->{'item'};
-        my $url = uri_escape_utf8($showname);
+        my $url = uri_escape($showname);
         $url .= '/' if($show->{'isdir'});
-        $buf .= '<a href="' . $url .'">'.${escape_html_noquote($showname)} .'</a><br><br>';
+        $buf .= '<a href="' . $url .'">'. ${escape_html_noquote(decode('UTF-8', $showname, Encode::LEAVE_SRC))} .'</a><br><br>';
     }
-    $request->SendLocalBuf($buf, 'text/html');
+    $request->SendLocalBuf($buf, 'text/html; charset=utf-8');
 }
 
 # really acquire media file (with search) and convert
@@ -7101,7 +7100,7 @@ sub torrent {
         # Assume we are downloading, if the bytes don't match
         if($bytes_done < $size_bytes) {
             $buf   .= '<meta http-equiv="refresh" content="3">';
-            $request->SendLocalBuf($buf , 'text/html');
+            $request->SendLocalBuf($buf , 'text/html; charset=utf-8');
         }
         else {
         # print out the files with usage options
@@ -7114,7 +7113,7 @@ sub torrent {
             $buf .= '<thead><tr><th>File</th><th>Size</th><th>DL</th><th>Play in browser</th></tr></thead>';
             $buf .= '<tbody';
             foreach my $file (@files) {
-                my $torrent_path = ${ escape_html($file)} ;
+                my $torrent_path = uri_escape($file);
                 my $link = '<a href="get_video?name=' . $torrent_path . '&fmt=noconv">DL</a>';
                 my $playlink = play_in_browser_link($file, $torrent_path);
                 $buf .= "<tr><td>$torrent_path</td><td>" . get_SI_size($tfi->{$file}{'size'}) . "</td><td>$link</td>";
@@ -7124,7 +7123,7 @@ sub torrent {
             $buf .= '</tbody';
             $buf .= '</table>';
 
-            $request->SendLocalBuf($buf , 'text/html');
+            $request->SendLocalBuf($buf , 'text/html; charset=utf-8');
             });
         }
 
@@ -7322,10 +7321,8 @@ sub player_video {
     $buf .= $$temp;
 
     if($qs->{'name'}) {
-        $temp = uri_escape($qs->{'name'});
-        say $temp;
         if($qs->{'fmt'} ne 'jsmpeg') {
-            $buf .= '_SetVideo("get_video?name=' .  $temp . '&fmt=" + CURRENT_FORMAT);';
+            $buf .= '_SetVideo("get_video?name=' .  uri_escape($qs->{'name'}) . '&fmt=" + CURRENT_FORMAT);';
             $buf .= "window.location.hash = '#video';";
         }
     }
@@ -7408,8 +7405,8 @@ M3U8END
 
     foreach my $file (@files) {
         $m3u8 .= '#EXTINF:0, ' . decode('UTF-8', $file, Encode::LEAVE_SRC) . "\n";
-        #$m3u8 .= $urlstart . uri_escape($file) . "\n";
-        $m3u8 .= $urlstart . small_url_encode($file) . "\n";
+        $m3u8 .= $urlstart . uri_escape($file) . "\n";
+        #$m3u8 .= $urlstart . small_url_encode($file) . "\n";
     }
     return \$m3u8;
 }
