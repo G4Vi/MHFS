@@ -727,20 +727,21 @@ package HTTP::BS::Server::Util {
     sub getMIME {
         my ($filename) = @_;
 
-        my %audioexts = ( 'mp3' => 'audio/mp3',
+        my %combined = (
+            # audio
+            'mp3' => 'audio/mp3',
             'flac' => 'audio/flac',
             'opus' => 'audio',
-            'ogg'  => 'audio/ogg');
-
-        my %videoexts = ('mp4' => 'video/mp4',
-            'mkv'  => 'video/mp4',
+            'ogg'  => 'audio/ogg',
+            # video
+            'mp4' => 'video/mp4',
             'ts'   => 'video/mp2t',
             'mkv'  => 'video/x-matroska',
             'webm' => 'video/webm',
-            'flv'  => 'video/x-flv');
-
-        my %otherexts = ('html' => 'text/html; charset=utf-8',
-            'json' => 'text/json',
+            'flv'  => 'video/x-flv',
+            # other
+            'html' => 'text/html; charset=utf-8',
+            'json' => 'text/json; charset=utf-8',
             'js'   => 'application/javascript',
             'txt' => 'text/plain',
             'pdf' => 'application/pdf',
@@ -753,23 +754,14 @@ package HTTP::BS::Server::Util {
             'm3u8' => 'application/x-mpegURL',
             'm3u8_v' => 'application/x-mpegURL',
             'wasm'  => 'application/wasm',
-            'css' => 'text/css');
-
-
+            'css' => 'text/css',
+            'bin' => 'application/octet-stream'
+        );
 
         my ($ext) = $filename =~ /\.([^.]+)$/;
 
-        my %combined = (%audioexts, %videoexts, %otherexts);
-        return $combined{$ext} if defined($combined{$ext});
-
-        say "getMIME (BLOCKING)";
-        # we shouldn't need a process to determine the mime type ...
-        if(open(my $filecmd, '-|', 'file', '-b', '--mime-type', $filename)) {
-            my $mime = <$filecmd>;
-            chomp $mime;
-            return $mime;
-        }
-        return 'text/plain';
+        # default to binary
+        return $combined{$ext} // $combined{'bin'};
     }
     1;
 }
@@ -2620,143 +2612,95 @@ package MusicLibrary {
         return pack('U', $codepoint);
     }
 
-    sub get_codepoint {
+    sub surrogatecodepointpairtochar {
+        my ($hi, $low) = @_;
+        my $codepoint = 0x10000 + ($hi - 0xD800) * 0x400 + ($low - 0xDC00);
+        return pack('U', $codepoint);
+    }
+
+    # returns the byte length and the codepoint
+    sub peek_utf8_codepoint {
         my ($octets) = @_;
-        my $codepoint;
-        my $state = 0;
-        my $maxstate;
-        my $torestore;
-        my $mincodepoint;
-        my $maxcodepoint;
-        while(length($$octets)) {
-            my $char = substr($$octets, 0, 1, '');
-            my $oct = ord($char);
-            if($state == 0) {
-                if($oct & 0x80) {
-                    return $oct;
-                }
-                if(($oct & 0xE0) == 0xC0) {
-                    say "len 2";
-                    $maxstate = 1;
-                    $codepoint = ($oct & 0x1F) << 6;
+        my @rules = (
+            [0xE0, 0xC0, 2], # 2 byte sequence
+            [0xF0, 0xE0, 3], # 3 byte sequence
+            [0XF8, 0xF0, 4]  # 4 byte sequence
+        );
 
-                    $mincodepoint = 0x80;
-                    $maxcodepoint = 0x7FF;
-                }
-                elsif(($oct & 0xF0) == 0xE0) {
-                    say "len 3";
-                    $maxstate = 2;
-                    $codepoint = ($oct & 0x0F) << 12;
-
-                    $mincodepoint = 0x800;
-                    $maxcodepoint = 0xFFFF;
-                }
-                elsif(($oct & 0xF8) == 0xF0) {
-                    say "len 4";
-                    $maxstate = 3;
-                    $codepoint = ($oct & 0x07) << 18;
-                    $mincodepoint = 0x10000;
-                    $maxcodepoint = 0x10FFFF;
-                }
-                else {
-                    # invalid lead character, replacement character
-                    return 0xFFFD;
-                }
+        length($$octets) >= 1 or return undef;
+        my $byte = substr($$octets, 0, 1);
+        my $byteval = ord($byte);
+        my $charlen = 1;
+        foreach my $rule (@rules) {
+            if(($byteval & $rule->[0]) == $rule->[1]) {
+                $charlen = $rule->[2];
+                last;
             }
-            else {
-                $torestore .= $char;
-                if(($oct & 0xC0) != 0x80) {
-                    # invalid value in sequence
-                    $$octets = $torestore . $$octets;
-                    return 0xFFFD;
-                }
-                my $newshift = ($maxstate - $state)*6;
-                $codepoint |= ($oct & 0x3F) << $newshift;
-                if($state == $maxstate) {
-                    # todo check for overlong
-                    return $codepoint;
-                }
-            }
-
-            $state++;
         }
-        if($state == 0) {
-            return undef;
+        length($octets) >= $charlen or return undef;
+        my $char = decode("utf8", substr($$octets, 0, $charlen));
+        if(length($char) > 1) {
+            return {'codepoint' => 0xFFFD, 'bytelength' => 1};
         }
-        # unexpected end of string, replacement character
-        else {
-            return 0xFFFD;
-        }
+        return { 'codepoint' => ord($char), 'bytelength' => $charlen};
     }
 
     sub get_printable_utf8 {
         my ($octets) = @_;
 
-        my $cp = ((0xF0 & 0x07) << 18) | ((0x9F & 0x3F) << 12) | ((0x8E & 0x3F) << 6) | (0x84 & 0x3F);
-        say "codepoint $cp";
-
-        my @tests = (
-            #(chr(1 << 7) . chr(1 << 7)),
-            #chr(0xED).chr(0xA0).chr(0xBC),
-            #chr(0xED).chr(0xA0).chr(0xBC) . chr(1 << 7) . chr(1 << 7),
-            #chr(0xED).chr(0xED).chr(0xED),
-            chr(0xF0).chr(0xBF).chr(0xBF).chr(0xBF),
-            chr(0xED).chr(0xA0),
-            chr(0xF0).chr(0x9F).chr(0x8E).chr(0x84),
-            chr(0xF0).chr(0x9F).chr(0x8E),
-            chr(0xF0).chr(0x9F).chr(0x8E).chr(0x60)
-        );
-
-        foreach my $test (@tests) {
-            my $unsafedec = decode("utf8", $test, Encode::LEAVE_SRC);
-            my $safedec = decode('UTF-8', $test);
-            say "udec $unsafedec len ".length($unsafedec)." sdec $safedec len ".length($safedec);
-        }
-        die;
-
-        my $replaceunprint;
+        #my $cp = ((0xF0 & 0x07) << 18) | ((0x9F & 0x3F) << 12) | ((0x8E & 0x3F) << 6) | (0x84 & 0x3F);
+        #say "codepoint $cp";
+#
+        #my @tests = (
+        ##    #(chr(1 << 7) . chr(1 << 7)),
+        ##    #chr(0xED).chr(0xA0).chr(0xBC),
+        ##    #chr(0xED).chr(0xA0).chr(0xBC) . chr(1 << 7) . chr(1 << 7),
+        ##    #chr(0xED).chr(0xED).chr(0xED),
+        ##    chr(0xF0).chr(0xBF).chr(0xBF).chr(0xBF),
+        ##    chr(0xED).chr(0xA0),
+        ##    chr(0xF0).chr(0x9F).chr(0x8E).chr(0x84),
+        ##    chr(0xF0).chr(0x9F).chr(0x8E),
+        #    chr(0xF0).chr(0x9F).chr(0x8E).chr(0x84),
+        #    chr(0xF0).chr(0x9F).chr(0x8E).chr(0x04),
+        #    chr(0x7F),
+        #    chr(0xC1).chr(0x80),
+        #    chr(0xC2).chr(0x80)
+        #);
+##
+        #foreach my $test (@tests) {
+        #    my $unsafedec = decode("utf8", $test, Encode::LEAVE_SRC);
+        #    my $safedec = decode('UTF-8', $test);
+        #    say "udec $unsafedec len ".length($unsafedec)." sdec $safedec len ".length($safedec);
+        #    say "udec codepoint ".ord($unsafedec)." sdec codepoint " . ord($safedec);
+        #}
+        #die;
 
         my $res;
-
         while(length($octets)) {
             $res .= decode('UTF-8', $octets, Encode::FB_QUIET);
             last if(!length($octets));
 
-            my $firstocts = substr($octets, 0, 3, '');
+            # by default replace with the replacement char
+            my $chardata = peek_utf8_codepoint(\$octets);
+            my $toappend = chr(0xFFFD);
+            my $toremove = $chardata->{'bytelength'};
 
-            my $surrogate = decode("utf8", $firstocts, Encode::LEAVE_SRC);
-
-            if($surrogate !~ /^[\x{D800}-\x{DBFF}]$/) {
-                say "no surrogate";
-                $replaceunprint = 1;
-                $res .= $firstocts;
-                next;
+            # if we find a surrogate pair, make the actual codepoint
+            if(($chardata->{'bytelength'} == 3) && ($chardata->{'codepoint'}  >= 0xD800) && ($chardata->{'codepoint'} <= 0xDBFF)) {
+                my $secondchar = peek_utf8_codepoint(\substr($octets, 3, 3));
+                if($secondchar && ($secondchar->{'bytelength'} == 3) && ($secondchar->{'codepoint'}  >= 0xDC00) && ($secondchar->{'codepoint'} <= 0xDFFF)) {
+                    $toappend = surrogatecodepointpairtochar($chardata->{'codepoint'}, $secondchar->{'codepoint'});
+                    $toremove += 3;
+                }
             }
 
-            my $secondocts = substr($octets, 0, 3, '');
-            my $secondsurrogate = decode("utf8", $secondocts, Encode::LEAVE_SRC);
-            if($secondsurrogate !~ /^[\x{DC00}-\x{DFFF}]$/) {
-                say "no surrogate pair end";
-                $replaceunprint = 1;
-                $res .= $firstocts;
-                $octets = $secondocts . $octets;
-                next;
-            }
-            my $spc = surrogatepairtochar($surrogate, $secondsurrogate);
-            say "spc $spc";
-            $res .= $spc;
-        }
-
-        if($replaceunprint) {
-            say "replaceunprint, before: $res";
-            Encode::_utf8_off($res);
-            $res = decode('UTF-8', $res, Encode::LEAVE_SRC);
-            say "replaceunprint, after: $res";
+            $res .= $toappend;
+            substr($octets, 0, $toremove, '');
+            say "unicode fixup";
         }
 
         return $res;
     }
-
 
     # read the directory tree from desk and store
     # this assumes filenames are UTF-8ish, the octlets will be the actual filename, but the printable filename is created by decoding it as UTF-8
@@ -2767,29 +2711,25 @@ package MusicLibrary {
         my $basepath = basename($path);
 
         # determine the UTF-8 name of the file
-        my $utf8name;
-        {
-        local $@;
-        eval {
-            # Fast path, is strict UTF-8
-            $utf8name = decode('UTF-8', $basepath, Encode::FB_CROAK | Encode::LEAVE_SRC);
-            1;
-        };
-        }
-        if(! $utf8name) {
-            say "MusicLibrary: BuildLibrary slow path decode - " . decode('UTF-8', $basepath);
-            my $loose = decode("utf8", $basepath);
-            $loose =~ s/([\x{D800}-\x{DBFF}])([\x{DC00}-\x{DFFF}])/surrogatepairtochar($1, $2)/ueg; #uncode, expression replacement, global
-            Encode::_utf8_off($loose);
-            $utf8name = decode('UTF-8', $loose);
-            say "MusicLibrary: BuildLibrary slow path decode changed to : $utf8name";
-        }
-        #my $utf8name = get_printable_utf8($basepath);
-
-        #if($path =~ /Trucks.+07/) {
-        #    say "time to die";
-        #    die;
+        #my $utf8name;
+        #{
+        #local $@;
+        #eval {
+        #    # Fast path, is strict UTF-8
+        #    $utf8name = decode('UTF-8', $basepath, Encode::FB_CROAK | Encode::LEAVE_SRC);
+        #    1;
+        #};
         #}
+        #if(! $utf8name) {
+        #    say "MusicLibrary: BuildLibrary slow path decode - " . decode('UTF-8', $basepath);
+        #    my $loose = decode("utf8", $basepath);
+        #    $loose =~ s/([\x{D800}-\x{DBFF}])([\x{DC00}-\x{DFFF}])/surrogatepairtochar($1, $2)/ueg; #uncode, expression replacement, global
+        #    Encode::_utf8_off($loose);
+        #    $utf8name = decode('UTF-8', $loose);
+        #    say "MusicLibrary: BuildLibrary slow path decode changed to : $utf8name";
+        #}
+        my $utf8name = get_printable_utf8($basepath);
+
         if(!S_ISDIR($statinfo->mode)){
         return undef if($path !~ /\.(flac|mp3|m4a|wav|ogg|webm)$/);
             return [$basepath, $statinfo->size, undef, $utf8name];
@@ -7541,10 +7481,6 @@ M3U8END
     }
     return \$m3u8;
 }
-
-
-
-
 
 }
 1;
