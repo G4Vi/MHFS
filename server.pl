@@ -741,7 +741,7 @@ package HTTP::BS::Server::Util {
             'flv'  => 'video/x-flv',
             # other
             'html' => 'text/html; charset=utf-8',
-            'json' => 'text/json; charset=utf-8',
+            'json' => 'application/json',
             'js'   => 'application/javascript',
             'txt' => 'text/plain',
             'pdf' => 'application/pdf',
@@ -785,6 +785,12 @@ package HTTP::BS::Server::Client::Request {
     use constant {
         MAX_REQUEST_SIZE => 8192,
     };
+    BEGIN {
+        if( ! (eval "use JSON; 1")) {
+            eval "use JSON::PP; 1" or die "No implementation of JSON available, see doc/dependencies.txt";
+            warn "Using PurePerl version of JSON (JSON::PP), see doc/dependencies.txt about installing faster version";
+        }
+    }
 
     sub new {
         my ($class, $client) = @_;
@@ -840,7 +846,7 @@ package HTTP::BS::Server::Client::Request {
                 $pathStruct{'unsafepath'} = $path;
 
                 ## Querystring
-                my %qsStruct = ( 'querystring' => $querystring);
+                my %qsStruct;
                 my @qsPairs = split('&', $querystring);
                 foreach my $pair (@qsPairs) {
                     my($key, $value) = split('=', $pair);
@@ -943,15 +949,41 @@ package HTTP::BS::Server::Client::Request {
         return $dl;
     }
 
+    sub _SendResponse {
+        my ($self, $fileitem) = @_;
+        if(Encode::is_utf8($fileitem->{'buf'})) {
+            warn "_SendResponse: UTF8 flag is set, turning off";
+            Encode::_utf8_off($fileitem->{'buf'});
+        }
+        if($self->{'outheaders'}{'Transfer-Encoding'} && ($self->{'outheaders'}{'Transfer-Encoding'} eq 'chunked')) {
+            say "chunked response";
+            $fileitem->{'is_chunked'} = 1;
+        }
+
+        $self->{'response'} = $fileitem;
+        $self->{'client'}->SetEvents(POLLOUT | $EventLoop::Poll::ALWAYSMASK );
+    }
+
     sub _SendDataItem {
         my ($self, $dataitem, $opt) = @_;
         my $size  = $opt->{'size'};
-        my $start =  $self->{'header'}{'_RangeStart'};
-        my $end =  $self->{'header'}{'_RangeEnd'};
-        my $isrange = defined $start;
-        my $code;
+        my $code = $opt->{'code'};
+
+        if(! $code) {
+            # if start is defined it's a range request
+            if(defined $self->{'header'}{'_RangeStart'}) {
+                $code = 206;
+            }
+            else {
+                $code = 200;
+            }
+        }
+
         my $contentlength;
-        if($isrange) {
+        # range request
+        if($code == 206) {
+            my $start =  $self->{'header'}{'_RangeStart'};
+            my $end =  $self->{'header'}{'_RangeEnd'};
             if(defined $end) {
                 $contentlength = $end - $start + 1;
             }
@@ -977,15 +1009,14 @@ package HTTP::BS::Server::Client::Request {
                 $self->Send403();
                 return;
             }
-            $code = 206;
             $self->{'outheaders'}{'Content-Range'} = "bytes $start-$end/" . ($size // '*');
         }
+        # everybody else
         else {
-            $code = 200;
             $contentlength = $size;
         }
 
-        # if the CL isn't known we need to sent chunked
+        # if the CL isn't known we need to send chunked
         if(! defined $contentlength) {
             $self->{'outheaders'}{'Transfer-Encoding'} = 'chunked';
         }
@@ -1003,6 +1034,7 @@ package HTTP::BS::Server::Client::Request {
             403 => "HTTP/1.1 403 Forbidden\r\n",
             404 => "HTTP/1.1 404 File Not Found\r\n",
             416 => "HTTP/1.1 416 Range Not Satisfiable\r\n",
+            503 => "HTTP/1.1 503 Service Unavailable\r\n"
         );
 
         my $headtext = $lookup{$code};
@@ -1034,107 +1066,74 @@ package HTTP::BS::Server::Client::Request {
         $self->_SendResponse($dataitem);
     }
 
-    sub _SendResponse {
-        my ($self, $fileitem) = @_;
-        if(Encode::is_utf8($fileitem->{'buf'})) {
-            warn "_SendResponse: UTF8 flag is set, turning off";
-            Encode::_utf8_off($fileitem->{'buf'});
-        }
-        if($self->{'outheaders'}{'Transfer-Encoding'} && ($self->{'outheaders'}{'Transfer-Encoding'} eq 'chunked')) {
-            say "chunked response";
-            $fileitem->{'is_chunked'} = 1;
-        }
-
-
-        $self->{'response'} = $fileitem;
-        $self->{'client'}->SetEvents(POLLOUT | $EventLoop::Poll::ALWAYSMASK );
-    }
-
     sub Send403 {
         my ($self) = @_;
-        my $client = $self->{'client'};
-        my $data = "HTTP/1.1 403 Forbidden\r\n";
-        my $mime = getMIME('.html');
-        $data .= "Content-Type: $mime\r\n";
-        if($self->{'header'}{'Connection'} && ($self->{'header'}{'Connection'} eq 'close')) {
-            $data .= "Connection: close\r\n";
-            $self->{'outheaders'}{'Connection'} = 'close';
-        }
         my $msg = "403 Forbidden\r\n";
-        $data .= "Content-Length: " . length($msg) . "\r\n";
-        $data .= "\r\n";
-        $data .= $msg;
-        my %fileitem = ( buf => $data);
-        $self->_SendResponse(\%fileitem);
+        $self->SendHTML($msg, {'code' => 403});
     }
 
     sub Send404 {
         my ($self) = @_;
-        my $client = $self->{'client'};
-        my $data = "HTTP/1.1 404 File Not Found\r\n";
-        my $mime = getMIME('.html');
-        $data .= "Content-Type: $mime\r\n";
-        if($self->{'header'}{'Connection'} && ($self->{'header'}{'Connection'} eq 'close')) {
-            $data .= "Connection: close\r\n";
-            $self->{'outheaders'}{'Connection'} = 'close';
-        }
-        my $msg = "404 Not Found\r\n";
-        $data .= "Content-Length: " . length($msg) . "\r\n";
-        $data .= "\r\n";
-        $data .= $msg;
-        my %fileitem = ( buf => $data);
-        $self->_SendResponse(\%fileitem);
-    }
-
-    sub Send503 {
-        my ($self) = @_;
-        my $client = $self->{'client'};
-        my $data = "HTTP/1.1 503 Service Unavailable\r\n";
-        my $mime = getMIME('.html');
-        $data .= "Content-Type: $mime\r\n";
-        $data .= "Retry-After: 5\r\n";
-        if($self->{'header'}{'Connection'} && ($self->{'header'}{'Connection'} eq 'close')) {
-            $data .= "Connection: close\r\n";
-            $self->{'outheaders'}{'Connection'} = 'close';
-        }
-        my $msg = "503 Service Unavailable\r\n";
-        $data .= "Content-Length: " . length($msg) . "\r\n";
-        $data .= "\r\n";
-        $data .= $msg;
-        my %fileitem = ( buf => $data);
-        $self->_SendResponse(\%fileitem);
-    }
-
-    sub Send301 {
-        my ($self, $url) = @_;
-        my $buf = "HTTP/1.1 301 Moved Permanently\r\nLocation: $url\r\n";
-        my $msg = "301 Moved Permanently\r\n<a href=\"$url\"></a>\r\n";
-        $buf .= "Content-Length: " . length($msg) . "\r\n";
-        $buf .= "\r\n";
-        $buf .= $msg;
-        my %fileitem = ('buf' => $buf);
-        $self->_SendResponse(\%fileitem);
-    }
-
-    sub Send307 {
-        my ($self, $url) = @_;
-        my $buf = "HTTP/1.1 307 Temporary Redirect\r\nLocation: $url\r\n";
-        my $msg = "307 Temporary Redirect\r\n<a href=\"$url\"></a>\r\n";
-        $buf .= "Content-Length: " . length($msg) . "\r\n";
-        $buf .= "\r\n";
-        $buf .= $msg;
-        my %fileitem = ('buf' => $buf);
-        $self->_SendResponse(\%fileitem);
+        my $msg = "404 Not Found";
+        $self->SendHTML($msg, {'code' => 404});
     }
 
     sub Send416 {
         my ($self, $cursize) = @_;
-        my $buf = "HTTP/1.1 416 Range Not Satisfiable\r\n";
-        $buf .= "Content-Range: */$cursize\r\n";
-        $buf .= "Content-Length: 0\r\n";
-        $buf .= "\r\n";
-        my %fileitem = ('buf' => $buf);
-        $self->_SendResponse(\%fileitem);
+        $self->{'outheaders'}{'Content-Range'} = "*/$cursize";
+        $self->SendHTML('', {'code' => 416});
+    }
+
+    sub Send503 {
+        my ($self) = @_;
+        $self->{'outheaders'}{'Retry-After'} = 5;
+        my $msg = "503 Service Unavailable";
+        $self->SendHTML($msg, {'code' => 503});
+    }
+
+    # requires already encoded url
+    sub SendRedirectRawURL {
+        my ($self, $code, $url) = @_;
+
+        $self->{'outheaders'}{'Location'} = $url;
+        my $msg = "UNKNOWN REDIRECT MSG";
+        if($code == 301) {
+            $msg = "301 Moved Permanently";
+        }
+        elsif($code == 307) {
+            $msg = "307 Temporary Redirect";
+        }
+        $msg .= "\r\n<a href=\"$url\"></a>\r\n";
+        $self->SendHTML($msg, {'code' => $code});
+    }
+
+    # encodes path and querystring
+    # path and query string keys and values must be bytes not unicode string
+    sub SendRedirect {
+        my ($self, $code, $path, $qs) = @_;
+        my $url;
+        # encode the path component
+        while(length($path)) {
+            my $slash = index($path, '/');
+            my $len = ($slash != -1) ? $slash : length($path);
+            my $pathcomponent = substr($path, 0, $len, '');
+            $url .= uri_escape($pathcomponent);
+            if($slash != -1) {
+                substr($path, 0, 1, '');
+                $url .= '/';
+            }
+        }
+        # encode the querystring
+        if($qs) {
+            $url .= '?';
+            foreach my $key (keys %{$qs}) {
+                $url .= uri_escape($key).'='.uri_escape($qs->{$key}) . '&';
+            }
+            chop $url;
+        }
+
+        @_ = ($self, $code, $url);
+        goto &SendRedirectRawURL;
     }
 
     sub SendLocalFile {
@@ -1332,30 +1331,54 @@ package HTTP::BS::Server::Client::Request {
         return 1;
     }
 
-    sub SendLocalBuf {
-        my ($self, $buf, $mime, $options) = @_;
-
-        # TODO less copying
+    # buf is a bytes scalar
+    sub SendBytes {
+        my ($self, $mime, $buf, $options) = @_;
 
         # we want to sent in increments of bytes not characters
         if(Encode::is_utf8($buf)) {
-            warn "SendLocalBuf: UTF8 flag is set, turning off";
+            warn "SendBytes: UTF8 flag is set, turning off";
             Encode::_utf8_off($buf);
         }
 
         my $bytesize = length($buf);
 
-        my $start =  $self->{'header'}{'_RangeStart'} // 0;
-        my $end   =  $self->{'header'}{'_RangeEnd'}  // $bytesize-1;
-        $buf      =  substr($buf, $start, ($end-$start) + 1);
+        # only truncate buf if responding to a range request
+        if((!$options->{'code'}) || ($options->{'code'} == 206)) {
+            my $start =  $self->{'header'}{'_RangeStart'} // 0;
+            my $end   =  $self->{'header'}{'_RangeEnd'}  // $bytesize-1;
+            $buf      =  substr($buf, $start, ($end-$start) + 1);
+        }
 
         my %fileitem;
         $fileitem{'localbuf'} = $buf;
         $self->_SendDataItem(\%fileitem, {
            'size'     => $bytesize,
            'mime'     => $mime,
-           'filename' => $options->{'filename'}
+           'filename' => $options->{'filename'},
+           'code'     => $options->{'code'}
         });
+    }
+
+    # expects unicode string (not bytes)
+    sub SendText {
+        my ($self, $mime, $buf, $options) = @_;
+        @_ = ($self, $mime, encode('UTF-8', $buf), $options);
+        goto &SendBytes;
+    }
+
+    # expects unicode string (not bytes)
+    sub SendHTML {
+        my ($self, $buf, $options) = @_;;
+        @_ = ($self, 'text/html; charset=utf-8', encode('UTF-8', $buf), $options);
+        goto &SendBytes;
+    }
+
+    # expects perl data structure
+    sub SendAsJSON {
+        my ($self, $obj, $options) = @_;
+        @_ = ($self, 'application/json', encode_json($obj), $options);
+        goto &SendBytes;
     }
 
     sub SendCallback {
@@ -1440,12 +1463,12 @@ package HTTP::BS::Server::Client::Request {
                    $buf .= '<a href="' . $url .'">'.${escape_html_noquote(decode('UTF-8', $filename, Encode::LEAVE_SRC))} .'</a><br><br>';
                 }
                 closedir($dh);
-                $self->SendLocalBuf($buf, 'text/html; charset=utf-8');
+                $self->SendHTML($buf);
                 return;
             }
             # redirect to slash path
             else {
-                $self->Send301(basename($requestfile).'/');
+                $self->SendRedirect(301, basename($requestfile).'/');
                 return;
             }
         }
@@ -2486,7 +2509,7 @@ package GDRIVE {
         if(defined($gdrivefile) && looks_like_number($gdrivefile) && ($gdrivefile == 0)) {
             $handled = 1;
             my $url = read_file($tmpfile . '_gdrive');
-            $request->Send307($url);
+            $request->SendRedirectRawURL(307, $url);
         }
 
         my @togdrive;
@@ -2508,7 +2531,7 @@ package GDRIVE {
                 }
                 say "gdrivefile found";
                 my $url = read_file($gdrivefile);
-                $request->Send307($url);
+                $request->SendRedirectRawURL(307, $url);
                 return undef;
             });
         }
@@ -2838,6 +2861,7 @@ package MusicLibrary {
             }
             push @{$node->{'files'}}, $newnode;
         }
+        # encode json outputs bytes NOT unicode string
         return encode_json($head);
     }
 
@@ -2894,25 +2918,23 @@ package MusicLibrary {
 
         # route
         if($fmt eq 'worklet') {
-            return $request->Send307('static/music_worklet_inprogress/');
+            return $request->SendRedirectRawURL(307, 'static/music_worklet_inprogress/');
         }
         elsif($fmt eq 'musicdbjson') {
-            return $request->SendLocalBuf($self->{'musicdbjson'}, "application/json");
-            return 1;
+            return $request->SendBytes('application/json', $self->{'musicdbjson'});
         }
         elsif($fmt eq 'musicdbhtml') {
-            return $request->SendLocalBuf($self->{'musicdbhtml'}, "text/html; charset=utf-8");
-            return 1;
+            return $request->SendBytes("text/html; charset=utf-8", $self->{'musicdbhtml'});
         }
         elsif($fmt eq 'gapless') {
-            return $request->SendLocalBuf($self->{'html_gapless'}, "text/html; charset=utf-8");
+            return $request->SendBytes("text/html; charset=utf-8", $self->{'html_gapless'});
         }
         elsif($fmt eq 'musicinc') {
-            return $request->Send307('static/music_inc/');
+            return $request->SendRedirectRawURL(307, 'static/music_inc/');
         }
         elsif($fmt eq 'legacy') {
             say "MusicLibrary: legacy";
-            return $request->SendLocalBuf($self->{'html'}, "text/html; charset=utf-8");
+            return $request->SendBytes("text/html; charset=utf-8", $self->{'html'});
         }
         else {
             return $request->Send404;
@@ -2950,7 +2972,7 @@ package MusicLibrary {
                 my $spos = $samples_per_seg * ($request->{'qs'}{'part'} - 1);
                 my $samples_left = $TRACKINFO{$tosend}{'TOTALSAMPLES'} - $spos;
                 my $res = MHFS::XS::get_flac($pv, $spos, $samples_per_seg < $samples_left ? $samples_per_seg : $samples_left);
-                $request->SendLocalBuf($res, 'audio/flac');
+                $request->SendBytes('audio/flac', $res);
                 return;
             }
         }
@@ -3333,7 +3355,7 @@ package MusicLibrary {
                 my ($key, $value) = split('=', $comment);
                 $commenthash->{$key} = $value;
             }
-            $request->SendLocalBuf(encode('UTF-8', encode_json($commenthash), Encode::FB_CROAK), "text/json; charset=utf-8");
+            $request->SendAsJSON($commenthash);
             return 1;
         }
         say "SendFromLibrary: did not find in library, 404ing";
@@ -3551,7 +3573,7 @@ package Youtube {
             vidlist.innerHTML = event.state;
         }
         </script>';
-        $request->SendLocalBuf(encode('UTF-8', $html, Encode::FB_CROAK), "text/html; charset=utf-8");
+        $request->SendHTML($html);
     }
 
     sub onYoutube {
@@ -3577,7 +3599,7 @@ package Youtube {
                 undef $tprocess;
                 $request->{'qs'}{'fmt'} //= 'html';
                 if($request->{'qs'}{'fmt'} eq 'json'){
-                    $request->SendLocalBuf($tosend, "text/json; charset=utf-8");
+                    $request->SendBytes('application/json', $tosend);
                 }
                 else {
                     $self->sendAsHTML($request, $tosend);
@@ -3690,11 +3712,11 @@ package Youtube {
             my ($request) = @_;
             my $html = $self->searchbox($request);
             $html .= $self->ytplayer($request);
-            $request->SendLocalBuf($html, "text/html; charset=utf-8");
+            $request->SendHTML($html);
         }],
         ['/ytembedplayer', sub {
             my ($request) = @_;
-            $request->SendLocalBuf($self->ytplayer($request), "text/html; charset=utf-8");
+            $request->SendHTML($self->ytplayer($request));
         }],
         ];
 
@@ -4183,7 +4205,7 @@ my @routes = (
     [
         '/debug', sub {
             my ($request) = @_;
-            $request->SendLocalBuf("Trucks Passing Trucks - - x m a s \x{2744} 2 \x{5343} 17 - - - x m a s \x{2744} 2 \x{5343} 19 - - 01 t h i s \x{1f384} x m a s.flac", 'text/html; charset=utf-8');
+            $request->SendHTML("Trucks Passing Trucks - - x m a s \x{2744} 2 \x{5343} 17 - - - x m a s \x{2744} 2 \x{5343} 19 - - 01 t h i s \x{1f384} x m a s.flac");
         }
     ],
     sub {
@@ -4222,7 +4244,7 @@ my @routes = (
             else {
                 # redirect to slash path
                 my $bn = basename($requestfile);
-                $request->Send301($bn.'/');
+                $request->SendRedirect(301, $bn.'/');
             }
         }
         else {
@@ -4281,7 +4303,7 @@ sub fmp4 {
             my $obj = {
                 'duration' => $matroska->{'duration'}
             };
-            $request->SendLocalBuf(encode('UTF-8', encode_json($obj), Encode::FB_CROAK), "text/json; charset=utf-8");
+            $request->SendAsJSON($obj);
         }
         else {
             my $track = matroska_get_video_track($matroska);
@@ -4294,7 +4316,7 @@ sub fmp4 {
                 $request->Send404;
                 return;
             }
-            $request->SendLocalBuf(encode('UTF-8', encode_json($gopinfo), Encode::FB_CROAK), "text/json; charset=utf-8");
+            $request->SendAsJSON($gopinfo);
         }
         return;
     }
@@ -4430,7 +4452,7 @@ sub hls_ts {
     $request->{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
     HTTP::BS::Server::Process->new_output_process($evp, \@command, sub {
         my ($output, $error) = @_;
-        $request->SendLocalBuf($output, 'video/mp2t');
+        $request->SendBytes('video/mp2t', $output);
     });
 }
 
@@ -4449,7 +4471,7 @@ sub hls_master_m3u8 {
 video.m3u8
 '   ;
     $request->{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
-    $request->SendLocalBuf($m3u8, 'application/x-mpegURL');
+    $request->SendText('application/x-mpegURL', $m3u8);
 }
 
 sub hls_audio_get_id3 {
@@ -4625,7 +4647,7 @@ sub hls_audio_process {
             if($segment) {
                 $weaksesh->{'decoded'} += $expected;
                 $weaksesh->{'request'}{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
-                $weaksesh->{'request'}->SendLocalBuf($segment->{'data'}, $segment->{'mime'});
+                $weaksesh->{'request'}->SendBytes($segment->{'mime'}, $segment->{'data'});
                 $weaksesh->{'process'}->stopSTDOUT();
                 $weaksesh->{'request'} = undef;
                 $weaksesh->{'segnum'}++;
@@ -4681,7 +4703,7 @@ sub hls_audio_noconv {
         }
 
         $request->{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
-        $request->SendLocalBuf(hls_audio_get_id3($seginfo->{'stime'}).$data, 'audio/aac');
+        $request->SendBytes('audio/aac', hls_audio_get_id3($seginfo->{'stime'}).$data);
     }
     else {
         $request->Send404;
@@ -4832,7 +4854,7 @@ sub hls_audio_m3u8 {
     }
     $m3u8 .= "#EXT-X-ENDLIST\n";
     $sesh->{'lastindex'} = ($seg-1) if($sesh);
-    $request->SendLocalBuf($m3u8, 'application/x-mpegURL');
+    $request->SendText('application/x-mpegURL', $m3u8);
 }
 
 sub hls_m3u8 {
@@ -4888,7 +4910,7 @@ sub hls_m3u8 {
     }
     $m3u8 .= "#EXT-X-ENDLIST\n";
     $request->{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
-    $request->SendLocalBuf($m3u8, 'application/x-mpegURL');
+    $request->SendText('application/x-mpegURL', $m3u8);
 }
 
 # format tv library for kodi http
@@ -4990,7 +5012,7 @@ sub kodi_tv {
 
     # redirect if the slash wasn't there
     if(index($request->{'path'}{'unescapepath'}, '/', length($request->{'path'}{'unescapepath'})-1) == -1) {
-        $request->Send301(substr($request->{'path'}{'unescapepath'}, rindex($request->{'path'}{'unescapepath'}, '/')+1).'/');
+        $request->SendRedirect(301, substr($request->{'path'}{'unescapepath'}, rindex($request->{'path'}{'unescapepath'}, '/')+1).'/');
         return;
     }
 
@@ -5002,7 +5024,7 @@ sub kodi_tv {
         $url .= '/' if($show->{'isdir'});
         $buf .= '<a href="' . $url .'">'.${escape_html_noquote(decode('UTF-8', $showname, Encode::LEAVE_SRC))} .'</a><br><br>';
     }
-    $request->SendLocalBuf($buf, 'text/html; charset=utf-8');
+    $request->SendHTML($buf);
 }
 
 # format movies library for kodi http
@@ -5125,7 +5147,7 @@ sub kodi_movies {
 
     # redirect if the slash wasn't there
     if(index($request->{'path'}{'unescapepath'}, '/', length($request->{'path'}{'unescapepath'})-1) == -1) {
-        $request->Send301(substr($request->{'path'}{'unescapepath'}, rindex($request->{'path'}{'unescapepath'}, '/')+1).'/');
+        $request->SendRedirect(301, substr($request->{'path'}{'unescapepath'}, rindex($request->{'path'}{'unescapepath'}, '/')+1).'/');
         return;
     }
 
@@ -5137,7 +5159,7 @@ sub kodi_movies {
         $url .= '/' if($show->{'isdir'});
         $buf .= '<a href="' . $url .'">'. ${escape_html_noquote(decode('UTF-8', $showname, Encode::LEAVE_SRC))} .'</a><br><br>';
     }
-    $request->SendLocalBuf($buf, 'text/html; charset=utf-8');
+    $request->SendHTML($buf);
 }
 
 # really acquire media file (with search) and convert
@@ -5154,11 +5176,8 @@ sub get_video {
             say "useragent: " . $header->{'User-Agent'};
             # VLC 2 doesn't handle redirects? VLC 3 does
             if($header->{'User-Agent'} !~ /^VLC\/2\.\d+\.\d+\s/) {
-                my $url = 'get_video?' . $qs->{'querystring'};
-                my $qname = uri_escape($video{'src_file'}{'fullname'});
-                $url =~ s/name=[^&]+/name=$qname/;
-                say "url: $url";
-                $request->Send301($url);
+                $qs->{'name'} = $video{'src_file'}{'fullname'};
+                $request->SendRedirect(301, 'get_video', $qs);
                 return 1;
             }
         }
@@ -5186,7 +5205,7 @@ sub get_video {
             my $m3u8 = video_get_m3u8(\%video,  $absurl . $request->{'path'}{'unsafepath'} . '?name=');
             #$request->{'outheaders'}{'Icy-Name'} = $video{'fullname'};
             $video{'src_file'}{'ext'} = $video{'src_file'}{'ext'} ? '.'. $video{'src_file'}{'ext'} : '';
-            $request->SendLocalBuf($$m3u8, 'application/x-mpegURL', {'filename' => $video{'src_file'}{'name'} . $video{'src_file'}{'ext'} . '.m3u8'});
+            $request->SendText('application/x-mpegURL', $$m3u8, {'filename' => $video{'src_file'}{'name'} . $video{'src_file'}{'ext'} . '.m3u8'});
             return 1;
         }
         # virtual mkv
@@ -6628,7 +6647,7 @@ sub video_matroska {
     }
     $$ebml_serialized .= $$serializedclusters;
 
-    $request->SendLocalBuf($$ebml_serialized, 'video/x-matroska', {'filename' => $video->{'out_base'} .'.mhfs.mkv'});
+    $request->SendBytes('video/x-matroska', $$ebml_serialized, {'filename' => $video->{'out_base'} .'.mhfs.mkv'});
 }
 
 sub video_get_format {
@@ -7124,7 +7143,7 @@ sub torrent_on_contents {
             if(! defined $_[0]) { $request->Send404; return;}
 
             say 'downloading ' . $asciihash;
-            $request->Send301('torrent?infohash=' . $asciihash);
+            $request->SendRedirectRawURL(301, 'torrent?infohash=' . $asciihash);
             })})})});
         }
         else {
@@ -7136,7 +7155,7 @@ sub torrent_on_contents {
             if(! defined $_[0]) { $request->Send404; return;}
 
             say 'downloading (existing) ' . $asciihash;
-            $request->Send301('torrent?infohash=' . $asciihash);
+            $request->SendRedirectRawURL(301, 'torrent?infohash=' . $asciihash);
             })});
         }
         })});
@@ -7179,7 +7198,7 @@ sub torrent {
         # Assume we are downloading, if the bytes don't match
         if($bytes_done < $size_bytes) {
             $buf   .= '<meta http-equiv="refresh" content="3">';
-            $request->SendLocalBuf($buf , 'text/html; charset=utf-8');
+            $request->SendHTML($buf);
         }
         else {
         # print out the files with usage options
@@ -7202,7 +7221,7 @@ sub torrent {
             $buf .= '</tbody';
             $buf .= '</table>';
 
-            $request->SendLocalBuf($buf , 'text/html; charset=utf-8');
+            $request->SendHTML($buf);
             });
         }
 
@@ -7259,7 +7278,7 @@ sub torrent {
                 }
             }
             $buf   .= '</tbody></table>';
-            $request->SendLocalBuf(encode('UTF-8', $buf, Encode::FB_CROAK), 'text/html; charset=utf-8');
+            $request->SendHTML($buf);
         });
     }
     else {
@@ -7347,8 +7366,7 @@ sub player_video_browsemovies {
         }
         $buf .= "</body>";
         $buf .= "</html>";
-        $request->SendLocalBuf(encode('UTF-8', $buf, Encode::FB_CROAK), "text/html; charset=utf-8");
-
+        $request->SendHTML($buf);
     });
 }
 
@@ -7401,7 +7419,7 @@ sub player_video {
     $buf .= '</script>';
     $buf .= "</body>";
     $buf .= "</html>";
-    $request->SendLocalBuf(encode('UTF-8', $buf, Encode::FB_CROAK), "text/html; charset=utf-8");
+    $request->SendHTML($buf);
 }
 
 sub video_library_html {
