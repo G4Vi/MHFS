@@ -1310,44 +1310,10 @@ package HTTP::BS::Server::Client::Request {
         return 1;
     }
 
-    # using curl would be better than netcat for https
-    # BROKEN
+    # ENOTIMPLEMENTED
     sub Proxy {
         my ($self, $proxy, $node) = @_;
-        my $requesttext = '';
-        my @lines = split('\r\n', $requesttext);
-        my @outlines = (shift @lines);
-        #$outlines[0] =~ s/^(GET|HEAD)\s+$webpath\/?/$1 \//;
-        push @outlines, (shift @lines);
-        my $host = $proxy->{'httphost'};
-        $outlines[1] =~ s/^(Host\:\s+[^\s]+)/Host\: $host/;
-        foreach my $line (@lines) {
-            next if($line =~ /^X\-Real\-IP/);
-            push @outlines, $line;
-        }
-        push @outlines, 'Connection: close';
-        my $newrequest = '';
-        foreach my $outline(@outlines) {
-            $newrequest .= $outline . "\r\n";
-        }
-        say "Making request via proxy:";
-        $newrequest .= "\r\n";
-        $self->{'process'} = HTTP::BS::Server::Process->new(['nc', $host, $proxy->{'httpport'}], $self->{'client'}{'server'}{'evp'},
-        {'STDIN' => sub {
-            my ($in) = @_;
-            say "proxy sending request";
-            print $in $newrequest; #this could block, but probably wont
-            return 0;
-        },
-        'STDOUT' => sub {
-            my($out) = @_;
-            say "proxy sending response";
-            my %fileitem = ('fh' => $out);
-            $self->_SendResponse(\%fileitem);
-            return 0;
-        }
-        });
-
+        die;
         return 1;
     }
 
@@ -1429,15 +1395,14 @@ package HTTP::BS::Server::Client::Request {
                     'STDOUT' => sub {
                         my($out) = @_;
                         say "tar sending response";
-                        my $header = "HTTP/1.1 200 OK\r\n";
-                        $header .= "Accept-Ranges: none\r\n";
-                        $header .= "Content-Length: $size\r\n";
-                        $header .= "Content-Type: application/x-tar\r\n";
-                        $header .= "Connection: keep-alive\r\n";
-                        $header .= 'Content-Disposition: inline; filename="' . basename($requestfile) . ".tar\"\r\n";
-                        $header .= "\r\n";
-                        my %fileitem = ('fh' => $out, 'buf' => $header, 'get_current_length' => sub { return undef });
-                        $self->_SendResponse(\%fileitem);
+                        $self->{'outheaders'}{'Accept-Ranges'} = 'none';
+                        my %fileitem = ('fh' => $out, 'get_current_length' => sub { return undef });
+                        $self->_SendDataItem(\%fileitem, {
+                            'size' => $size,
+                            'mime' => 'application/x-tar',
+                            'code' => 200,
+                            'attachment' => basename($requestfile).'.tar'
+                        });
                         return 0;
                     }
                 });
