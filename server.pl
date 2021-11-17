@@ -1024,8 +1024,8 @@ package HTTP::BS::Server::Client::Request {
             $self->{'outheaders'}{'Content-Length'} = "$contentlength";
         }
 
-        my $mime     = $opt->{'mime'};
-        my $filename = $opt->{'filename'};
+
+
         my %lookup = (
             200 => "HTTP/1.1 200 OK\r\n",
             206 => "HTTP/1.1 206 Partial Content\r\n",
@@ -1043,8 +1043,23 @@ package HTTP::BS::Server::Client::Request {
             $self->Send403();
             return;
         }
+        my $mime     = $opt->{'mime'};
         $headtext .=   "Content-Type: $mime\r\n";
-        $headtext .=   'Content-Disposition: inline; filename="' . $filename . "\"\r\n" if ($filename);
+
+        my $filename = $opt->{'filename'};
+        my $disposition = 'inline';
+        if($opt->{'attachment'}) {
+            $disposition = 'attachment';
+            $filename = $opt->{'attachment'};
+        }
+        elsif($opt->{'inline'}) {
+            $filename = $opt->{'inline'};
+        }
+        if($filename) {
+            my $sendablebytes = encode('UTF-8', '"'.MusicLibrary::get_printable_utf8($filename));
+            $headtext .=   "Content-Disposition: $disposition; filename*=UTF-8''".uri_escape($sendablebytes)."; filename=\"$sendablebytes\"\r\n";
+        }
+
         $self->{'outheaders'}{'Accept-Ranges'} //= 'bytes';
         $self->{'outheaders'}{'Connection'} //= $self->{'header'}{'Connection'};
         $self->{'outheaders'}{'Connection'} //= 'keep-alive';
@@ -1234,12 +1249,17 @@ package HTTP::BS::Server::Client::Request {
             $filelength = undef;
         }
         my $mime = getMIME($requestfile);
-        $self->_SendDataItem(\%fileitem, {
+
+        my $opt = {
            'size'     => $filelength,
            'mime'     => $mime,
-           'filename' => basename($requestfile),
            'allowSAB' => $allowSAB
-        });
+        };
+        if($self->{'responseopt'}{'cd_file'}) {
+            $opt->{$self->{'responseopt'}{'cd_file'}} = basename($requestfile);
+        }
+
+        $self->_SendDataItem(\%fileitem, $opt);
     }
 
     # currently only supports fixed filelength
@@ -3022,6 +3042,9 @@ package MusicLibrary {
 
         }
         else {
+            if($request->{'qs'}{'action'} && ($request->{'qs'}{'action'} eq 'dl')) {
+                $request->{'responseopt'}{'cd_file'} = 'attachment';
+            }
             $request->SendLocalFile($tosend);
         }
     }
@@ -5165,6 +5188,7 @@ sub kodi_movies {
 # really acquire media file (with search) and convert
 sub get_video {
     my ($request) = @_;
+    $request->{'responseopt'}{'cd_file'} = 'inline';
     my ($client, $qs, $header) =  ($request->{'client'}, $request->{'qs'}, $request->{'header'});
     say "/get_video ---------------------------------------";
     $qs->{'fmt'} //= 'noconv';
