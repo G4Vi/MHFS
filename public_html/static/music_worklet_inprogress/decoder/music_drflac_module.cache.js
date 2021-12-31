@@ -124,11 +124,12 @@ const NetworkDrFlac = async function(theURL, gsignal) {
         const end = that.filesize ? Math.min(def_end, that.filesize-1) : def_end; 
         let xhr = await makeRequest('GET', theURL, start, end, mysignal);
         that.filesize = GetFileSize(xhr);
-        if(!DrFlac.network_drflac_add_block(that.ptr, start, that.filesize))
+        let blockptr = DrFlac.network_drflac_add_block(that.ptr, start, that.filesize);
+        if(!blockptr)
         {
             throw("failed DrFlac.network_drflac_add_block");
-        }		 
-        let dataHeap = new Uint8Array(DrFlac.Module.HEAPU8.buffer, DrFlac.network_drflac_bufptr(that.ptr)+start, xhr.response.byteLength);
+        }
+        let dataHeap = new Uint8Array(DrFlac.Module.HEAPU8.buffer, blockptr, xhr.response.byteLength);
         dataHeap.set(new Uint8Array(xhr.response));         
         return xhr.response.byteLength;
     };  
@@ -342,8 +343,6 @@ Module().then(function(DrFlacMod){
     DrFlac.network_drflac_close = DrFlacMod.cwrap('network_drflac_close', null, ["number"]);
 
     DrFlac.network_drflac_add_block = DrFlacMod.cwrap('network_drflac_add_block', "number", ["number", "number", "number"]);
-
-    DrFlac.network_drflac_bufptr = DrFlacMod.cwrap('network_drflac_bufptr', "number", ["number"]);
     
     DrFlac.network_drflac_seek_to_pcm_frame = DrFlacMod.cwrap('network_drflac_seek_to_pcm_frame', "number", ["number", "number"]);
 

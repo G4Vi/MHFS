@@ -19,7 +19,7 @@ typedef struct  {
 
 unsigned blockvf_sizeof(void);
 void blockvf_init(blockvf *pBlockvf, const unsigned blocksize);
-int blockvf_add_block(blockvf *pBlockvf, const uint32_t block_start, const unsigned filesize);
+void *blockvf_add_block(blockvf *pBlockvf, const uint32_t block_start, const unsigned filesize);
 bool blockvf_seek(blockvf *pBlockvf, int offset, drflac_seek_origin origin);
 bool blockvf_read(blockvf *pBlockvf, void* bufferOut, size_t bytesToRead, size_t *bytesRead, unsigned *needed);
 void blockvf_deinit(blockvf *pBlockvf);
@@ -103,7 +103,7 @@ void blockvf_init(blockvf *pBlockvf, const unsigned blocksize)
     pBlockvf->filesize = 0;
     pBlockvf->fileoffset = 0;
 }
-int blockvf_add_block(blockvf *pBlockvf, const uint32_t block_start, const unsigned filesize)
+void *blockvf_add_block(blockvf *pBlockvf, const uint32_t block_start, const unsigned filesize)
 {
     // resize and or create the buffer if necessary
     int bufok = (pBlockvf->buf != NULL);
@@ -122,11 +122,11 @@ int blockvf_add_block(blockvf *pBlockvf, const uint32_t block_start, const unsig
         pBlockvf->filesize = filesize;
 
     }
-    if(!bufok) return bufok;
+    if(!bufok) return NULL;
 
     // finally add the block to the list
     _blockvf_add_block(pBlockvf, block_start);
-    return 1;
+    return ((uint8_t*)(pBlockvf->buf))+block_start;
 }
 
 bool blockvf_seek(blockvf *pBlockvf, int offset, drflac_seek_origin origin)
@@ -209,7 +209,6 @@ void blockvf_deinit(blockvf *pBlockvf)
         block = nextblock;
     }
     if(pBlockvf->buf != NULL) free(pBlockvf->buf);
-    free(pBlockvf);
 }
 
 

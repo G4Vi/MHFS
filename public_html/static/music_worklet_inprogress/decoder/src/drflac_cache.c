@@ -156,16 +156,10 @@ void network_drflac_close(NetworkDrFlac *ndrflac)
     free(ndrflac);
 }
 
-int network_drflac_add_block(NetworkDrFlac *ndrflac, const uint32_t block_start, const unsigned filesize)
+void *network_drflac_add_block(NetworkDrFlac *ndrflac, const uint32_t block_start, const unsigned filesize)
 {
     return blockvf_add_block(&ndrflac->vf, block_start, filesize);
 }
-
-void *network_drflac_bufptr(const NetworkDrFlac *ndrflac)
-{
-    return ndrflac->vf.buf;
-}
-
 
 // network_drflac_read_pcm_frames_f32 will catch the error if we dont here
 int network_drflac_seek_to_pcm_frame(NetworkDrFlac *ndrflac, const uint32_t pcmFrameIndex)

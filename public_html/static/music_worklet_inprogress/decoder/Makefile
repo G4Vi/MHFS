@@ -9,9 +9,9 @@ CFLAGS:=-DNETWORK_DR_FLAC_FORCE_REDBOOK -DDR_FLAC_NO_OGG -s'EXPORTED_RUNTIME_MET
 all: CFLAGS += -O3
 all: $(TARGET)
 
-$(TARGET): $(SRCDIR)/drflac_cache.c
+$(TARGET): $(SRCDIR)/drflac_cache.c $(SRCDIR)/block_vf.h $(SRCDIR)/dr_flac.h $(SRCDIR)/mhfs_decoder.h $(SRCDIR)/miniaudio.h $(SRCDIR)/network_drflac.h
 	mkdir -p $(OUTDIR)
-	$(CC) $(CFLAGS) -o $@ $^
+	$(CC) $(CFLAGS) -o $@ $<
 
 debug: CFLAGS += -O0 -g4 --source-map-base ./src/ -s SAFE_HEAP=1
 debug: $(TARGET)
