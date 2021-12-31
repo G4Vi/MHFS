@@ -1,6 +1,7 @@
 #pragma once
 
-typedef struct _NetworkDrFlacMem NetworkDrFlacMem;
+#include "block_vf.h"
+
 typedef float float32_t;
 
 
@@ -23,11 +24,9 @@ typedef struct {
 } NetworkDrFlacMeta;
 
 typedef struct {
-    unsigned fileoffset;
-    unsigned filesize;
     drflac *pFlac;   
     NetworkDrFlac_LastData lastdata;
-    NetworkDrFlacMem *pMem;
+    blockvf vf;
     NetworkDrFlacMeta meta;
     uint32_t currentFrame;    
 } NetworkDrFlac;
