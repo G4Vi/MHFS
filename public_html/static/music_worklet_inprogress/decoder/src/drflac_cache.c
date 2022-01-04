@@ -11,26 +11,11 @@
 #include "network_drflac.h"
 
 
-/*
-struct _NetworkDrFlacResampleData {
-    ma_resampler_config config;
-    ma_resampler resampler;
-    unsigned char album[256];
-    unsigned char trackno[8];       
-};
-*/
 
-#define NDRFLAC_OK(xndrflac) ((xndrflac)->lastdata.code == NDRFLAC_SUCCESS)
 
 static drflac_bool32 on_seek_mem(void* pUserData, int offset, drflac_seek_origin origin)
 {
     NetworkDrFlac *ndrflac = (NetworkDrFlac *)pUserData;
-    if(!NDRFLAC_OK(ndrflac))
-    {
-        printf("on_seek_mem: already failed, breaking %d %u\n", offset, origin);
-        return DRFLAC_FALSE;
-    }
-
     return blockvf_seek(&ndrflac->vf, offset, origin) ? DRFLAC_TRUE : DRFLAC_FALSE;
 }
 
@@ -86,31 +71,9 @@ static void on_meta(void *pUserData, drflac_metadata *pMetadata)
 static size_t on_read_mem(void* pUserData, void* bufferOut, size_t bytesToRead)
 {    
     NetworkDrFlac *nwdrflac = (NetworkDrFlac *)pUserData;
-    if(!NDRFLAC_OK(nwdrflac))
-    {
-        printf("on_read_mem: already failed\n");
-        return 0;
-    }
-
     size_t bytesRead;
-    unsigned needed;
-    if(!blockvf_read(&nwdrflac->vf, bufferOut, bytesToRead, &bytesRead, &needed))
-    {
-        nwdrflac->lastdata.code = NDRFLAC_MEM_NEED_MORE;
-        nwdrflac->lastdata.extradata = needed;
-        return 0;
-    }
+    blockvf_read(&nwdrflac->vf, bufferOut, bytesToRead, &bytesRead);
     return bytesRead;
-}
-
-uint32_t network_drflac_lastdata_code(const NetworkDrFlac *ndrflac)
-{
-    return ndrflac->lastdata.code;
-}
-
-uint32_t network_drflac_lastdata_extradata(const NetworkDrFlac *ndrflac)
-{
-    return ndrflac->lastdata.extradata;
 }
 
 uint64_t network_drflac_totalPCMFrameCount(const NetworkDrFlac *ndrflac)
@@ -132,28 +95,21 @@ uint8_t network_drflac_channels(const NetworkDrFlac *ndrflac)
 {
     return ndrflac->pFlac->channels;
 }
-    
-NetworkDrFlac *network_drflac_open(const unsigned blocksize)
-{    
-    NetworkDrFlac *ndrflac = malloc(sizeof(NetworkDrFlac));
-    if(ndrflac == NULL)
-    {
-        return NULL;
-    }
+
+void network_drflac_init(NetworkDrFlac *ndrflac, const unsigned blocksize)
+{
     ndrflac->pFlac = NULL;
     blockvf_init(&ndrflac->vf, blocksize);    
     ndrflac->meta.initialized = false;
     ndrflac->meta.album[0] = '\0';
     ndrflac->meta.trackno[0] = '\0';
     ndrflac->currentFrame = 0;
-    return ndrflac;
 }
 
-void network_drflac_close(NetworkDrFlac *ndrflac)
+void network_drflac_deinit(NetworkDrFlac *ndrflac)
 {
     if(ndrflac->pFlac != NULL) drflac_close(ndrflac->pFlac);
-    blockvf_deinit(&ndrflac->vf);    
-    free(ndrflac);
+    blockvf_deinit(&ndrflac->vf);
 }
 
 void *network_drflac_add_block(NetworkDrFlac *ndrflac, const uint32_t block_start, const unsigned filesize)
@@ -172,21 +128,54 @@ int network_drflac_seek_to_pcm_frame(NetworkDrFlac *ndrflac, const uint32_t pcmF
     return 1;    
 }
 
-uint64_t network_drflac_currentFrame(const NetworkDrFlac *ndrflac)
+uint32_t NetworkDrFlac_ReturnData_sizeof(void)
+{
+    return sizeof(NetworkDrFlac_ReturnData);
+}
+
+uint32_t NDRFLAC_SUCCESS_func(void)
+{
+    return NDRFLAC_SUCCESS;
+}
+
+uint32_t NDRFLAC_GENERIC_ERROR_func(void)
+{
+    return NDRFLAC_GENERIC_ERROR;
+}
+
+uint32_t NDRFLAC_NEED_MORE_DATA_func(void)
+{
+    return NDRFLAC_NEED_MORE_DATA;
+}
+
+NetworkDrFlac *network_drflac_open(const unsigned blocksize)
 {    
+    NetworkDrFlac *ndrflac = malloc(sizeof(NetworkDrFlac));
+    if(ndrflac == NULL)
+    {
+        return NULL;
+    }
+    network_drflac_init(ndrflac, blocksize);
+    return ndrflac;
+}
+
+void network_drflac_close(NetworkDrFlac *ndrflac)
+{
+    network_drflac_deinit(ndrflac);
+    free(ndrflac);
+}
+
+uint64_t network_drflac_currentFrame(const NetworkDrFlac *ndrflac)
+{
     return ndrflac->currentFrame;
 }
 
-static NetworkDrFlac_Err_Vals network_drflac_open_drflac(NetworkDrFlac *ndrflac)
+NetworkDrFlac_Err_Vals network_drflac_read_pcm_frames_f32(NetworkDrFlac *ndrflac, const uint32_t desired_pcm_frames, float32_t *outFloat, NetworkDrFlac_ReturnData *pReturnData)
 {
-    network_drflac_read_pcm_frames_f32(ndrflac, 0, NULL);
-    return ndrflac->lastdata.code;
-}
-
-/* returns of samples */
-uint64_t network_drflac_read_pcm_frames_f32(NetworkDrFlac *ndrflac, const uint32_t desired_pcm_frames, float32_t *outFloat)
-{   
-    ndrflac->lastdata.code = NDRFLAC_SUCCESS;
+    NetworkDrFlac_ReturnData rd;
+    if(pReturnData == NULL) pReturnData = &rd;
+    NetworkDrFlac_Err_Vals retval = NDRFLAC_SUCCESS;
+    ndrflac->vf.lastdata.code = BLOCKVF_SUCCESS;
 
     // initialize drflac if necessary
     if(ndrflac->pFlac == NULL)
@@ -203,16 +192,18 @@ uint64_t network_drflac_read_pcm_frames_f32(NetworkDrFlac *ndrflac, const uint32
             ndrflac->pFlac = drflac_open(&on_read_mem, &on_seek_mem, ndrflac, NULL);
         }
         
-        if((ndrflac->pFlac == NULL) || (!NDRFLAC_OK(ndrflac)))
+        if((ndrflac->pFlac == NULL) || (!BLOCKVF_OK(&ndrflac->vf)))
         {
-            if(!NDRFLAC_OK(ndrflac))
+            if(!BLOCKVF_OK(&ndrflac->vf))
             {
-                printf("network_drflac: another error?\n");                                   
+                retval = (NetworkDrFlac_Err_Vals)ndrflac->vf.lastdata.code;
+                pReturnData->needed_offset = ndrflac->vf.lastdata.extradata;
+                printf("network_drflac: another error?\n");
             }
             else
             {
+                retval = NDRFLAC_GENERIC_ERROR;
                 printf("network_drflac: failed to open drflac\n"); 
-                ndrflac->lastdata.code = NDRFLAC_GENERIC_ERROR;   
             }
             goto network_drflac_read_pcm_frames_f32_mem_FAIL;                         
         }
@@ -228,46 +219,43 @@ uint64_t network_drflac_read_pcm_frames_f32(NetworkDrFlac *ndrflac, const uint32
     printf("seek to %u\n", ndrflac->currentFrame);
     const uint32_t currentPCMFrame32 = pFlac->currentPCMFrame;
     const drflac_bool32 seekres = drflac_seek_to_pcm_frame(pFlac, ndrflac->currentFrame);    
-    if(!NDRFLAC_OK(ndrflac))
-    {        
+    if(!BLOCKVF_OK(&ndrflac->vf))
+    {
+        retval = (NetworkDrFlac_Err_Vals)ndrflac->vf.lastdata.code;
+        pReturnData->needed_offset = ndrflac->vf.lastdata.extradata;
         printf("network_drflac_read_pcm_frames_f32_mem: failed seek_to_pcm_frame NOT OK current: %u desired: %u\n", currentPCMFrame32, ndrflac->currentFrame);
         goto network_drflac_read_pcm_frames_f32_mem_FAIL;        
     }
     else if(!seekres)
     {
         printf("network_drflac_read_pcm_frames_f32_mem: seek failed current: %u desired: %u\n", currentPCMFrame32, ndrflac->currentFrame);     
-        ndrflac->lastdata.code = NDRFLAC_GENERIC_ERROR;
-        goto network_drflac_read_pcm_frames_f32_mem_FAIL;
-    }    
-    if(desired_pcm_frames == 0)
-    {
-        // we just wanted a seek
-        return 0;
-    }   
-
-    // decode to pcm    
-    const uint32_t frames_decoded = drflac_read_pcm_frames_f32(pFlac, desired_pcm_frames, outFloat);   
-    if(frames_decoded != desired_pcm_frames)
-    {
-        printf("network_drflac_read_pcm_frames_f32_mem: expected %u decoded %u\n", desired_pcm_frames, frames_decoded);
-    }
-    if(!NDRFLAC_OK(ndrflac))
-    {
-        printf("network_drflac_read_pcm_frames_f32_mem: failed read_pcm_frames_f32\n");
+        retval = NDRFLAC_GENERIC_ERROR;
         goto network_drflac_read_pcm_frames_f32_mem_FAIL;
     }
-    
-    // if we didn't read any data, nothing more to do
-    if(frames_decoded == 0)
-    {
-        printf("network_drflac_read_pcm_frames_f32_mem: (0)\n");
-        return 0;        
-    }
-    ndrflac->currentFrame += frames_decoded;    
 
-    printf("returning from ndrflac->currentFrame: %u frames_decoded %u\n", ndrflac->currentFrame, frames_decoded);   
-    // return number of samples   
-    return frames_decoded;
+    // finally read
+    uint32_t frames_decoded = 0;
+    if(desired_pcm_frames != 0)
+    {
+        // decode to pcm
+        frames_decoded = drflac_read_pcm_frames_f32(pFlac, desired_pcm_frames, outFloat);
+        if(frames_decoded != desired_pcm_frames)
+        {
+            printf("network_drflac_read_pcm_frames_f32_mem: expected %u decoded %u\n", desired_pcm_frames, frames_decoded);
+        }
+        if(!BLOCKVF_OK(&ndrflac->vf))
+        {
+            retval = (NetworkDrFlac_Err_Vals)ndrflac->vf.lastdata.code;
+            pReturnData->needed_offset = ndrflac->vf.lastdata.extradata;
+            printf("network_drflac_read_pcm_frames_f32_mem: failed read_pcm_frames_f32\n");
+            goto network_drflac_read_pcm_frames_f32_mem_FAIL;
+        }
+        ndrflac->currentFrame += frames_decoded;
+    }
+
+    printf("returning from ndrflac->currentFrame: %u frames_decoded %u\n", ndrflac->currentFrame, frames_decoded);
+    pReturnData->frames_read = frames_decoded;
+    return NDRFLAC_SUCCESS;
 
 network_drflac_read_pcm_frames_f32_mem_FAIL:
     if(ndrflac->pFlac != NULL)
@@ -275,10 +263,8 @@ network_drflac_read_pcm_frames_f32_mem_FAIL:
         drflac_close(ndrflac->pFlac);
         ndrflac->pFlac = NULL;
     }    
-    return 0;
+    return retval;
 }
-
-#undef NDRFLAC_OK
 
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"

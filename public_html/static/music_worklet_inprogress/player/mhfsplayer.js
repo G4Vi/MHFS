@@ -344,11 +344,10 @@ const MHFSPlayer = async function(opt) {
             }
     
             // seek
-            const start_dec_frame = Math.floor(time * that.NWDRFLAC.sampleRate);
             const start_output_time = time;
             time = 0;
             try{
-                await decoder.seek(start_dec_frame);        
+                await decoder.seek(start_output_time);
             }
             catch(error) {
                 console.error(error);
@@ -357,8 +356,8 @@ const MHFSPlayer = async function(opt) {
                 }
                 continue;
             }        
-            track.duration = that.NWDRFLAC.totalPCMFrameCount / that.NWDRFLAC.sampleRate;
-            track.sampleRate = that.NWDRFLAC.sampleRate;
+            track.duration = that.NWDRFLAC.duration;
+
             // We better not modify the AQ if we're cancelled
             if(mysignal.aborted) break;      
     

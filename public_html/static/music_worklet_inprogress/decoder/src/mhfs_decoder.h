@@ -15,7 +15,7 @@ typedef struct {
 
 
 LIBEXPORT mhfs_decoder *mhfs_decoder_create(const unsigned outputSampleRate, const unsigned outputChannels);
-LIBEXPORT uint64_t mhfs_decoder_read_pcm_frames_f32_deinterleaved(mhfs_decoder *mhfs_d, NetworkDrFlac *ndrflac, const uint32_t desired_pcm_frames, float32_t *outFloat);
+LIBEXPORT NetworkDrFlac_Err_Vals mhfs_decoder_read_pcm_frames_f32_deinterleaved(mhfs_decoder *mhfs_d, NetworkDrFlac *ndrflac, const uint32_t desired_pcm_frames, float32_t *outFloat, NetworkDrFlac_ReturnData *pReturnData);
 LIBEXPORT void mhfs_decoder_close(mhfs_decoder *mhfs_d);
 LIBEXPORT void mhfs_decoder_flush(mhfs_decoder *mhfs_d);
 
@@ -48,20 +48,19 @@ void mhfs_decoder_flush(mhfs_decoder *mhfs_d)
     }
 }
 
-uint64_t mhfs_decoder_read_pcm_frames_f32(mhfs_decoder *mhfs_d, NetworkDrFlac *ndrflac, const uint32_t desired_pcm_frames, float32_t *outFloat)
+NetworkDrFlac_Err_Vals mhfs_decoder_read_pcm_frames_f32(mhfs_decoder *mhfs_d, NetworkDrFlac *ndrflac, const uint32_t desired_pcm_frames, float32_t *outFloat, NetworkDrFlac_ReturnData *pReturnData)
 {
     // open the decoder if needed
-    if(network_drflac_open_drflac(ndrflac) != NDRFLAC_SUCCESS)
+    const NetworkDrFlac_Err_Vals openCode = network_drflac_read_pcm_frames_f32(ndrflac, 0, NULL, pReturnData);
+    if(openCode != NDRFLAC_SUCCESS)
     {
-        return 0;
+        return openCode;
     }
     
     // fast path, no resampling / channel conversion needed
     if((ndrflac->pFlac->sampleRate == mhfs_d->outputSampleRate) && (ndrflac->pFlac->channels != mhfs_d->outputChannels))
     {
-        uint64_t decoded_frames = network_drflac_read_pcm_frames_f32(ndrflac, desired_pcm_frames, outFloat);
-        if(decoded_frames == 0) return 0;
-        return decoded_frames;
+        return network_drflac_read_pcm_frames_f32(ndrflac, desired_pcm_frames, outFloat, pReturnData);
     }
     else
     {
@@ -77,7 +76,7 @@ uint64_t mhfs_decoder_read_pcm_frames_f32(mhfs_decoder *mhfs_d, NetworkDrFlac *n
             if(ma_data_converter_init(&config, &mhfs_d->madc) != MA_SUCCESS)
             {
                 printf("failed to init data converter\n");
-                return 0;
+                return NDRFLAC_GENERIC_ERROR;
             }
             mhfs_d->has_madc = true;
             printf("success init data converter\n"); 
@@ -87,19 +86,20 @@ uint64_t mhfs_decoder_read_pcm_frames_f32(mhfs_decoder *mhfs_d, NetworkDrFlac *n
             if(ma_data_converter_set_rate(&mhfs_d->madc, ndrflac->pFlac->sampleRate, mhfs_d->outputSampleRate) != MA_SUCCESS)
             {
                 printf("failed to change data converter samplerate\n");
-                return 0;
+                return NDRFLAC_GENERIC_ERROR;
             }
         }
 
         // decode
         const uint64_t dec_frames_req = ma_data_converter_get_required_input_frame_count(&mhfs_d->madc, desired_pcm_frames);
         float32_t *tempOut = malloc(dec_frames_req * sizeof(float32_t)*ndrflac->pFlac->channels);
-        uint64_t decoded_frames = network_drflac_read_pcm_frames_f32(ndrflac, dec_frames_req, tempOut);
-        if(decoded_frames == 0)
+        const NetworkDrFlac_Err_Vals readCode = network_drflac_read_pcm_frames_f32(ndrflac, dec_frames_req, tempOut, pReturnData);
+        if((readCode != NDRFLAC_SUCCESS) || (pReturnData->frames_read == 0))
         {
-           free(tempOut);
-           return 0;
-        }        
+            free(tempOut);
+            return readCode;
+        }
+        uint64_t decoded_frames = pReturnData->frames_read;
 
         // resample
         uint64_t frameCountOut = desired_pcm_frames;       
@@ -108,27 +108,32 @@ uint64_t mhfs_decoder_read_pcm_frames_f32(mhfs_decoder *mhfs_d, NetworkDrFlac *n
         if(result != MA_SUCCESS)
         {
             printf("resample failed\n");
-            return 0;
+            return NDRFLAC_GENERIC_ERROR;
         }
-        return frameCountOut;
+        pReturnData->frames_read = frameCountOut;
+        return NDRFLAC_SUCCESS;
     }
 }
 
-uint64_t mhfs_decoder_read_pcm_frames_f32_deinterleaved(mhfs_decoder *mhfs_d, NetworkDrFlac *ndrflac, const uint32_t desired_pcm_frames, float32_t *outFloat)
+NetworkDrFlac_Err_Vals mhfs_decoder_read_pcm_frames_f32_deinterleaved(mhfs_decoder *mhfs_d, NetworkDrFlac *ndrflac, const uint32_t desired_pcm_frames, float32_t *outFloat, NetworkDrFlac_ReturnData *pReturnData)
 {
     float32_t *data = malloc(desired_pcm_frames * sizeof(float32_t)*mhfs_d->outputChannels);
-    const uint64_t frames = mhfs_decoder_read_pcm_frames_f32(mhfs_d, ndrflac, desired_pcm_frames, data);    
-    for(unsigned i = 0; i < frames; i++)
+    const NetworkDrFlac_Err_Vals code = mhfs_decoder_read_pcm_frames_f32(mhfs_d, ndrflac, desired_pcm_frames, data, pReturnData);
+    if(code == NDRFLAC_SUCCESS)
     {
-        for(unsigned j = 0; j < mhfs_d->outputChannels; j++)
-        {            
-            unsigned chanIndex = j*frames;
-            float32_t sample = data[(i*mhfs_d->outputChannels) + j];
-            outFloat[chanIndex+i] = sample;
+        for(unsigned i = 0; i < pReturnData->frames_read; i++)
+        {
+            for(unsigned j = 0; j < mhfs_d->outputChannels; j++)
+            {
+                unsigned chanIndex = j*pReturnData->frames_read;
+                float32_t sample = data[(i*mhfs_d->outputChannels) + j];
+                outFloat[chanIndex+i] = sample;
+            }
         }
     }
+
     free(data);
-    return frames;
+    return code;
 }
 
 #endif  /* mhfs_decoder_c */
