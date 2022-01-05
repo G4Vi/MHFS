@@ -71,7 +71,7 @@ const onQueueUpdate = function(track) {
 const geturl = function(trackname) {
     let url = '../../music_dl?name=' + encodeURIComponent(trackname);
     //url  += '&max_sample_rate=' + DesiredSampleRate;
-    url  += '&fmt=flac';
+    //url  += '&fmt=flac';
     return url;
 }
 

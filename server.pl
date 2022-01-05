@@ -2895,6 +2895,9 @@ package MusicLibrary {
         if(! $fmt) {
             if($request->{'qs'}{'segments'} || ($request->{'header'}{'User-Agent'} =~ /Linux/)) {
                 $fmt = 'gapless';
+                if($request->{'header'}{'User-Agent'} =~ /Chrome\/([^\.]+)/) {
+                    $fmt = 'worklet' if($1 >= 93);
+                }
             }
             else {
                 $fmt = 'worklet';
@@ -2938,42 +2941,27 @@ package MusicLibrary {
                 return;
             }
 
-            if(!defined($TRACKINFO{$tosend}))
-            {
-                GetTrackInfo($tosend, sub {
-                    $TRACKDURATION{$tosend} = $TRACKINFO{$tosend}{'duration'};
-                    SendTrack($request, $tosend);
-                });
+            if(! $TRACKDURATION{$tosend}) {
+                say "MusicLibrary: failed to get track duration";
+                $request->Send503();
                 return;
             }
 
-            if($TRACKDURATION{$tosend}) {
-                say "no proc, duration cached";
-                my $pv = MHFS::XS::new($tosend);
-                $request->{'outheaders'}{'X-MHFS-NUMSEGMENTS'} = ceil($TRACKDURATION{$tosend} / $SEGMENT_DURATION);
-                $request->{'outheaders'}{'X-MHFS-TRACKDURATION'} = $TRACKDURATION{$tosend};
-                $request->{'outheaders'}{'X-MHFS-MAXSEGDURATION'} = $SEGMENT_DURATION;
-                my $samples_per_seg = $TRACKINFO{$tosend}{'SAMPLERATE'} * $SEGMENT_DURATION;
-                my $spos = $samples_per_seg * ($request->{'qs'}{'part'} - 1);
-                my $samples_left = $TRACKINFO{$tosend}{'TOTALSAMPLES'} - $spos;
-                my $res = MHFS::XS::get_flac($pv, $spos, $samples_per_seg < $samples_left ? $samples_per_seg : $samples_left);
-                $request->SendBytes('audio/flac', $res);
-                return;
-            }
+            say "no proc, duration cached";
+            my $pv = MHFS::XS::new($tosend);
+            $request->{'outheaders'}{'X-MHFS-NUMSEGMENTS'} = ceil($TRACKDURATION{$tosend} / $SEGMENT_DURATION);
+            $request->{'outheaders'}{'X-MHFS-TRACKDURATION'} = $TRACKDURATION{$tosend};
+            $request->{'outheaders'}{'X-MHFS-MAXSEGDURATION'} = $SEGMENT_DURATION;
+            my $samples_per_seg = $TRACKINFO{$tosend}{'SAMPLERATE'} * $SEGMENT_DURATION;
+            my $spos = $samples_per_seg * ($request->{'qs'}{'part'} - 1);
+            my $samples_left = $TRACKINFO{$tosend}{'TOTALSAMPLES'} - $spos;
+            my $res = MHFS::XS::get_flac($pv, $spos, $samples_per_seg < $samples_left ? $samples_per_seg : $samples_left);
+            $request->SendBytes('audio/flac', $res);
         }
         elsif(defined $request->{'qs'}{'fmt'} && ($request->{'qs'}{'fmt'}  eq 'wav')) {
             if(! $MusicLibrary::HAS_MHFS_XS) {
                 say "MusicLibrary: route not available without XS";
                 $request->Send503();
-                return;
-            }
-
-            if(!defined($TRACKINFO{$tosend}))
-            {
-                GetTrackInfo($tosend, sub {
-                    $TRACKDURATION{$tosend} = $TRACKINFO{$tosend}{'duration'};
-                    SendTrack($request, $tosend);
-                });
                 return;
             }
 
@@ -3042,20 +3030,27 @@ package MusicLibrary {
     }
 
     sub GetTrackInfo {
-        my ($file, $continue) = @_;
+        my ($file) = @_;
         open(my $fh, '<', $file) or die "open failed";
         my $buf = '';
         seek($fh, 8, 0) or die "seek failed";
         (read($fh, $buf, 34) == 34) or die "short read";
         my $info = parseStreamInfo($buf);
         $info->{'duration'} = $info->{'TOTALSAMPLES'}/$info->{'SAMPLERATE'};
-        $TRACKINFO{$file} = $info;
         print Dumper($info);
-        $continue->();
+        return $info;
     }
 
     sub SendLocalTrack {
         my ($request, $file) = @_;
+
+        # fast path, just send the file
+        my $justsendfile = (!defined($request->{'qs'}{'fmt'})) && (!defined($request->{'qs'}{'max_sample_rate'})) && (!defined($request->{'qs'}{'bitdepth'})) && (!defined($request->{'qs'}{'part'}));
+        if($justsendfile) {
+            SendTrack($request, $file);
+            return;
+        }
+
         my $evp = $request->{'client'}{'server'}{'evp'};
         my $tmpfileloc = $request->{'client'}{'server'}{'settings'}{'TMPDIR'} . '/';
         my $nameloc = $request->{'localtrack'}{'nameloc'};
@@ -3063,14 +3058,8 @@ package MusicLibrary {
         my $filebase = $request->{'localtrack'}{'basename'};
 
         # convert to lossy flac if necessary
-        my $is_flac = $file =~ /\.flac$/i;
-        $is_flac = 1 if($file =~ /\.wav$/i);
+        my $is_flac = lc(substr($file, -5)) eq '.flac';
         if(!$is_flac) {
-            my $wantjustflac = $request->{'qs'}{'fmt'} && ($request->{'qs'}{'fmt'} eq 'flac');
-            if(!$request->{'qs'}{'part'} && !$wantjustflac) {
-                SendTrack($request, $file);
-                return;
-            }
             $filebase =~ s/\.[^.]+$/.lossy.flac/;
             $request->{'localtrack'}{'basename'} = $filebase;
             my $tlossy = $tmpfileloc . $filebase;
@@ -3110,27 +3099,17 @@ package MusicLibrary {
             }
         }
 
-        my $max_sample_rate = $request->{'qs'}{'max_sample_rate'};
-        my $bitdepth = $request->{'qs'}{'bitdepth'};
-        # no requirements just send the raw file
-        if(! $max_sample_rate) {
-            SendTrack($request, $file);
-            return;
-        }
-        elsif(! $bitdepth) {
-            $bitdepth = $max_sample_rate > 48000 ? 24 : 16;
-        }
-        say "using bitdepth $bitdepth";
-
-        # check to see if the raw file fullfills the requirements
+        # everything should be flac now, grab the track info
         if(!defined($TRACKINFO{$file}))
         {
-            GetTrackInfo($file, sub {
-                $TRACKDURATION{$file} = $TRACKINFO{$file}{'duration'};
-                SendLocalTrack($request, $file);
-            });
-            return;
+            $TRACKINFO{$file} = GetTrackInfo($file);
+            $TRACKDURATION{$file} = $TRACKINFO{$file}{'duration'};
         }
+
+        my $max_sample_rate = $request->{'qs'}{'max_sample_rate'} // 192000;
+        my $bitdepth = $request->{'qs'}{'bitdepth'} // ($max_sample_rate > 48000 ? 24 : 16);
+
+        # check to see if the raw file fullfills the requirements
         my $samplerate = $TRACKINFO{$file}{'SAMPLERATE'};
         my $inbitdepth = $TRACKINFO{$file}{'BITSPERSAMPLE'};
         say "input: samplerate $samplerate inbitdepth $inbitdepth";
