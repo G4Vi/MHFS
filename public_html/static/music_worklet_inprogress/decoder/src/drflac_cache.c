@@ -267,6 +267,7 @@ network_drflac_read_pcm_frames_f32_mem_FAIL:
 }
 
 #define MINIAUDIO_IMPLEMENTATION
+#define MA_NO_FLAC
 #include "miniaudio.h"
 #define MHFSDECODER_IMPLEMENTATION
 #include "mhfs_decoder.h"

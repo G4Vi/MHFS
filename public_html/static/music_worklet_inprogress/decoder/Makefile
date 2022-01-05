@@ -4,12 +4,12 @@ SRCDIR?=src
 OUTDIR?=bin
 TARGET:=$(OUTDIR)/drflac.js
 
-CFLAGS:=-DNETWORK_DR_FLAC_FORCE_REDBOOK -DDR_FLAC_NO_OGG -s'EXPORTED_RUNTIME_METHODS=["cwrap", "ccall"]' -sEXPORT_ES6=1 -sASSERTIONS=1 -sALLOW_MEMORY_GROWTH=1 -sMODULARIZE=1
+CFLAGS:=-I../../../../miniaudio -DNETWORK_DR_FLAC_FORCE_REDBOOK -DDR_FLAC_NO_OGG -s'EXPORTED_RUNTIME_METHODS=["cwrap", "ccall"]' -sEXPORT_ES6=1 -sASSERTIONS=1 -sALLOW_MEMORY_GROWTH=1 -sMODULARIZE=1
 
 all: CFLAGS += -O3
 all: $(TARGET)
 
-$(TARGET): $(SRCDIR)/drflac_cache.c $(SRCDIR)/block_vf.h $(SRCDIR)/dr_flac.h $(SRCDIR)/mhfs_decoder.h $(SRCDIR)/miniaudio.h $(SRCDIR)/network_drflac.h
+$(TARGET): $(SRCDIR)/drflac_cache.c $(SRCDIR)/block_vf.h $(SRCDIR)/dr_flac.h $(SRCDIR)/mhfs_decoder.h $(SRCDIR)/network_drflac.h
 	mkdir -p $(OUTDIR)
 	$(CC) $(CFLAGS) -o $@ $<
 
