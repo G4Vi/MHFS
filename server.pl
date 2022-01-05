@@ -3064,6 +3064,7 @@ package MusicLibrary {
 
         # convert to lossy flac if necessary
         my $is_flac = $file =~ /\.flac$/i;
+        $is_flac = 1 if($file =~ /\.wav$/i);
         if(!$is_flac) {
             my $wantjustflac = $request->{'qs'}{'fmt'} && ($request->{'qs'}{'fmt'} eq 'flac');
             if(!$request->{'qs'}{'part'} && !$wantjustflac) {

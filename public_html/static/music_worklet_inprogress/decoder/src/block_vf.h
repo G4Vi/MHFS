@@ -34,8 +34,8 @@ typedef struct  {
 unsigned blockvf_sizeof(void);
 void blockvf_init(blockvf *pBlockvf, const unsigned blocksize);
 void *blockvf_add_block(blockvf *pBlockvf, const uint32_t block_start, const unsigned filesize);
-bool blockvf_seek(blockvf *pBlockvf, int offset, drflac_seek_origin origin);
-bool blockvf_read(blockvf *pBlockvf, void* bufferOut, size_t bytesToRead, size_t *bytesRead);
+ma_result blockvf_seek(blockvf *pBlockvf, int64_t offset, ma_seek_origin origin);
+ma_result blockvf_read(blockvf *pBlockvf, void* bufferOut, size_t bytesToRead, size_t *bytesRead);
 void blockvf_deinit(blockvf *pBlockvf);
 
 #if defined(BLOCKVF_IMPLEMENTATION)
@@ -143,16 +143,22 @@ void *blockvf_add_block(blockvf *pBlockvf, const uint32_t block_start, const uns
     return ((uint8_t*)(pBlockvf->buf))+block_start;
 }
 
-bool blockvf_seek(blockvf *pBlockvf, int offset, drflac_seek_origin origin)
+ma_result blockvf_seek(blockvf *pBlockvf, int64_t offset, ma_seek_origin origin)
 {
     if(!BLOCKVF_OK(pBlockvf))
     {
         printf("on_seek_mem: already failed, breaking %d %u\n", offset, origin);
-        return false;
+        return !MA_SUCCESS;
+    }
+
+    if(origin == ma_seek_origin_end)
+    {
+        printf("on_seek_mem: ma_seek_origin_end not supported, breaking %d %u\n", offset, origin);
+        return !MA_SUCCESS;
     }
 
     unsigned tempoffset = pBlockvf->fileoffset;
-    if(origin == drflac_seek_origin_current)
+    if(origin == ma_seek_origin_current)
     {
         tempoffset += offset;
     }
@@ -163,22 +169,22 @@ bool blockvf_seek(blockvf *pBlockvf, int offset, drflac_seek_origin origin)
     if((pBlockvf->filesize != 0) &&  (tempoffset >= pBlockvf->filesize))
     {
         printf("blockvf_seek: seek past end of stream\n");        
-        return false;
+        return !MA_SUCCESS;
     }
 
     printf("blockvf_seek seek update fileoffset %u\n", tempoffset);
     pBlockvf->fileoffset = tempoffset;
-    return true;
+    return MA_SUCCESS;
 }
 
 // returns false when more data is needed
-bool blockvf_read(blockvf *pBlockvf, void* bufferOut, size_t bytesToRead, size_t *bytesRead)
+ma_result blockvf_read(blockvf *pBlockvf, void* bufferOut, size_t bytesToRead, size_t *bytesRead)
 {
     if(!BLOCKVF_OK(pBlockvf))
     {
         printf("on_read_mem: already failed\n");
         *bytesRead = 0;
-        return false;
+        return !MA_SUCCESS;
     }
 
     unsigned endoffset = pBlockvf->fileoffset+bytesToRead-1;
@@ -190,7 +196,7 @@ bool blockvf_read(blockvf *pBlockvf, void* bufferOut, size_t bytesToRead, size_t
         {
             printf("blockvf_read: fileoffset >= filesize %u %u\n", pBlockvf->fileoffset, pBlockvf->filesize);
             *bytesRead = 0;        
-            return true;
+            return MA_SUCCESS;
         }       
         if(endoffset >= pBlockvf->filesize)
         {
@@ -206,7 +212,7 @@ bool blockvf_read(blockvf *pBlockvf, void* bufferOut, size_t bytesToRead, size_t
     {
         printf("blockvf_read: reached end of stream\n");
         *bytesRead = 0;        
-        return true;
+        return MA_SUCCESS;
     }
     
     //  HARD fail, we don't have the needed data
@@ -216,7 +222,7 @@ bool blockvf_read(blockvf *pBlockvf, void* bufferOut, size_t bytesToRead, size_t
         *bytesRead = 0;
         pBlockvf->lastdata.code = BLOCKVF_MEM_NEED_MORE;
         pBlockvf->lastdata.extradata = needed;
-        return false;
+        return !MA_SUCCESS;
     }
     
     // finally copy the data
@@ -227,7 +233,7 @@ bool blockvf_read(blockvf *pBlockvf, void* bufferOut, size_t bytesToRead, size_t
     memcpy(bufferOut, src, bytesToRead);
     pBlockvf->fileoffset += bytesToRead;
     *bytesRead = bytesToRead;
-    return true;
+    return MA_SUCCESS;
 }
 
 void blockvf_deinit(blockvf *pBlockvf)

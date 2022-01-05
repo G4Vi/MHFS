@@ -58,21 +58,21 @@ NetworkDrFlac_Err_Vals mhfs_decoder_read_pcm_frames_f32(mhfs_decoder *mhfs_d, Ne
     }
     
     // fast path, no resampling / channel conversion needed
-    if((ndrflac->pFlac->sampleRate == mhfs_d->outputSampleRate) && (ndrflac->pFlac->channels != mhfs_d->outputChannels))
+    if((network_drflac_sampleRate(ndrflac) == mhfs_d->outputSampleRate) && (network_drflac_channels(ndrflac) != mhfs_d->outputChannels))
     {
         return network_drflac_read_pcm_frames_f32(ndrflac, desired_pcm_frames, outFloat, pReturnData);
     }
     else
     {
         // initialize the data converter
-        if(mhfs_d->has_madc && (mhfs_d->madc.channelsIn != ndrflac->pFlac->channels))
+        if(mhfs_d->has_madc && (mhfs_d->madc.channelsIn != network_drflac_channels(ndrflac)))
         {
             ma_data_converter_uninit(&mhfs_d->madc, NULL);
             mhfs_d->has_madc = false;            
         }
         if(!mhfs_d->has_madc)
         {
-            ma_data_converter_config config = ma_data_converter_config_init(ma_format_f32, ma_format_f32, ndrflac->pFlac->channels, mhfs_d->outputChannels, ndrflac->pFlac->sampleRate, mhfs_d->outputSampleRate);           
+            ma_data_converter_config config = ma_data_converter_config_init(ma_format_f32, ma_format_f32, network_drflac_channels(ndrflac), mhfs_d->outputChannels, network_drflac_sampleRate(ndrflac), mhfs_d->outputSampleRate);           
             if(ma_data_converter_init(&config, NULL, &mhfs_d->madc) != MA_SUCCESS)
             {
                 printf("failed to init data converter\n");
@@ -81,9 +81,9 @@ NetworkDrFlac_Err_Vals mhfs_decoder_read_pcm_frames_f32(mhfs_decoder *mhfs_d, Ne
             mhfs_d->has_madc = true;
             printf("success init data converter\n"); 
         }
-        else if(mhfs_d->madc.sampleRateIn != ndrflac->pFlac->sampleRate)
+        else if(mhfs_d->madc.sampleRateIn != network_drflac_sampleRate(ndrflac))
         {
-            if(ma_data_converter_set_rate(&mhfs_d->madc, ndrflac->pFlac->sampleRate, mhfs_d->outputSampleRate) != MA_SUCCESS)
+            if(ma_data_converter_set_rate(&mhfs_d->madc, network_drflac_sampleRate(ndrflac), mhfs_d->outputSampleRate) != MA_SUCCESS)
             {
                 printf("failed to change data converter samplerate\n");
                 return NDRFLAC_GENERIC_ERROR;
@@ -97,7 +97,7 @@ NetworkDrFlac_Err_Vals mhfs_decoder_read_pcm_frames_f32(mhfs_decoder *mhfs_d, Ne
             printf("failed to get data converter input frame count\n");
             return NDRFLAC_GENERIC_ERROR;
         }
-        float32_t *tempOut = malloc(dec_frames_req * sizeof(float32_t)*ndrflac->pFlac->channels);
+        float32_t *tempOut = malloc(dec_frames_req * sizeof(float32_t)*network_drflac_channels(ndrflac));
         const NetworkDrFlac_Err_Vals readCode = network_drflac_read_pcm_frames_f32(ndrflac, dec_frames_req, tempOut, pReturnData);
         if((readCode != NDRFLAC_SUCCESS) || (pReturnData->frames_read == 0))
         {

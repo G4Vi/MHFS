@@ -12,7 +12,8 @@ typedef struct {
 } NetworkDrFlacMeta;
 
 typedef struct {
-    drflac *pFlac;
+    ma_decoder decoder;
+    bool initialized;
     blockvf vf;
     NetworkDrFlacMeta meta;
     uint32_t currentFrame;    
@@ -52,7 +53,7 @@ LIBEXPORT uint32_t NDRFLAC_NEED_MORE_DATA_func(void);
 LIBEXPORT NetworkDrFlac *network_drflac_open(const unsigned blocksize);
 LIBEXPORT void network_drflac_close(NetworkDrFlac *ndrflac);
 
-LIBEXPORT uint64_t network_drflac_totalPCMFrameCount(const NetworkDrFlac *ndrflac);
+LIBEXPORT uint64_t network_drflac_totalPCMFrameCount(NetworkDrFlac *ndrflac);
 LIBEXPORT uint32_t network_drflac_sampleRate(const NetworkDrFlac *ndrflac);
 LIBEXPORT uint8_t network_drflac_bitsPerSample(const NetworkDrFlac *ndrflac);
 LIBEXPORT uint8_t network_drflac_channels(const NetworkDrFlac *ndrflac);
