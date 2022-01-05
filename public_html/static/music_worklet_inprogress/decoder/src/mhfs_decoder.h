@@ -51,10 +51,14 @@ void mhfs_decoder_flush(mhfs_decoder *mhfs_d)
 NetworkDrFlac_Err_Vals mhfs_decoder_read_pcm_frames_f32(mhfs_decoder *mhfs_d, NetworkDrFlac *ndrflac, const uint32_t desired_pcm_frames, float32_t *outFloat, NetworkDrFlac_ReturnData *pReturnData)
 {
     // open the decoder if needed
-    const NetworkDrFlac_Err_Vals openCode = network_drflac_read_pcm_frames_f32(ndrflac, 0, NULL, pReturnData);
-    if(openCode != NDRFLAC_SUCCESS)
+    if(!ndrflac->initialized)
     {
-        return openCode;
+        printf("force open ma_decoder (not initialized)\n");
+        const NetworkDrFlac_Err_Vals openCode = network_drflac_read_pcm_frames_f32(ndrflac, 0, NULL, pReturnData);
+        if(openCode != NDRFLAC_SUCCESS)
+        {
+            return openCode;
+        }
     }
     
     // fast path, no resampling / channel conversion needed

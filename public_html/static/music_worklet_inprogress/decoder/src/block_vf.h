@@ -1,6 +1,7 @@
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
+#include <inttypes.h>
 
 #include "dr_flac.h"
 
@@ -147,14 +148,14 @@ ma_result blockvf_seek(blockvf *pBlockvf, int64_t offset, ma_seek_origin origin)
 {
     if(!BLOCKVF_OK(pBlockvf))
     {
-        printf("on_seek_mem: already failed, breaking %d %u\n", offset, origin);
-        return !MA_SUCCESS;
+        printf("on_seek_mem: already failed, breaking %"PRId64" %u\n", offset, origin);
+        return MA_ERROR;
     }
 
     if(origin == ma_seek_origin_end)
     {
-        printf("on_seek_mem: ma_seek_origin_end not supported, breaking %d %u\n", offset, origin);
-        return !MA_SUCCESS;
+        printf("on_seek_mem: ma_seek_origin_end not supported, breaking %"PRId64" %u\n", offset, origin);
+        return MA_ERROR;
     }
 
     unsigned tempoffset = pBlockvf->fileoffset;
@@ -169,7 +170,7 @@ ma_result blockvf_seek(blockvf *pBlockvf, int64_t offset, ma_seek_origin origin)
     if((pBlockvf->filesize != 0) &&  (tempoffset >= pBlockvf->filesize))
     {
         printf("blockvf_seek: seek past end of stream\n");        
-        return !MA_SUCCESS;
+        return MA_ERROR;
     }
 
     printf("blockvf_seek seek update fileoffset %u\n", tempoffset);
@@ -184,7 +185,7 @@ ma_result blockvf_read(blockvf *pBlockvf, void* bufferOut, size_t bytesToRead, s
     {
         printf("on_read_mem: already failed\n");
         *bytesRead = 0;
-        return !MA_SUCCESS;
+        return MA_ERROR;
     }
 
     unsigned endoffset = pBlockvf->fileoffset+bytesToRead-1;
@@ -222,14 +223,14 @@ ma_result blockvf_read(blockvf *pBlockvf, void* bufferOut, size_t bytesToRead, s
         *bytesRead = 0;
         pBlockvf->lastdata.code = BLOCKVF_MEM_NEED_MORE;
         pBlockvf->lastdata.extradata = needed;
-        return !MA_SUCCESS;
+        return MA_ERROR;
     }
     
     // finally copy the data
     const unsigned src_offset = pBlockvf->fileoffset;
     uint8_t  *src = (uint8_t*)(pBlockvf->buf);
     src += src_offset;
-    //printf("memcpy %u %u %u srcoffset %u filesize %u buffered %u\n", bufferOut, src, bytesToRead, src_offset, pBlockvf->filesize); 
+    //printf("memcpy 0x%p 0x%p %zu srcoffset %u filesize %u\n", bufferOut, src, bytesToRead, src_offset, pBlockvf->filesize);
     memcpy(bufferOut, src, bytesToRead);
     pBlockvf->fileoffset += bytesToRead;
     *bytesRead = bytesToRead;

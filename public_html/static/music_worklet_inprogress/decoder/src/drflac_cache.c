@@ -1,5 +1,8 @@
 #include <stdio.h>
 #include <stdbool.h>
+
+#include <inttypes.h>
+
 #define DR_FLAC_BUFFER_SIZE (4096 * 16)
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
@@ -204,7 +207,7 @@ NetworkDrFlac_Err_Vals network_drflac_read_pcm_frames_f32(NetworkDrFlac *ndrflac
     }
 
     // seek to sample 
-    printf("seek to %u\n", ndrflac->currentFrame);
+    printf("seek to %u d_pcmframes %u\n", ndrflac->currentFrame, desired_pcm_frames);
     const uint32_t currentPCMFrame32 = 0xFFFFFFFF;
     const bool seekres = MA_SUCCESS == ma_decoder_seek_to_pcm_frame(&ndrflac->decoder, ndrflac->currentFrame);
     if(!BLOCKVF_OK(&ndrflac->vf))
@@ -222,11 +225,17 @@ NetworkDrFlac_Err_Vals network_drflac_read_pcm_frames_f32(NetworkDrFlac *ndrflac
     }
 
     // finally read
-    uint32_t frames_decoded = 0;
+    uint64_t frames_decoded = 0;
     if(desired_pcm_frames != 0)
     {
+        uint64_t toread = desired_pcm_frames;
+        //uint64_t aframes;
+        //ma_decoder_get_available_frames(&ndrflac->decoder, &aframes);
+        //if(aframes < toread) toread = aframes;
+        printf("expected frames %"PRIu64"\n", toread);
+
         // decode to pcm
-        ma_result decRes = ma_decoder_read_pcm_frames(&ndrflac->decoder, outFloat, desired_pcm_frames, &frames_decoded);        
+        ma_result decRes = ma_decoder_read_pcm_frames(&ndrflac->decoder, outFloat, toread, &frames_decoded);
         if(!BLOCKVF_OK(&ndrflac->vf))
         {
             retval = (NetworkDrFlac_Err_Vals)ndrflac->vf.lastdata.code;
@@ -234,19 +243,19 @@ NetworkDrFlac_Err_Vals network_drflac_read_pcm_frames_f32(NetworkDrFlac *ndrflac
             printf("network_drflac_read_pcm_frames_f32_mem: failed read_pcm_frames_f32\n");
             goto network_drflac_read_pcm_frames_f32_mem_FAIL;
         }
-        if(decRes != MA_SUCCESS)
+        if((decRes != MA_SUCCESS) && (decRes != MA_AT_END))
         {
-            printf("network_drflac_read_pcm_frames_f32_mem: failed read_pcm_frames_f32(decode)\n");
+            printf("network_drflac_read_pcm_frames_f32_mem: failed read_pcm_frames_f32(decode), ma_result %u\n", decRes);
             goto network_drflac_read_pcm_frames_f32_mem_FAIL;
         }
         if(frames_decoded != desired_pcm_frames)
         {
-            printf("network_drflac_read_pcm_frames_f32_mem: expected %u decoded %u\n", desired_pcm_frames, frames_decoded);
+            printf("network_drflac_read_pcm_frames_f32_mem: expected %u decoded %"PRIu64"\n", desired_pcm_frames, frames_decoded);
         }
         ndrflac->currentFrame += frames_decoded;
     }
 
-    printf("returning from ndrflac->currentFrame: %u frames_decoded %u\n", ndrflac->currentFrame, frames_decoded);
+    printf("returning from ndrflac->currentFrame: %u frames_decoded %"PRIu64" desired %u\n", ndrflac->currentFrame, frames_decoded, desired_pcm_frames);
     pReturnData->frames_read = frames_decoded;
     return NDRFLAC_SUCCESS;
 
