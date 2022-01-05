@@ -12,6 +12,22 @@
 
 #include "network_drflac.h"
 
+static NetworkDrFlac_Err_Vals ndf_ErrorValue(const BlockVF_Err_Vals bvferr)
+{
+    switch(bvferr)
+    {
+        case BLOCKVF_SUCCESS:
+        return NDRFLAC_SUCCESS;
+
+        case BLOCKVF_MEM_NEED_MORE:
+        return NDRFLAC_NEED_MORE_DATA;
+
+        case BLOCKVF_GENERIC_ERROR:
+        default:
+        return NDRFLAC_GENERIC_ERROR;
+    }
+}
+
 static ma_result on_seek_mem(ma_decoder *pDecoder, int64_t offset, ma_seek_origin origin)
 {
     return blockvf_seek((blockvf*)pDecoder->pUserData, offset, origin);
@@ -192,7 +208,7 @@ NetworkDrFlac_Err_Vals network_drflac_read_pcm_frames_f32(NetworkDrFlac *ndrflac
             if(!BLOCKVF_OK(&ndrflac->vf))
             {
                 if(openRes == MA_SUCCESS) ma_decoder_uninit(&ndrflac->decoder);
-                retval = (NetworkDrFlac_Err_Vals)ndrflac->vf.lastdata.code;
+                retval = ndf_ErrorValue(ndrflac->vf.lastdata.code);
                 pReturnData->needed_offset = ndrflac->vf.lastdata.extradata;                
                 printf("network_drflac: another error?\n");
             }
@@ -212,7 +228,7 @@ NetworkDrFlac_Err_Vals network_drflac_read_pcm_frames_f32(NetworkDrFlac *ndrflac
     const bool seekres = MA_SUCCESS == ma_decoder_seek_to_pcm_frame(&ndrflac->decoder, ndrflac->currentFrame);
     if(!BLOCKVF_OK(&ndrflac->vf))
     {
-        retval = (NetworkDrFlac_Err_Vals)ndrflac->vf.lastdata.code;
+        retval = ndf_ErrorValue(ndrflac->vf.lastdata.code);
         pReturnData->needed_offset = ndrflac->vf.lastdata.extradata;
         printf("network_drflac_read_pcm_frames_f32_mem: failed seek_to_pcm_frame NOT OK current: %u desired: %u\n", currentPCMFrame32, ndrflac->currentFrame);
         goto network_drflac_read_pcm_frames_f32_mem_FAIL;        
@@ -238,7 +254,7 @@ NetworkDrFlac_Err_Vals network_drflac_read_pcm_frames_f32(NetworkDrFlac *ndrflac
         ma_result decRes = ma_decoder_read_pcm_frames(&ndrflac->decoder, outFloat, toread, &frames_decoded);
         if(!BLOCKVF_OK(&ndrflac->vf))
         {
-            retval = (NetworkDrFlac_Err_Vals)ndrflac->vf.lastdata.code;
+            retval = ndf_ErrorValue(ndrflac->vf.lastdata.code);
             pReturnData->needed_offset = ndrflac->vf.lastdata.extradata;
             printf("network_drflac_read_pcm_frames_f32_mem: failed read_pcm_frames_f32\n");
             goto network_drflac_read_pcm_frames_f32_mem_FAIL;
