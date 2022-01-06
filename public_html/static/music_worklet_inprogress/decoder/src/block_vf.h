@@ -3,8 +3,6 @@
 #include <stdint.h>
 #include <inttypes.h>
 
-#include "dr_flac.h"
-
 typedef struct blockvf_memrange {
     uint32_t start;
     struct blockvf_memrange *next;

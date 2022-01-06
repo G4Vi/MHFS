@@ -407,6 +407,7 @@ const MHFSPlayer = async function(opt) {
                     }
                     that.NWDRFLAC.close();
                     that.NWDRFLAC = null;
+                    decoder.nwdrflac = null;
                     break SAMPLELOOP;
                 }
                 // We better not modify the AQ if we're cancelled

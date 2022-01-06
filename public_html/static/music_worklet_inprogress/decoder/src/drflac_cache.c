@@ -2,6 +2,9 @@
 #include <stdbool.h>
 #include <inttypes.h>
 
+//#define DRFLAC_IMPLEMENTATION
+//#include "dr_flac.h"
+
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
 
@@ -31,6 +34,11 @@ static ma_result on_seek_mem(ma_decoder *pDecoder, int64_t offset, ma_seek_origi
     return blockvf_seek((blockvf*)pDecoder->pUserData, offset, origin);
 }
 
+static drflac_bool32 on_seek_mem_drflac(void* pUserData, int offset, drflac_seek_origin origin)
+{
+    return blockvf_seek((blockvf *)pUserData, offset, (ma_seek_origin)origin) == MA_SUCCESS;
+}
+
 static const unsigned char *vorbis_comment_get_kv_match(const unsigned char *commentstr,  const char *keyname)
 {
     const unsigned keylen = strlen(keyname);
@@ -39,7 +47,7 @@ static const unsigned char *vorbis_comment_get_kv_match(const unsigned char *com
     return &commentstr[keylen+1];   
 }
 
-static void on_meta(void *pUserData, drflac_metadata *pMetadata)
+static void on_meta_drflac(void *pUserData, drflac_metadata *pMetadata)
 {
     if(pMetadata->type != DRFLAC_METADATA_BLOCK_TYPE_VORBIS_COMMENT) return;
     NetworkDrFlac *ndrflac = (NetworkDrFlac *)pUserData;  
@@ -48,7 +56,7 @@ static void on_meta(void *pUserData, drflac_metadata *pMetadata)
     unsigned char *commentstr = malloc(128);
     for(unsigned i = 0; i < pMetadata->data.vorbis_comment.commentCount; i++)
     {
-        const unsigned commentsize = *(uint32_t*)comments;
+        const unsigned commentsize = *comments| *(comments+1) << 8 |  *(comments+2) << 16 | *(comments+3) << 24;
         comments += 4;
         if(commentsize >= sizeof(commentstr))
         {
@@ -83,6 +91,14 @@ static void on_meta(void *pUserData, drflac_metadata *pMetadata)
 static ma_result on_read_mem(ma_decoder *pDecoder, void* bufferOut, size_t bytesToRead, size_t *bytesRead)
 {
     return blockvf_read((blockvf*)pDecoder->pUserData, bufferOut, bytesToRead, bytesRead);
+}
+
+static size_t on_read_mem_drflac(void* pUserData, void* bufferOut, size_t bytesToRead)
+{
+    size_t bytesRead;
+    const ma_result res =  blockvf_read((blockvf*)pUserData, bufferOut, bytesToRead, &bytesRead);
+    if(res == MA_SUCCESS) return bytesRead;
+    return 0;
 }
 
 uint64_t network_drflac_totalPCMFrameCount(NetworkDrFlac *ndrflac)
@@ -124,7 +140,9 @@ void network_drflac_init(NetworkDrFlac *ndrflac, const unsigned blocksize)
 
 void network_drflac_deinit(NetworkDrFlac *ndrflac)
 {
+    ndrflac->meta.initialized = false;
     if(ndrflac->initialized) ma_decoder_uninit(&ndrflac->decoder);
+    ndrflac->initialized = false;
     blockvf_deinit(&ndrflac->vf);
 }
 
@@ -218,6 +236,17 @@ NetworkDrFlac_Err_Vals network_drflac_read_pcm_frames_f32(NetworkDrFlac *ndrflac
             goto network_drflac_read_pcm_frames_f32_mem_FAIL;    
         }
         ndrflac->initialized = true;
+
+        if(!ndrflac->meta.initialized)
+        {
+            unsigned savefileoffset = ndrflac->vf.fileoffset;
+            ndrflac->vf.fileoffset = 0;
+            drflac *pFlac = drflac_open_with_metadata(&on_read_mem_drflac, &on_seek_mem_drflac, &on_meta_drflac, &ndrflac->vf, NULL);
+            if(pFlac != NULL) drflac_close(pFlac);
+            ndrflac->vf.fileoffset = savefileoffset;
+            ndrflac->vf.lastdata.code = BLOCKVF_SUCCESS;
+            ndrflac->meta.initialized = true;
+        }
 
         /*ma_format format;
         ma_uint32 channels;
