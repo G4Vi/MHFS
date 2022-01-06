@@ -1,9 +1,7 @@
 #include <stdio.h>
 #include <stdbool.h>
-
 #include <inttypes.h>
 
-#define DR_FLAC_BUFFER_SIZE (4096 * 16)
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
 
@@ -220,6 +218,40 @@ NetworkDrFlac_Err_Vals network_drflac_read_pcm_frames_f32(NetworkDrFlac *ndrflac
             goto network_drflac_read_pcm_frames_f32_mem_FAIL;    
         }
         ndrflac->initialized = true;
+
+        /*ma_format format;
+        ma_uint32 channels;
+        ma_uint32 sampleRate;
+        ma_decoder tempdec;
+        unsigned savefileoffset = ndrflac->vf.fileoffset;
+        ndrflac->vf.fileoffset = 0;
+        config = ma_decoder_config_init(ma_format_unknown, 0, 0);
+        ma_decoder_init(&on_read_mem, &on_seek_mem, &ndrflac->vf, &config, &tempdec);
+        ma_data_source_get_data_format(tempdec.pBackend, &format, &channels, &sampleRate, NULL, 0);
+        ma_decoder_uninit(&tempdec);
+        ndrflac->vf.fileoffset = savefileoffset;
+        unsigned bps = 0;
+        switch(format)
+        {
+            case ma_format_u8:
+            bps = 8;
+            break;
+            case ma_format_s16:
+            bps = 16;
+            break;
+            case ma_format_s24:
+            bps = 24;
+            break;
+            case ma_format_s32:
+            case ma_format_f32:
+            bps = 32;
+            break;
+            default:
+            bps = 0;
+            break;
+        }
+
+        printf("channels %u, sampleRate %u bitdepth %u\n", channels, sampleRate, bps );*/
     }
 
     // seek to sample 
