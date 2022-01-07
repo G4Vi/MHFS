@@ -306,7 +306,7 @@ NetworkDrFlac_Err_Vals network_drflac_read_pcm_frames_f32(NetworkDrFlac *ndrflac
             printf("network_drflac_read_pcm_frames_f32_mem: failed read_pcm_frames_f32\n");
             goto network_drflac_read_pcm_frames_f32_mem_FAIL;
         }
-        if((decRes != MA_SUCCESS) && (decRes != MA_AT_END))
+        if(decRes != MA_SUCCESS)
         {
             printf("network_drflac_read_pcm_frames_f32_mem: failed read_pcm_frames_f32(decode), ma_result %u\n", decRes);
             goto network_drflac_read_pcm_frames_f32_mem_FAIL;
@@ -318,7 +318,7 @@ NetworkDrFlac_Err_Vals network_drflac_read_pcm_frames_f32(NetworkDrFlac *ndrflac
         ndrflac->currentFrame += frames_decoded;
     }
 
-    printf("returning from ndrflac->currentFrame: %u frames_decoded %"PRIu64" desired %u\n", ndrflac->currentFrame, frames_decoded, desired_pcm_frames);
+    printf("returning from ndrflac->currentFrame: %u, totalFrames %"PRIu64" frames_decoded %"PRIu64" desired %u\n", ndrflac->currentFrame, network_drflac_totalPCMFrameCount(ndrflac), frames_decoded, desired_pcm_frames);
     pReturnData->frames_read = frames_decoded;
     return NDRFLAC_SUCCESS;
 
