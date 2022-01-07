@@ -49,44 +49,30 @@ static const unsigned char *vorbis_comment_get_kv_match(const unsigned char *com
 
 static void on_meta_drflac(void *pUserData, drflac_metadata *pMetadata)
 {
-    if(pMetadata->type != DRFLAC_METADATA_BLOCK_TYPE_VORBIS_COMMENT) return;
-    NetworkDrFlac *ndrflac = (NetworkDrFlac *)pUserData;  
-
-    const unsigned char *comments = (unsigned char *)pMetadata->data.vorbis_comment.pComments;
-    unsigned char *commentstr = malloc(128);
-    for(unsigned i = 0; i < pMetadata->data.vorbis_comment.commentCount; i++)
+    if(pMetadata->type == DRFLAC_METADATA_BLOCK_TYPE_VORBIS_COMMENT)
     {
-        const unsigned commentsize = *comments| *(comments+1) << 8 |  *(comments+2) << 16 | *(comments+3) << 24;
-        comments += 4;
-        if(commentsize >= sizeof(commentstr))
+        drflac_vorbis_comment_iterator comment_iterator;
+        drflac_init_vorbis_comment_iterator(&comment_iterator, pMetadata->data.vorbis_comment.commentCount, pMetadata->data.vorbis_comment.pComments);
+        uint32_t commentLength;
+
+        const char *strAlbum = "ALBUM=";
+        size_t albumlen = strlen(strAlbum);
+        const char *comment;
+        while((comment = drflac_next_vorbis_comment(&comment_iterator, &commentLength)) != NULL)
         {
-            commentstr = realloc(commentstr, commentsize+1);
+            printf("%.*s\n", commentLength, comment);
+            //if(commentLength >= albumlen)
+            //{
+            //    if(memcmp(comment, strAlbum, albumlen) == 0) || 
+            //}
         }
-        memcpy(commentstr, comments, commentsize);
-        comments += commentsize;
-        commentstr[commentsize] = '\0';
-        printf("commentstr %s\n", commentstr);
-        do
-        {
-            const unsigned char *value = vorbis_comment_get_kv_match(commentstr, "ALBUM");
-            if(value != NULL)
-            {
-                snprintf((char*)(ndrflac->meta.album), sizeof(ndrflac->meta.album), "%s", value);
-                printf("album %s\n", ndrflac->meta.album);                
-                break;
-            }
-            value = vorbis_comment_get_kv_match(commentstr, "TRACKNUMBER");
-            if(value != NULL)
-            {
-                snprintf((char*)(ndrflac->meta.trackno), sizeof(ndrflac->meta.trackno), "%s", value);
-                printf("track no %s\n", ndrflac->meta.trackno);
-                break;
-            }
-        }
-        while(0);
     }
-    free(commentstr);
+    else if(pMetadata->type == DRFLAC_METADATA_BLOCK_TYPE_PICTURE)
+    {
+        printf("Picture mime: %.*s\n", pMetadata->data.picture.mimeLength, pMetadata->data.picture.mime);
+    }
 }
+
 
 static ma_result on_read_mem(ma_decoder *pDecoder, void* bufferOut, size_t bytesToRead, size_t *bytesRead)
 {
