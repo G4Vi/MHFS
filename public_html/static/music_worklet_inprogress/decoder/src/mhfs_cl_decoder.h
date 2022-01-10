@@ -51,7 +51,7 @@ void mhfs_cl_decoder_flush(mhfs_cl_decoder *mhfs_d)
 mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32(mhfs_cl_decoder *mhfs_d, mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *outFloat, mhfs_cl_track_return_data *pReturnData)
 {
     // open the decoder if needed
-    if(!pTrack->initialized)
+    if(!pTrack->dec_initialized)
     {
         printf("force open ma_decoder (not initialized)\n");
         const mhfs_cl_track_error openCode = mhfs_cl_track_read_pcm_frames_f32(pTrack, 0, NULL, pReturnData);

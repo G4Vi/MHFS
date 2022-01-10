@@ -108,10 +108,8 @@ const MHFSCLTrack = async function(theURL, gsignal) {
     }
     let that = {};
     that.CHUNKSIZE = 262144;
-    that.ptr = MHFSCL.mhfs_cl_track_open(that.CHUNKSIZE);
-    if(!that.ptr) throw("failed mhfs_cl_track_open");
-    
-    that.downloadChunk = async function(start, mysignal) {
+
+    that._downloadChunk = async function(start, mysignal) {
         if(start % that.CHUNKSIZE)
         {
             throw("start is not a multiple of CHUNKSIZE: " + start);
@@ -120,19 +118,31 @@ const MHFSCLTrack = async function(theURL, gsignal) {
         const end = that.filesize ? Math.min(def_end, that.filesize-1) : def_end; 
         let xhr = await makeRequest('GET', theURL, start, end, mysignal);
         that.filesize = GetFileSize(xhr);
+        return xhr;
+    };
+
+    that._storeChunk = function(xhr, start) {
         let blockptr = MHFSCL.mhfs_cl_track_add_block(that.ptr, start, that.filesize);
         if(!blockptr)
         {
             throw("failed MHFSCL.mhfs_cl_track_add_block");
         }
         let dataHeap = new Uint8Array(MHFSCL.Module.HEAPU8.buffer, blockptr, xhr.response.byteLength);
-        dataHeap.set(new Uint8Array(xhr.response));         
-        return xhr.response.byteLength;
-    };  
+        dataHeap.set(new Uint8Array(xhr.response));
+    };
+
+    that.downloadAndStoreChunk = async function(start, mysignal) {
+        let xhr = await that._downloadChunk(start, mysignal);
+        that._storeChunk(xhr, start);
+        return xhr;
+    };
 
     that.close = async function() {
         if(that.ptr){
-            MHFSCL.mhfs_cl_track_close(that.ptr);
+            if(that.initialized) {
+                MHFSCL.mhfs_cl_track_deinit(that.ptr);
+            }
+            MHFSCL.Module._free(that.ptr);
             that.ptr = null;
         }                    
     };
@@ -145,32 +155,43 @@ const MHFSCLTrack = async function(theURL, gsignal) {
         return MHFSCL.mhfs_cl_track_currentFrame(that.ptr);
     };
 
-    // open MHFSCLTrack for the first time
-    for(let start = 0; ;) {
-        try {
-            await that.downloadChunk(start, gsignal);
-        } catch(error) {
-            that.close();
-            throw(error); 
-        }
-        const rd = MHFSCL.Module._malloc(MHFSCL.mhfs_cl_track_return_data_sizeof)
-        const code = MHFSCL.mhfs_cl_track_read_pcm_frames_f32(that.ptr, 0, 0, rd);
-        start = MHFSCL.UINT32Value(rd);
-        MHFSCL.Module._free(rd);
-        if(code === MHFSCL.MHFS_CL_TRACK_SUCCESS) break;
-        if(code !== MHFSCL.MHFS_CL_TRACK_NEED_MORE_DATA){
-            that.close();
-            throw("Failed opening MHFSCLTrack");
+    // allocate memory for the mhfs_cl_track and return data
+    const alignedTrackSize = MHFSCL.AlignedSize(MHFSCL.mhfs_cl_track_sizeof);
+    that.ptr = MHFSCL.Module._malloc(alignedTrackSize + MHFSCL.mhfs_cl_track_return_data_sizeof);
+    if(!that.ptr) throw("failed malloc");
+    const rd = that.ptr + alignedTrackSize;
+    try {
+        // initialize the track
+        let start = 0;
+        const firstreq = await that._downloadChunk(start, gsignal);
+        const mime = firstreq.getResponseHeader('Content-Type') || '';
+        MHFSCL.mhfs_cl_track_init(that.ptr, that.CHUNKSIZE, mime, theURL);
+        that.initialized = true;
+        that._storeChunk(firstreq, start);
+
+        // load enough of the track that the metadata loads
+        for(;;) {
+            const code = MHFSCL.mhfs_cl_track_read_pcm_frames_f32(that.ptr, 0, 0, rd);
+            if(code === MHFSCL.MHFS_CL_TRACK_SUCCESS) break;
+            if(code !== MHFSCL.MHFS_CL_TRACK_NEED_MORE_DATA){
+                that.close();
+                throw("Failed opening MHFSCLTrack");
+            }
+            start = MHFSCL.UINT32Value(rd);
+            await that.downloadAndStoreChunk(start, gsignal);
         }
     }
-       
+    catch(error) {
+        that.close();
+        throw(error);
+    }
 
     that.totalPCMFrameCount = MHFSCL.mhfs_cl_track_totalPCMFrameCount(that.ptr);
     that.sampleRate = MHFSCL.mhfs_cl_track_sampleRate(that.ptr);
     that.bitsPerSample = MHFSCL.mhfs_cl_track_bitsPerSample(that.ptr);
     that.channels = MHFSCL.mhfs_cl_track_channels(that.ptr);
     that.url = theURL;
-    that.duration = that.totalPCMFrameCount / that.sampleRate;
+    that.duration = MHFSCL.mhfs_cl_track_durationInSecs(that.ptr);
 
     return that;
 };
@@ -251,7 +272,7 @@ const MHFSCLDecoder = function(outputSampleRate, outputChannelCount) {
             }
 
             // download more data
-            await that.track.downloadChunk(retdata, mysignal);
+            await that.track.downloadAndStoreChunk(retdata, mysignal);
         }        
     };
 
@@ -299,17 +320,21 @@ Module().then(function(MHFSCLMod){
         return MHFSCL.Module.HEAPU32[ptr >> 2];
     };
 
-    MHFSCL.mhfs_cl_track_return_data_sizeof = MHFSCLMod.ccall('mhfs_cl_track_return_data_sizeof', "number");
+    MHFSCL.AlignedSize = function(size) {
+        return Math.ceil(size/4) * 4;
+    };
 
+    MHFSCL.mhfs_cl_track_return_data_sizeof = MHFSCLMod.ccall('mhfs_cl_track_return_data_sizeof', "number");
     if(MHFSCL.mhfs_cl_track_return_data_sizeof !== 4) {
         throw("Must update usage of MHFSCL.UINT32Value, unexpected MHFSCL.mhfs_cl_track_return_data_sizeof value");
     }
+    MHFSCL.mhfs_cl_track_sizeof =  MHFSCLMod.ccall('mhfs_cl_track_sizeof', "number");
 
     MHFSCL.MHFS_CL_TRACK_SUCCESS = MHFSCLMod.ccall('MHFS_CL_TRACK_SUCCESS_func', "number");
     MHFSCL.MHFS_CL_TRACK_GENERIC_ERROR = MHFSCLMod.ccall('MHFS_CL_TRACK_GENERIC_ERROR_func', "number");
     MHFSCL.MHFS_CL_TRACK_NEED_MORE_DATA = MHFSCLMod.ccall('MHFS_CL_TRACK_NEED_MORE_DATA_func', "number");
 
-    MHFSCL.mhfs_cl_track_init = MHFSCLMod.cwrap('mhfs_cl_track_init', null, ["number", "number"]);
+    MHFSCL.mhfs_cl_track_init = MHFSCLMod.cwrap('mhfs_cl_track_init', null, ["number", "number", "string", "string"]);
 
     MHFSCL.mhfs_cl_track_deinit = MHFSCLMod.cwrap('mhfs_cl_track_deinit', null, ["number"]);
 
@@ -318,10 +343,6 @@ Module().then(function(MHFSCLMod){
     MHFSCL.mhfs_cl_track_seek_to_pcm_frame = MHFSCLMod.cwrap('mhfs_cl_track_seek_to_pcm_frame', "number", ["number", "number"]);
 
     MHFSCL.mhfs_cl_track_read_pcm_frames_f32 = MHFSCLMod.cwrap('mhfs_cl_track_read_pcm_frames_f32', "number", ["number", "number", "number", "number"]);
-
-    MHFSCL.mhfs_cl_track_open = MHFSCLMod.cwrap('mhfs_cl_track_open', "number", ["number"]);
-
-    MHFSCL.mhfs_cl_track_close = MHFSCLMod.cwrap('mhfs_cl_track_close', null, ["number"]);
 
     MHFSCL.mhfs_cl_track_totalPCMFrameCount = MHFSCLMod.cwrap('mhfs_cl_track_totalPCMFrameCount', "number", ["number"]);
 
@@ -332,6 +353,8 @@ Module().then(function(MHFSCLMod){
     MHFSCL.mhfs_cl_track_channels = MHFSCLMod.cwrap('mhfs_cl_track_channels', "number", ["number"]);
 
     MHFSCL.mhfs_cl_track_currentFrame =  MHFSCLMod.cwrap('mhfs_cl_track_currentFrame', "number", ["number"]);
+
+    MHFSCL.mhfs_cl_track_durationInSecs = MHFSCLMod.cwrap('mhfs_cl_track_durationInSecs', "number", ["number"]);
     
     MHFSCL.mhfs_cl_decoder_create = MHFSCLMod.cwrap('mhfs_cl_decoder_create', "number", ["number", "number"]);
 
