@@ -9,26 +9,26 @@ typedef struct {
     bool initialized;
     unsigned char album[256];
     unsigned char trackno[8];
-} NetworkDrFlacMeta;
+} mhfs_cl_track_metadata;
 
 typedef struct {
     ma_decoder decoder;
     bool initialized;
     blockvf vf;
-    NetworkDrFlacMeta meta;
+    mhfs_cl_track_metadata meta;
     uint32_t currentFrame;    
-} NetworkDrFlac;
+} mhfs_cl_track;
 
 typedef enum {
-    NDRFLAC_SUCCESS = 0,
-    NDRFLAC_GENERIC_ERROR = 1,
-    NDRFLAC_NEED_MORE_DATA = 2,
-} NetworkDrFlac_Err_Vals;
+    MHFS_CL_TRACK_SUCCESS = 0,
+    MHFS_CL_TRACK_GENERIC_ERROR = 1,
+    MHFS_CL_TRACK_NEED_MORE_DATA = 2,
+} mhfs_cl_track_error;
 
 typedef union {
     uint32_t frames_read;
     uint32_t needed_offset;
-} NetworkDrFlac_ReturnData;
+} mhfs_cl_track_return_data;
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -37,24 +37,24 @@ typedef union {
 #define LIBEXPORT
 #endif
 
-LIBEXPORT void network_drflac_init(NetworkDrFlac *ndrflac, const unsigned blocksize);
-LIBEXPORT void network_drflac_deinit(NetworkDrFlac *ndrflac);
-LIBEXPORT void *network_drflac_add_block(NetworkDrFlac *ndrflac, const uint32_t block_start, const unsigned filesize);
-LIBEXPORT int network_drflac_seek_to_pcm_frame(NetworkDrFlac *ndrflac, const uint32_t pcmFrameIndex);
-LIBEXPORT NetworkDrFlac_Err_Vals network_drflac_read_pcm_frames_f32(NetworkDrFlac *ndrflac, const uint32_t desired_pcm_frames, float32_t *outFloat, NetworkDrFlac_ReturnData *pReturnData);
+LIBEXPORT void mhfs_cl_track_init(mhfs_cl_track *pTrack, const unsigned blocksize);
+LIBEXPORT void mhfs_cl_track_deinit(mhfs_cl_track *pTrack);
+LIBEXPORT void *mhfs_cl_track_add_block(mhfs_cl_track *pTrack, const uint32_t block_start, const unsigned filesize);
+LIBEXPORT int mhfs_cl_track_seek_to_pcm_frame(mhfs_cl_track *pTrack, const uint32_t pcmFrameIndex);
+LIBEXPORT mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *outFloat, mhfs_cl_track_return_data *pReturnData);
 
 // For JS convenience
 
-LIBEXPORT uint32_t NetworkDrFlac_ReturnData_sizeof(void);
-LIBEXPORT uint32_t NDRFLAC_SUCCESS_func(void);
-LIBEXPORT uint32_t NDRFLAC_GENERIC_ERROR_func(void);
-LIBEXPORT uint32_t NDRFLAC_NEED_MORE_DATA_func(void);
+LIBEXPORT uint32_t mhfs_cl_track_return_data_sizeof(void);
+LIBEXPORT uint32_t MHFS_CL_TRACK_SUCCESS_func(void);
+LIBEXPORT uint32_t MHFS_CL_TRACK_GENERIC_ERROR_func(void);
+LIBEXPORT uint32_t MHFS_CL_TRACK_NEED_MORE_DATA_func(void);
 
-LIBEXPORT NetworkDrFlac *network_drflac_open(const unsigned blocksize);
-LIBEXPORT void network_drflac_close(NetworkDrFlac *ndrflac);
+LIBEXPORT mhfs_cl_track *mhfs_cl_track_open(const unsigned blocksize);
+LIBEXPORT void mhfs_cl_track_close(mhfs_cl_track *pTrack);
 
-LIBEXPORT uint64_t network_drflac_totalPCMFrameCount(NetworkDrFlac *ndrflac);
-LIBEXPORT uint32_t network_drflac_sampleRate(const NetworkDrFlac *ndrflac);
-LIBEXPORT uint8_t network_drflac_bitsPerSample(const NetworkDrFlac *ndrflac);
-LIBEXPORT uint8_t network_drflac_channels(const NetworkDrFlac *ndrflac);
-LIBEXPORT uint64_t network_drflac_currentFrame(const NetworkDrFlac *ndrflac);
+LIBEXPORT uint64_t mhfs_cl_track_totalPCMFrameCount(mhfs_cl_track *pTrack);
+LIBEXPORT uint32_t mhfs_cl_track_sampleRate(const mhfs_cl_track *pTrack);
+LIBEXPORT uint8_t mhfs_cl_track_bitsPerSample(const mhfs_cl_track *pTrack);
+LIBEXPORT uint8_t mhfs_cl_track_channels(const mhfs_cl_track *pTrack);
+LIBEXPORT uint64_t mhfs_cl_track_currentFrame(const mhfs_cl_track *pTrack);

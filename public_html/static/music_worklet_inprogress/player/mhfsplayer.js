@@ -1,4 +1,4 @@
-import { MHFSDecoder } from '../decoder/music_drflac_module.cache.js'
+import { MHFSCLDecoder } from '../decoder/music_drflac_module.cache.js'
 import { Float32AudioRingBufferWriter, Float32AudioRingBufferReader } from './AudioWriterReader.js'
 
 // FIFO mutex
@@ -287,9 +287,9 @@ const MHFSPlayer = async function(opt) {
     that.QState = that.STATES.NEED_FAQ;
     that.Tracks_HEAD;
     that.Tracks_TAIL;   
-    that.NWDRFLAC;    
+    that.CurrentMHFSCLTrack;
     that.FAQ_MUTEX = new Mutex();	
-    that.MHFSDecoder = MHFSDecoder;       
+    that.MHFSCLDecoder = MHFSCLDecoder;
 
     async function fillAudioQueue(track, time) {
         if(that.QState !== that.STATES.NEED_FAQ) {
@@ -310,7 +310,7 @@ const MHFSPlayer = async function(opt) {
             return;
         }
     
-        if(!that.decoder) that.decoder = that.MHFSDecoder(that.sampleRate, that.channels);
+        if(!that.decoder) that.decoder = that.MHFSCLDecoder(that.sampleRate, that.channels);
         const decoder = that.decoder;    
         
         time = time || 0;
@@ -332,7 +332,7 @@ const MHFSPlayer = async function(opt) {
             // open the track in the decoder
             try {
                 await decoder.openURL(track.url, mysignal);
-                that.NWDRFLAC = decoder.nwdrflac;
+                that.CurrentMHFSCLTrack = decoder.track;
             }
             catch(error) {
                 time = 0;
@@ -356,7 +356,7 @@ const MHFSPlayer = async function(opt) {
                 }
                 continue;
             }        
-            track.duration = that.NWDRFLAC.duration;
+            track.duration = that.CurrentMHFSCLTrack.duration;
 
             // We better not modify the AQ if we're cancelled
             if(mysignal.aborted) break;      
@@ -405,9 +405,9 @@ const MHFSPlayer = async function(opt) {
                     if(mysignal.aborted) {
                         break TRACKLOOP;
                     }
-                    that.NWDRFLAC.close();
-                    that.NWDRFLAC = null;
-                    decoder.nwdrflac = null;
+                    that.CurrentMHFSCLTrack.close();
+                    that.CurrentMHFSCLTrack = null;
+                    decoder.track = null;
                     break SAMPLELOOP;
                 }
                 // We better not modify the AQ if we're cancelled

@@ -1,7 +1,7 @@
-import Module from './bin/drflac.js'
+import Module from './bin/_mhfscl.js'
 
-let DrFlac = { 
-    'drflac' : true,
+let MHFSCL = {
+    'mhfscl' : true,
     'ready' : false,
     'on' : function(event, cb) {
         if(event === 'ready') {
@@ -96,20 +96,20 @@ const GetFileSize = function(xhr) {
     return Number(res[1]);
 };
 
-const NetworkDrFlac = async function(theURL, gsignal) {    
-    // make sure drflac is ready. Inlined to avoid await when it's already ready
-    while(typeof DrFlac === 'undefined') {
-        console.log('music_drflac, no drflac sleeping 5ms');
+const MHFSCLTrack = async function(theURL, gsignal) {
+    // make sure MHFSCL is ready. Inlined to avoid await when it's already ready
+    while(typeof MHFSCL === 'undefined') {
+        console.log('MHFSCLTrack no MHFSCL sleeping 5ms');
         await sleep(5);
     }
-    if(!DrFlac.ready) {
-        console.log('music_drflac, waiting for drflac to be ready');
-        await waitForEvent(DrFlac, 'ready');
+    if(!MHFSCL.ready) {
+        console.log('MHFSCLTrack, waiting for MHFSCL to be ready');
+        await waitForEvent(MHFSCL, 'ready');
     }
     let that = {};
     that.CHUNKSIZE = 262144;
-    that.ptr = DrFlac.network_drflac_open(that.CHUNKSIZE);
-    if(!that.ptr) throw("failed network_drflac_open");    
+    that.ptr = MHFSCL.mhfs_cl_track_open(that.CHUNKSIZE);
+    if(!that.ptr) throw("failed mhfs_cl_track_open");
     
     that.downloadChunk = async function(start, mysignal) {
         if(start % that.CHUNKSIZE)
@@ -120,32 +120,32 @@ const NetworkDrFlac = async function(theURL, gsignal) {
         const end = that.filesize ? Math.min(def_end, that.filesize-1) : def_end; 
         let xhr = await makeRequest('GET', theURL, start, end, mysignal);
         that.filesize = GetFileSize(xhr);
-        let blockptr = DrFlac.network_drflac_add_block(that.ptr, start, that.filesize);
+        let blockptr = MHFSCL.mhfs_cl_track_add_block(that.ptr, start, that.filesize);
         if(!blockptr)
         {
-            throw("failed DrFlac.network_drflac_add_block");
+            throw("failed MHFSCL.mhfs_cl_track_add_block");
         }
-        let dataHeap = new Uint8Array(DrFlac.Module.HEAPU8.buffer, blockptr, xhr.response.byteLength);
+        let dataHeap = new Uint8Array(MHFSCL.Module.HEAPU8.buffer, blockptr, xhr.response.byteLength);
         dataHeap.set(new Uint8Array(xhr.response));         
         return xhr.response.byteLength;
     };  
 
     that.close = async function() {
         if(that.ptr){
-            DrFlac.network_drflac_close(that.ptr);
+            MHFSCL.mhfs_cl_track_close(that.ptr);
             that.ptr = null;
         }                    
     };
     
     that.seek = async function(pcmFrameIndex) {
-        if(!DrFlac.network_drflac_seek_to_pcm_frame(that.ptr, pcmFrameIndex)) throw("Failed to seek to " + pcmFrameIndex);                
+        if(!MHFSCL.mhfs_cl_track_seek_to_pcm_frame(that.ptr, pcmFrameIndex)) throw("Failed to seek to " + pcmFrameIndex);
     };
     
     that.currentFrame = function() {
-        return DrFlac.network_drflac_currentFrame(that.ptr);         
+        return MHFSCL.mhfs_cl_track_currentFrame(that.ptr);
     };
 
-    // open drflac for the first time   
+    // open MHFSCLTrack for the first time
     for(let start = 0; ;) {
         try {
             await that.downloadChunk(start, gsignal);
@@ -153,105 +153,105 @@ const NetworkDrFlac = async function(theURL, gsignal) {
             that.close();
             throw(error); 
         }
-        const rd = DrFlac.Module._malloc(DrFlac.NetworkDrFlac_ReturnData_sizeof)
-        const code = DrFlac.network_drflac_read_pcm_frames_f32(that.ptr, 0, 0, rd);
-        start = DrFlac.UINT32Value(rd);
-        DrFlac.Module._free(rd);
-        if(code === DrFlac.NDRFLAC_SUCCESS) break;
-        if(code !== DrFlac.NDRFLAC_NEED_MORE_DATA){
+        const rd = MHFSCL.Module._malloc(MHFSCL.mhfs_cl_track_return_data_sizeof)
+        const code = MHFSCL.mhfs_cl_track_read_pcm_frames_f32(that.ptr, 0, 0, rd);
+        start = MHFSCL.UINT32Value(rd);
+        MHFSCL.Module._free(rd);
+        if(code === MHFSCL.MHFS_CL_TRACK_SUCCESS) break;
+        if(code !== MHFSCL.MHFS_CL_TRACK_NEED_MORE_DATA){
             that.close();
-            throw("Failed opening drflac");
+            throw("Failed opening MHFSCLTrack");
         }
     }
        
 
-    that.totalPCMFrameCount = DrFlac.network_drflac_totalPCMFrameCount(that.ptr);
-    that.sampleRate = DrFlac.network_drflac_sampleRate(that.ptr);
-    that.bitsPerSample = DrFlac.network_drflac_bitsPerSample(that.ptr);
-    that.channels = DrFlac.network_drflac_channels(that.ptr);
+    that.totalPCMFrameCount = MHFSCL.mhfs_cl_track_totalPCMFrameCount(that.ptr);
+    that.sampleRate = MHFSCL.mhfs_cl_track_sampleRate(that.ptr);
+    that.bitsPerSample = MHFSCL.mhfs_cl_track_bitsPerSample(that.ptr);
+    that.channels = MHFSCL.mhfs_cl_track_channels(that.ptr);
     that.url = theURL;
     that.duration = that.totalPCMFrameCount / that.sampleRate;
 
     return that;
 };
-export default NetworkDrFlac;
+export default MHFSCLTrack;
 
-const MHFSDecoder = function(outputSampleRate, outputChannelCount) {
+const MHFSCLDecoder = function(outputSampleRate, outputChannelCount) {
 	const that = {};
-	that.ptr = DrFlac.mhfs_decoder_create(outputSampleRate, outputChannelCount);
+	that.ptr = MHFSCL.mhfs_cl_decoder_create(outputSampleRate, outputChannelCount);
     if(! that.ptr) throw("Failed to create decoder");
     
     that.outputSampleRate = outputSampleRate;
     that.outputChannelCount = outputChannelCount;
 
     that.flush = async function() {
-        DrFlac.mhfs_decoder_flush(that.ptr);
+        MHFSCL.mhfs_cl_decoder_flush(that.ptr);
     };
 	
 	that.close = async function(){
-		if(that.nwdrflac) {
-            await that.nwdrflac.close();
-            that.nwdrflac = null;
+		if(that.track) {
+            await that.track.close();
+            that.track = null;
         }
         if(that.ptr) {
-            DrFlac.mhfs_decoder_close(that.ptr);
+            MHFSCL.mhfs_cl_decoder_close(that.ptr);
             that.ptr = null;
         }		
 	};
     
     that.openURL = async function(url, signal) {
         do {         
-            if(that.nwdrflac) {
-                if(that.nwdrflac.url === url) {                 
+            if(that.track) {
+                if(that.track.url === url) {
                     break;
                 }
-                await that.nwdrflac.close();
-                that.nwdrflac = null;
+                await that.track.close();
+                that.track = null;
                 if(signal.aborted) {
-                    throw("abort after closing NWDRFLAC");
+                    throw("abort after closing track");
                 }                                
             }
-            that.nwdrflac = await NetworkDrFlac(url, signal);
+            that.track = await MHFSCLTrack(url, signal);
         } while(0);
 
         if(signal.aborted) {
             console.log('');
-            await that.nwdrflac.close();
-            that.nwdrflac = null;
-            throw("abort after open NWDRFLAC success");
+            await that.track.close();
+            that.track = null;
+            throw("abort after open track success");
         }       
     };
 	
 	that.seek_input_pcm_frames = async function(pcmFrameIndex) {
-        if(!that.nwdrflac) throw("nothing to seek on");
-        await that.nwdrflac.seek(pcmFrameIndex);
+        if(!that.track) throw("nothing to seek on");
+        await that.track.seek(pcmFrameIndex);
     };
 
     that.seek = async function(floatseconds) {
-        return that.seek_input_pcm_frames(Math.floor(floatseconds * that.nwdrflac.sampleRate));
+        return that.seek_input_pcm_frames(Math.floor(floatseconds * that.track.sampleRate));
     }
 
     that.read_pcm_frames_f32_interleaved = async function(todec, destdata, mysignal) {
               
         while(1) {              
             // attempt to decode the samples
-            const rd = DrFlac.Module._malloc(DrFlac.NetworkDrFlac_ReturnData_sizeof);
-            const code = DrFlac.mhfs_decoder_read_pcm_frames_f32_deinterleaved(that.ptr, that.nwdrflac.ptr, todec, destdata, rd);
-            const retdata = DrFlac.UINT32Value(rd);
-            DrFlac.Module._free(rd);
+            const rd = MHFSCL.Module._malloc(MHFSCL.mhfs_cl_track_return_data_sizeof);
+            const code = MHFSCL.mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(that.ptr, that.track.ptr, todec, destdata, rd);
+            const retdata = MHFSCL.UINT32Value(rd);
+            MHFSCL.Module._free(rd);
 
             // success, retdata is frames read
-            if(code === DrFlac.NDRFLAC_SUCCESS)
+            if(code === MHFSCL.MHFS_CL_TRACK_SUCCESS)
             {
                 return retdata;
             }
-            if(code !== DrFlac.NDRFLAC_NEED_MORE_DATA)
+            if(code !== MHFSCL.MHFS_CL_TRACK_NEED_MORE_DATA)
             {
-                throw("network_drflac_read_pcm_frames_f32 failed");
+                throw("mhfs_cl_track_read_pcm_frames_f32 failed");
             }
 
             // download more data
-            await that.nwdrflac.downloadChunk(retdata, mysignal);
+            await that.track.downloadChunk(retdata, mysignal);
         }        
     };
 
@@ -260,7 +260,7 @@ const MHFSDecoder = function(outputSampleRate, outputChannelCount) {
         const pcm_float_frame_size = f32_size * that.outputChannelCount;
         let theerror;
         let returnval;
-        const destdata = DrFlac.Module._malloc(todec*pcm_float_frame_size);
+        const destdata = MHFSCL.Module._malloc(todec*pcm_float_frame_size);
         try {
             const frames = await that.read_pcm_frames_f32_interleaved(todec, destdata, mysignal);
             if(frames) {
@@ -276,7 +276,7 @@ const MHFSDecoder = function(outputSampleRate, outputChannelCount) {
             theerror = error;
         }
         finally {
-            DrFlac.Module._free(destdata);
+            MHFSCL.Module._free(destdata);
             if(theerror) throw(theerror);
             return returnval;
         }        
@@ -284,67 +284,67 @@ const MHFSDecoder = function(outputSampleRate, outputChannelCount) {
 
     that.getChannelData = function(ptr, frames, channel) {
         const chansize = frames * 4;
-        return new Float32Array(DrFlac.Module.HEAPU8.buffer, ptr+(chansize*channel), frames);
+        return new Float32Array(MHFSCL.Module.HEAPU8.buffer, ptr+(chansize*channel), frames);
     };
 	
 	return that;
 };
-export { MHFSDecoder };
+export { MHFSCLDecoder };
 
 
-Module().then(function(DrFlacMod){
-    DrFlac.Module = DrFlacMod;
+Module().then(function(MHFSCLMod){
+    MHFSCL.Module = MHFSCLMod;
 
-    DrFlac.UINT32Value = function(ptr) {
-        return DrFlac.Module.HEAPU32[ptr >> 2];
+    MHFSCL.UINT32Value = function(ptr) {
+        return MHFSCL.Module.HEAPU32[ptr >> 2];
     };
 
-    DrFlac.NetworkDrFlac_ReturnData_sizeof = DrFlacMod.ccall('NetworkDrFlac_ReturnData_sizeof', "number");
+    MHFSCL.mhfs_cl_track_return_data_sizeof = MHFSCLMod.ccall('mhfs_cl_track_return_data_sizeof', "number");
 
-    if(DrFlac.NetworkDrFlac_ReturnData_sizeof !== 4) {
-        throw("Must update usage of DrFlac.UINT32Value, unexpected DrFlac.NetworkDrFlac_ReturnData_sizeof value");
+    if(MHFSCL.mhfs_cl_track_return_data_sizeof !== 4) {
+        throw("Must update usage of MHFSCL.UINT32Value, unexpected MHFSCL.mhfs_cl_track_return_data_sizeof value");
     }
 
-    DrFlac.NDRFLAC_SUCCESS = DrFlacMod.ccall('NDRFLAC_SUCCESS_func', "number");
-    DrFlac.NDRFLAC_GENERIC_ERROR = DrFlacMod.ccall('NDRFLAC_GENERIC_ERROR_func', "number");
-    DrFlac.NDRFLAC_NEED_MORE_DATA = DrFlacMod.ccall('NDRFLAC_NEED_MORE_DATA_func', "number");
+    MHFSCL.MHFS_CL_TRACK_SUCCESS = MHFSCLMod.ccall('MHFS_CL_TRACK_SUCCESS_func', "number");
+    MHFSCL.MHFS_CL_TRACK_GENERIC_ERROR = MHFSCLMod.ccall('MHFS_CL_TRACK_GENERIC_ERROR_func', "number");
+    MHFSCL.MHFS_CL_TRACK_NEED_MORE_DATA = MHFSCLMod.ccall('MHFS_CL_TRACK_NEED_MORE_DATA_func', "number");
 
-    DrFlac.network_drflac_init = DrFlacMod.cwrap('network_drflac_init', null, ["number", "number"]);
+    MHFSCL.mhfs_cl_track_init = MHFSCLMod.cwrap('mhfs_cl_track_init', null, ["number", "number"]);
 
-    DrFlac.network_drflac_deinit = DrFlacMod.cwrap('network_drflac_deinit', null, ["number"]);
+    MHFSCL.mhfs_cl_track_deinit = MHFSCLMod.cwrap('mhfs_cl_track_deinit', null, ["number"]);
 
-    DrFlac.network_drflac_add_block = DrFlacMod.cwrap('network_drflac_add_block', "number", ["number", "number", "number"]);
+    MHFSCL.mhfs_cl_track_add_block = MHFSCLMod.cwrap('mhfs_cl_track_add_block', "number", ["number", "number", "number"]);
     
-    DrFlac.network_drflac_seek_to_pcm_frame = DrFlacMod.cwrap('network_drflac_seek_to_pcm_frame', "number", ["number", "number"]);
+    MHFSCL.mhfs_cl_track_seek_to_pcm_frame = MHFSCLMod.cwrap('mhfs_cl_track_seek_to_pcm_frame', "number", ["number", "number"]);
 
-    DrFlac.network_drflac_read_pcm_frames_f32 = DrFlacMod.cwrap('network_drflac_read_pcm_frames_f32', "number", ["number", "number", "number", "number"]);
+    MHFSCL.mhfs_cl_track_read_pcm_frames_f32 = MHFSCLMod.cwrap('mhfs_cl_track_read_pcm_frames_f32', "number", ["number", "number", "number", "number"]);
 
-    DrFlac.network_drflac_open = DrFlacMod.cwrap('network_drflac_open', "number", ["number"]);
+    MHFSCL.mhfs_cl_track_open = MHFSCLMod.cwrap('mhfs_cl_track_open', "number", ["number"]);
 
-    DrFlac.network_drflac_close = DrFlacMod.cwrap('network_drflac_close', null, ["number"]);
+    MHFSCL.mhfs_cl_track_close = MHFSCLMod.cwrap('mhfs_cl_track_close', null, ["number"]);
 
-    DrFlac.network_drflac_totalPCMFrameCount = DrFlacMod.cwrap('network_drflac_totalPCMFrameCount', "number", ["number"]);
+    MHFSCL.mhfs_cl_track_totalPCMFrameCount = MHFSCLMod.cwrap('mhfs_cl_track_totalPCMFrameCount', "number", ["number"]);
 
-    DrFlac.network_drflac_sampleRate = DrFlacMod.cwrap('network_drflac_sampleRate', "number", ["number"]);
+    MHFSCL.mhfs_cl_track_sampleRate = MHFSCLMod.cwrap('mhfs_cl_track_sampleRate', "number", ["number"]);
 
-    DrFlac.network_drflac_bitsPerSample = DrFlacMod.cwrap('network_drflac_bitsPerSample', "number", ["number"]);
+    MHFSCL.mhfs_cl_track_bitsPerSample = MHFSCLMod.cwrap('mhfs_cl_track_bitsPerSample', "number", ["number"]);
     
-    DrFlac.network_drflac_channels = DrFlacMod.cwrap('network_drflac_channels', "number", ["number"]);
+    MHFSCL.mhfs_cl_track_channels = MHFSCLMod.cwrap('mhfs_cl_track_channels', "number", ["number"]);
 
-    DrFlac.network_drflac_currentFrame =  DrFlacMod.cwrap('network_drflac_currentFrame', "number", ["number"]);
+    MHFSCL.mhfs_cl_track_currentFrame =  MHFSCLMod.cwrap('mhfs_cl_track_currentFrame', "number", ["number"]);
     
-    DrFlac.mhfs_decoder_create = DrFlacMod.cwrap('mhfs_decoder_create', "number", ["number", "number"]);
+    MHFSCL.mhfs_cl_decoder_create = MHFSCLMod.cwrap('mhfs_cl_decoder_create', "number", ["number", "number"]);
 
-    DrFlac.mhfs_decoder_read_pcm_frames_f32_deinterleaved = DrFlacMod.cwrap('mhfs_decoder_read_pcm_frames_f32_deinterleaved', "number", ["number", "number", "number", "number", "number"]);
+    MHFSCL.mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved = MHFSCLMod.cwrap('mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved', "number", ["number", "number", "number", "number", "number"]);
 
-    DrFlac.mhfs_decoder_close = DrFlacMod.cwrap('mhfs_decoder_close', null, ["number"]);
+    MHFSCL.mhfs_cl_decoder_close = MHFSCLMod.cwrap('mhfs_cl_decoder_close', null, ["number"]);
 
-    DrFlac.mhfs_decoder_flush = DrFlacMod.cwrap('mhfs_decoder_flush', null, ["number"]);
+    MHFSCL.mhfs_cl_decoder_flush = MHFSCLMod.cwrap('mhfs_cl_decoder_flush', null, ["number"]);
 
-    console.log('NetworkDrFlac is ready!');
-    DrFlac.ready = true;
-    if(DrFlac.on_ready) {
-        DrFlac.on_ready();
+    console.log('MHFSCL is ready!');
+    MHFSCL.ready = true;
+    if(MHFSCL.on_ready) {
+        MHFSCL.on_ready();
     }    
 });
 

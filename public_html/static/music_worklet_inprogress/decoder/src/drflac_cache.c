@@ -13,41 +13,33 @@
 
 #include "network_drflac.h"
 
-static NetworkDrFlac_Err_Vals ndf_ErrorValue(const BlockVF_Err_Vals bvferr)
+static mhfs_cl_track_error mhfs_cl_track_error_from_blockvf_error(const blockvf_error bvferr)
 {
     switch(bvferr)
     {
         case BLOCKVF_SUCCESS:
-        return NDRFLAC_SUCCESS;
+        return MHFS_CL_TRACK_SUCCESS;
 
         case BLOCKVF_MEM_NEED_MORE:
-        return NDRFLAC_NEED_MORE_DATA;
+        return MHFS_CL_TRACK_NEED_MORE_DATA;
 
         case BLOCKVF_GENERIC_ERROR:
         default:
-        return NDRFLAC_GENERIC_ERROR;
+        return MHFS_CL_TRACK_GENERIC_ERROR;
     }
 }
 
-static ma_result on_seek_mem(ma_decoder *pDecoder, int64_t offset, ma_seek_origin origin)
+static ma_result mhfs_cl_track_on_seek_ma_decoder(ma_decoder *pDecoder, int64_t offset, ma_seek_origin origin)
 {
     return blockvf_seek((blockvf*)pDecoder->pUserData, offset, origin);
 }
 
-static drflac_bool32 on_seek_mem_drflac(void* pUserData, int offset, drflac_seek_origin origin)
+static drflac_bool32 mhfs_cl_track_on_seek_drflac(void* pUserData, int offset, drflac_seek_origin origin)
 {
     return blockvf_seek((blockvf *)pUserData, offset, (ma_seek_origin)origin) == MA_SUCCESS;
 }
 
-static const unsigned char *vorbis_comment_get_kv_match(const unsigned char *commentstr,  const char *keyname)
-{
-    const unsigned keylen = strlen(keyname);
-    if(memcmp(commentstr, keyname, keylen) != 0) return NULL;
-    if(commentstr[keylen] != '=') return NULL;
-    return &commentstr[keylen+1];   
-}
-
-static void on_meta_drflac(void *pUserData, drflac_metadata *pMetadata)
+static void mhfs_cl_track_on_meta_drflac(void *pUserData, drflac_metadata *pMetadata)
 {
     if(pMetadata->type == DRFLAC_METADATA_BLOCK_TYPE_VORBIS_COMMENT)
     {
@@ -61,10 +53,6 @@ static void on_meta_drflac(void *pUserData, drflac_metadata *pMetadata)
         while((comment = drflac_next_vorbis_comment(&comment_iterator, &commentLength)) != NULL)
         {
             printf("%.*s\n", commentLength, comment);
-            //if(commentLength >= albumlen)
-            //{
-            //    if(memcmp(comment, strAlbum, albumlen) == 0) || 
-            //}
         }
     }
     else if(pMetadata->type == DRFLAC_METADATA_BLOCK_TYPE_PICTURE)
@@ -74,12 +62,12 @@ static void on_meta_drflac(void *pUserData, drflac_metadata *pMetadata)
 }
 
 
-static ma_result on_read_mem(ma_decoder *pDecoder, void* bufferOut, size_t bytesToRead, size_t *bytesRead)
+static ma_result mhfs_cl_track_on_read_ma_decoder(ma_decoder *pDecoder, void* bufferOut, size_t bytesToRead, size_t *bytesRead)
 {
     return blockvf_read((blockvf*)pDecoder->pUserData, bufferOut, bytesToRead, bytesRead);
 }
 
-static size_t on_read_mem_drflac(void* pUserData, void* bufferOut, size_t bytesToRead)
+static size_t mhfs_cl_track_on_read_drflac(void* pUserData, void* bufferOut, size_t bytesToRead)
 {
     size_t bytesRead;
     const ma_result res =  blockvf_read((blockvf*)pUserData, bufferOut, bytesToRead, &bytesRead);
@@ -87,164 +75,164 @@ static size_t on_read_mem_drflac(void* pUserData, void* bufferOut, size_t bytesT
     return 0;
 }
 
-uint64_t network_drflac_totalPCMFrameCount(NetworkDrFlac *ndrflac)
+uint64_t mhfs_cl_track_totalPCMFrameCount(mhfs_cl_track *pTrack)
 {
     uint64_t length = 0;
-    ma_decoder_get_length_in_pcm_frames(&ndrflac->decoder, &length);
+    ma_decoder_get_length_in_pcm_frames(&pTrack->decoder, &length);
     return length;
 }
 
-uint32_t network_drflac_sampleRate(const NetworkDrFlac *ndrflac)
+uint32_t mhfs_cl_track_sampleRate(const mhfs_cl_track *pTrack)
 {
     //TODO fix me?
-    return ndrflac->decoder.outputSampleRate;
+    return pTrack->decoder.outputSampleRate;
 }
 
-uint8_t network_drflac_bitsPerSample(const NetworkDrFlac *ndrflac)
+uint8_t mhfs_cl_track_bitsPerSample(const mhfs_cl_track *pTrack)
 {
-    //return ndrflac->pFlac->bitsPerSample;
+    //return pTrack->pFlac->bitsPerSample;
     //TODO fix me
     return 16;
 }
 
-uint8_t network_drflac_channels(const NetworkDrFlac *ndrflac)
+uint8_t mhfs_cl_track_channels(const mhfs_cl_track *pTrack)
 {
     //TODO fix me?
-    //return ndrflac->pFlac->channels;
-    return ndrflac->decoder.outputChannels;
+    //return pTrack->pFlac->channels;
+    return pTrack->decoder.outputChannels;
 }
 
-void network_drflac_init(NetworkDrFlac *ndrflac, const unsigned blocksize)
+void mhfs_cl_track_init(mhfs_cl_track *pTrack, const unsigned blocksize)
 {
-    ndrflac->initialized = false;
-    blockvf_init(&ndrflac->vf, blocksize);    
-    ndrflac->meta.initialized = false;
-    ndrflac->meta.album[0] = '\0';
-    ndrflac->meta.trackno[0] = '\0';
-    ndrflac->currentFrame = 0;
+    pTrack->initialized = false;
+    blockvf_init(&pTrack->vf, blocksize);
+    pTrack->meta.initialized = false;
+    pTrack->meta.album[0] = '\0';
+    pTrack->meta.trackno[0] = '\0';
+    pTrack->currentFrame = 0;
 }
 
-void network_drflac_deinit(NetworkDrFlac *ndrflac)
+void mhfs_cl_track_deinit(mhfs_cl_track *pTrack)
 {
-    ndrflac->meta.initialized = false;
-    if(ndrflac->initialized) ma_decoder_uninit(&ndrflac->decoder);
-    ndrflac->initialized = false;
-    blockvf_deinit(&ndrflac->vf);
+    pTrack->meta.initialized = false;
+    if(pTrack->initialized) ma_decoder_uninit(&pTrack->decoder);
+    pTrack->initialized = false;
+    blockvf_deinit(&pTrack->vf);
 }
 
-void *network_drflac_add_block(NetworkDrFlac *ndrflac, const uint32_t block_start, const unsigned filesize)
+void *mhfs_cl_track_add_block(mhfs_cl_track *pTrack, const uint32_t block_start, const unsigned filesize)
 {
-    return blockvf_add_block(&ndrflac->vf, block_start, filesize);
+    return blockvf_add_block(&pTrack->vf, block_start, filesize);
 }
 
-// network_drflac_read_pcm_frames_f32 will catch the error if we dont here
-int network_drflac_seek_to_pcm_frame(NetworkDrFlac *ndrflac, const uint32_t pcmFrameIndex)
+// mhfs_cl_track_read_pcm_frames_f32 will catch the error if we dont here
+int mhfs_cl_track_seek_to_pcm_frame(mhfs_cl_track *pTrack, const uint32_t pcmFrameIndex)
 {
-    if(ndrflac->initialized)
+    if(pTrack->initialized)
     {
-        if(pcmFrameIndex >= network_drflac_totalPCMFrameCount(ndrflac)) return 0;
+        if(pcmFrameIndex >= mhfs_cl_track_totalPCMFrameCount(pTrack)) return 0;
     }
-    ndrflac->currentFrame = pcmFrameIndex;
+    pTrack->currentFrame = pcmFrameIndex;
     return 1;    
 }
 
-uint32_t NetworkDrFlac_ReturnData_sizeof(void)
+uint32_t mhfs_cl_track_return_data_sizeof(void)
 {
-    return sizeof(NetworkDrFlac_ReturnData);
+    return sizeof(mhfs_cl_track_return_data);
 }
 
-uint32_t NDRFLAC_SUCCESS_func(void)
+uint32_t MHFS_CL_TRACK_SUCCESS_func(void)
 {
-    return NDRFLAC_SUCCESS;
+    return MHFS_CL_TRACK_SUCCESS;
 }
 
-uint32_t NDRFLAC_GENERIC_ERROR_func(void)
+uint32_t MHFS_CL_TRACK_GENERIC_ERROR_func(void)
 {
-    return NDRFLAC_GENERIC_ERROR;
+    return MHFS_CL_TRACK_GENERIC_ERROR;
 }
 
-uint32_t NDRFLAC_NEED_MORE_DATA_func(void)
+uint32_t MHFS_CL_TRACK_NEED_MORE_DATA_func(void)
 {
-    return NDRFLAC_NEED_MORE_DATA;
+    return MHFS_CL_TRACK_NEED_MORE_DATA;
 }
 
-NetworkDrFlac *network_drflac_open(const unsigned blocksize)
+mhfs_cl_track *mhfs_cl_track_open(const unsigned blocksize)
 {    
-    NetworkDrFlac *ndrflac = malloc(sizeof(NetworkDrFlac));
-    if(ndrflac == NULL)
+    mhfs_cl_track *pTrack = malloc(sizeof(mhfs_cl_track));
+    if(pTrack == NULL)
     {
         return NULL;
     }
-    network_drflac_init(ndrflac, blocksize);
-    return ndrflac;
+    mhfs_cl_track_init(pTrack, blocksize);
+    return pTrack;
 }
 
-void network_drflac_close(NetworkDrFlac *ndrflac)
+void mhfs_cl_track_close(mhfs_cl_track *pTrack)
 {
-    network_drflac_deinit(ndrflac);
-    free(ndrflac);
+    mhfs_cl_track_deinit(pTrack);
+    free(pTrack);
 }
 
-uint64_t network_drflac_currentFrame(const NetworkDrFlac *ndrflac)
+uint64_t mhfs_cl_track_currentFrame(const mhfs_cl_track *pTrack)
 {
-    return ndrflac->currentFrame;
+    return pTrack->currentFrame;
 }
 
-NetworkDrFlac_Err_Vals network_drflac_read_pcm_frames_f32(NetworkDrFlac *ndrflac, const uint32_t desired_pcm_frames, float32_t *outFloat, NetworkDrFlac_ReturnData *pReturnData)
+mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *outFloat, mhfs_cl_track_return_data *pReturnData)
 {
-    NetworkDrFlac_ReturnData rd;
+    mhfs_cl_track_return_data rd;
     if(pReturnData == NULL) pReturnData = &rd;
-    NetworkDrFlac_Err_Vals retval = NDRFLAC_SUCCESS;
-    ndrflac->vf.lastdata.code = BLOCKVF_SUCCESS;
+    mhfs_cl_track_error retval = MHFS_CL_TRACK_SUCCESS;
+    pTrack->vf.lastdata.code = BLOCKVF_SUCCESS;
 
     // initialize drflac if necessary
-    if(!ndrflac->initialized)
+    if(!pTrack->initialized)
     {
-        ndrflac->vf.fileoffset = 0;
+        pTrack->vf.fileoffset = 0;
 
         // finally open the file
         ma_decoder_config config = ma_decoder_config_init(ma_format_f32, 0, 0);
-        ma_result openRes = ma_decoder_init(&on_read_mem, &on_seek_mem, &ndrflac->vf, &config, &ndrflac->decoder);
-        if((openRes != MA_SUCCESS) || (!BLOCKVF_OK(&ndrflac->vf)))
+        ma_result openRes = ma_decoder_init(&mhfs_cl_track_on_read_ma_decoder, &mhfs_cl_track_on_seek_ma_decoder, &pTrack->vf, &config, &pTrack->decoder);
+        if((openRes != MA_SUCCESS) || (!BLOCKVF_OK(&pTrack->vf)))
         {
-            if(!BLOCKVF_OK(&ndrflac->vf))
+            if(!BLOCKVF_OK(&pTrack->vf))
             {
-                if(openRes == MA_SUCCESS) ma_decoder_uninit(&ndrflac->decoder);
-                retval = ndf_ErrorValue(ndrflac->vf.lastdata.code);
-                pReturnData->needed_offset = ndrflac->vf.lastdata.extradata;                
-                printf("network_drflac: another error?\n");
+                if(openRes == MA_SUCCESS) ma_decoder_uninit(&pTrack->decoder);
+                retval = mhfs_cl_track_error_from_blockvf_error(pTrack->vf.lastdata.code);
+                pReturnData->needed_offset = pTrack->vf.lastdata.extradata;
+                printf("%s: another error?\n", __func__);
             }
             else
             {
-                retval = NDRFLAC_GENERIC_ERROR;
-                printf("network_drflac: failed to open drflac\n"); 
+                retval = MHFS_CL_TRACK_GENERIC_ERROR;
+                printf("%s: failed to open ma_decoder\n", __func__);
             }
-            goto network_drflac_read_pcm_frames_f32_mem_FAIL;    
+            goto mhfs_cl_track_read_pcm_frames_f32_FAIL;
         }
-        ndrflac->initialized = true;
+        pTrack->initialized = true;
 
-        if(!ndrflac->meta.initialized)
+        if(!pTrack->meta.initialized)
         {
-            unsigned savefileoffset = ndrflac->vf.fileoffset;
-            ndrflac->vf.fileoffset = 0;
-            drflac *pFlac = drflac_open_with_metadata(&on_read_mem_drflac, &on_seek_mem_drflac, &on_meta_drflac, &ndrflac->vf, NULL);
+            unsigned savefileoffset = pTrack->vf.fileoffset;
+            pTrack->vf.fileoffset = 0;
+            drflac *pFlac = drflac_open_with_metadata(&mhfs_cl_track_on_read_drflac, &mhfs_cl_track_on_seek_drflac, &mhfs_cl_track_on_meta_drflac, &pTrack->vf, NULL);
             if(pFlac != NULL) drflac_close(pFlac);
-            ndrflac->vf.fileoffset = savefileoffset;
-            ndrflac->vf.lastdata.code = BLOCKVF_SUCCESS;
-            ndrflac->meta.initialized = true;
+            pTrack->vf.fileoffset = savefileoffset;
+            pTrack->vf.lastdata.code = BLOCKVF_SUCCESS;
+            pTrack->meta.initialized = true;
         }
 
         /*ma_format format;
         ma_uint32 channels;
         ma_uint32 sampleRate;
         ma_decoder tempdec;
-        unsigned savefileoffset = ndrflac->vf.fileoffset;
-        ndrflac->vf.fileoffset = 0;
+        unsigned savefileoffset = pTrack->vf.fileoffset;
+        pTrack->vf.fileoffset = 0;
         config = ma_decoder_config_init(ma_format_unknown, 0, 0);
-        ma_decoder_init(&on_read_mem, &on_seek_mem, &ndrflac->vf, &config, &tempdec);
+        ma_decoder_init(&mhfs_cl_track_on_read_ma_decoder, &mhfs_cl_track_on_seek_ma_decoder, &pTrack->vf, &config, &tempdec);
         ma_data_source_get_data_format(tempdec.pBackend, &format, &channels, &sampleRate, NULL, 0);
         ma_decoder_uninit(&tempdec);
-        ndrflac->vf.fileoffset = savefileoffset;
+        pTrack->vf.fileoffset = savefileoffset;
         unsigned bps = 0;
         switch(format)
         {
@@ -270,21 +258,21 @@ NetworkDrFlac_Err_Vals network_drflac_read_pcm_frames_f32(NetworkDrFlac *ndrflac
     }
 
     // seek to sample 
-    printf("seek to %u d_pcmframes %u\n", ndrflac->currentFrame, desired_pcm_frames);
+    printf("seek to %u d_pcmframes %u\n", pTrack->currentFrame, desired_pcm_frames);
     const uint32_t currentPCMFrame32 = 0xFFFFFFFF;
-    const bool seekres = MA_SUCCESS == ma_decoder_seek_to_pcm_frame(&ndrflac->decoder, ndrflac->currentFrame);
-    if(!BLOCKVF_OK(&ndrflac->vf))
+    const bool seekres = MA_SUCCESS == ma_decoder_seek_to_pcm_frame(&pTrack->decoder, pTrack->currentFrame);
+    if(!BLOCKVF_OK(&pTrack->vf))
     {
-        retval = ndf_ErrorValue(ndrflac->vf.lastdata.code);
-        pReturnData->needed_offset = ndrflac->vf.lastdata.extradata;
-        printf("network_drflac_read_pcm_frames_f32_mem: failed seek_to_pcm_frame NOT OK current: %u desired: %u\n", currentPCMFrame32, ndrflac->currentFrame);
-        goto network_drflac_read_pcm_frames_f32_mem_FAIL;        
+        retval = mhfs_cl_track_error_from_blockvf_error(pTrack->vf.lastdata.code);
+        pReturnData->needed_offset = pTrack->vf.lastdata.extradata;
+        printf("%s: failed seek_to_pcm_frame NOT OK current: %u desired: %u\n", __func__, currentPCMFrame32, pTrack->currentFrame);
+        goto mhfs_cl_track_read_pcm_frames_f32_FAIL;
     }
     else if(!seekres)
     {
-        printf("network_drflac_read_pcm_frames_f32_mem: seek failed current: %u desired: %u\n", currentPCMFrame32, ndrflac->currentFrame);     
-        retval = NDRFLAC_GENERIC_ERROR;
-        goto network_drflac_read_pcm_frames_f32_mem_FAIL;
+        printf("%s: seek failed current: %u desired: %u\n", __func__, currentPCMFrame32, pTrack->currentFrame);
+        retval = MHFS_CL_TRACK_GENERIC_ERROR;
+        goto mhfs_cl_track_read_pcm_frames_f32_FAIL;
     }
 
     // finally read
@@ -293,43 +281,43 @@ NetworkDrFlac_Err_Vals network_drflac_read_pcm_frames_f32(NetworkDrFlac *ndrflac
     {
         uint64_t toread = desired_pcm_frames;
         //uint64_t aframes;
-        //ma_decoder_get_available_frames(&ndrflac->decoder, &aframes);
+        //ma_decoder_get_available_frames(&pTrack->decoder, &aframes);
         //if(aframes < toread) toread = aframes;
         printf("expected frames %"PRIu64"\n", toread);
 
         // decode to pcm
-        ma_result decRes = ma_decoder_read_pcm_frames(&ndrflac->decoder, outFloat, toread, &frames_decoded);
-        if(!BLOCKVF_OK(&ndrflac->vf))
+        ma_result decRes = ma_decoder_read_pcm_frames(&pTrack->decoder, outFloat, toread, &frames_decoded);
+        if(!BLOCKVF_OK(&pTrack->vf))
         {
-            retval = ndf_ErrorValue(ndrflac->vf.lastdata.code);
-            pReturnData->needed_offset = ndrflac->vf.lastdata.extradata;
-            printf("network_drflac_read_pcm_frames_f32_mem: failed read_pcm_frames_f32\n");
-            goto network_drflac_read_pcm_frames_f32_mem_FAIL;
+            retval = mhfs_cl_track_error_from_blockvf_error(pTrack->vf.lastdata.code);
+            pReturnData->needed_offset = pTrack->vf.lastdata.extradata;
+            printf("mhfs_cl_track_read_pcm_frames_f32_mem: failed read_pcm_frames_f32\n");
+            goto mhfs_cl_track_read_pcm_frames_f32_FAIL;
         }
         if(decRes != MA_SUCCESS)
         {
-            printf("network_drflac_read_pcm_frames_f32_mem: failed read_pcm_frames_f32(decode), ma_result %u\n", decRes);
-            goto network_drflac_read_pcm_frames_f32_mem_FAIL;
+            printf("mhfs_cl_track_read_pcm_frames_f32_mem: failed read_pcm_frames_f32(decode), ma_result %u\n", decRes);
+            goto mhfs_cl_track_read_pcm_frames_f32_FAIL;
         }
         if(frames_decoded != desired_pcm_frames)
         {
-            printf("network_drflac_read_pcm_frames_f32_mem: expected %u decoded %"PRIu64"\n", desired_pcm_frames, frames_decoded);
+            printf("mhfs_cl_track_read_pcm_frames_f32_mem: expected %u decoded %"PRIu64"\n", desired_pcm_frames, frames_decoded);
         }
-        ndrflac->currentFrame += frames_decoded;
+        pTrack->currentFrame += frames_decoded;
     }
 
-    printf("returning from ndrflac->currentFrame: %u, totalFrames %"PRIu64" frames_decoded %"PRIu64" desired %u\n", ndrflac->currentFrame, network_drflac_totalPCMFrameCount(ndrflac), frames_decoded, desired_pcm_frames);
+    printf("returning from pTrack->currentFrame: %u, totalFrames %"PRIu64" frames_decoded %"PRIu64" desired %u\n", pTrack->currentFrame, mhfs_cl_track_totalPCMFrameCount(pTrack), frames_decoded, desired_pcm_frames);
     pReturnData->frames_read = frames_decoded;
-    return NDRFLAC_SUCCESS;
+    return MHFS_CL_TRACK_SUCCESS;
 
-network_drflac_read_pcm_frames_f32_mem_FAIL:
-    if(ndrflac->initialized)
+mhfs_cl_track_read_pcm_frames_f32_FAIL:
+    if(pTrack->initialized)
     {
-        ma_decoder_uninit(&ndrflac->decoder);
-        ndrflac->initialized = false;
+        ma_decoder_uninit(&pTrack->decoder);
+        pTrack->initialized = false;
     }    
     return retval;
 }
 
-#define MHFSDECODER_IMPLEMENTATION
+#define MHFSCLDECODER_IMPLEMENTATION
 #include "mhfs_decoder.h"

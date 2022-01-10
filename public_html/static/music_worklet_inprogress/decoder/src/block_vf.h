@@ -12,12 +12,12 @@ typedef enum {
     BLOCKVF_SUCCESS = 0,
     BLOCKVF_GENERIC_ERROR = 1,
     BLOCKVF_MEM_NEED_MORE = 2
-} BlockVF_Err_Vals;
+} blockvf_error;
 
 typedef struct {
-    BlockVF_Err_Vals code;
+    blockvf_error code;
     uint32_t extradata;
-} BlockVF_LastData;
+} blockvf_last_data;
 
 typedef struct  {
     void *buf;
@@ -25,7 +25,7 @@ typedef struct  {
     blockvf_memrange *block;
     unsigned filesize;
     unsigned fileoffset;
-    BlockVF_LastData lastdata;
+    blockvf_last_data lastdata;
 } blockvf;
 
 #define BLOCKVF_OK(blockvf) ((blockvf)->lastdata.code == BLOCKVF_SUCCESS)
@@ -146,7 +146,7 @@ ma_result blockvf_seek(blockvf *pBlockvf, int64_t offset, ma_seek_origin origin)
 {
     if(!BLOCKVF_OK(pBlockvf))
     {
-        printf("on_seek_mem: already failed, breaking %"PRId64" %u\n", offset, origin);
+        //printf("on_seek_mem: already failed, breaking %"PRId64" %u\n", offset, origin);
         return MA_ERROR;
     }
 
