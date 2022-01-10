@@ -9,9 +9,9 @@
 #include "miniaudio.h"
 
 #define BLOCKVF_IMPLEMENTATION
-#include "block_vf.h"
+#include "blockvf.h"
 
-#include "network_drflac.h"
+#include "mhfs_cl_track.h"
 
 static mhfs_cl_track_error mhfs_cl_track_error_from_blockvf_error(const blockvf_error bvferr)
 {
@@ -320,4 +320,4 @@ mhfs_cl_track_read_pcm_frames_f32_FAIL:
 }
 
 #define MHFSCLDECODER_IMPLEMENTATION
-#include "mhfs_decoder.h"
+#include "mhfs_cl_decoder.h"
