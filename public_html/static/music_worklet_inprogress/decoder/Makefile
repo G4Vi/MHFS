@@ -11,7 +11,7 @@ CFLAGS:=-I$(DRFLACDIR) -I$(MINIAUDIODIR) -DMA_NO_DEVICE_IO -DMA_NO_THREADING -DM
 all: CFLAGS += -O3
 all: $(TARGET)
 
-$(TARGET): $(SRCDIR)/drflac_cache.c $(DRFLACDIR)/dr_flac.h $(MINIAUDIODIR)/miniaudio.h $(SRCDIR)/block_vf.h $(SRCDIR)/mhfs_decoder.h $(SRCDIR)/network_drflac.h
+$(TARGET): $(SRCDIR)/mhfs_cl.c $(DRFLACDIR)/dr_flac.h $(MINIAUDIODIR)/miniaudio.h $(SRCDIR)/blockvf.h $(SRCDIR)/mhfs_cl_track.h $(SRCDIR)/mhfs_cl_decoder.h
 	mkdir -p $(OUTDIR)
 	$(CC) $(CFLAGS) -o $@ $<
 

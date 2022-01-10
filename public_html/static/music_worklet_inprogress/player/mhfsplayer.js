@@ -1,4 +1,4 @@
-import { MHFSCLDecoder } from '../decoder/music_drflac_module.cache.js'
+import { MHFSCLDecoder } from '../decoder/mhfscl.js'
 import { Float32AudioRingBufferWriter, Float32AudioRingBufferReader } from './AudioWriterReader.js'
 
 // FIFO mutex
