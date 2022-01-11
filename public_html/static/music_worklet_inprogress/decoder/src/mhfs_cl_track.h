@@ -196,7 +196,14 @@ int mhfs_cl_track_seek_to_pcm_frame(mhfs_cl_track *pTrack, const uint32_t pcmFra
 {
     if(pTrack->dec_initialized)
     {
-        if(pcmFrameIndex >= mhfs_cl_track_totalPCMFrameCount(pTrack)) return 0;
+        if(pcmFrameIndex >= mhfs_cl_track_totalPCMFrameCount(pTrack))
+        {
+            // allow seeking to 0 always
+            if(pcmFrameIndex != 0)
+            {
+                return 0;
+            }
+        }
     }
     pTrack->currentFrame = pcmFrameIndex;
     return 1;
@@ -244,11 +251,21 @@ typedef enum {
 	DAF_PCM
 } DecoderAudioFormats;
 
+static inline void mhfs_cl_track_swap_tryorder(ma_encoding_format *first,  ma_encoding_format *second)
+{
+    ma_encoding_format temp = *first;
+    *first = *second;
+    *second = temp;
+}
+
 static mhfs_cl_track_error mhfs_cl_track_open_ma_decoder(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData)
 {
     // determine the order to try codecs
     ma_encoding_format tryorder[] = { ma_encoding_format_flac, ma_encoding_format_mp3, ma_encoding_format_wav};
     unsigned max_try_count = sizeof(tryorder) / sizeof(tryorder[0]);
+
+    const size_t namelen = strlen(pTrack->fullfilename);
+    const char *lastFourChars = (namelen >= 4) ? (pTrack->fullfilename + namelen - 4) : "";
 
     if(pTrack->decoderConfig.encodingFormat != ma_format_unknown)
     {
@@ -256,25 +273,49 @@ static mhfs_cl_track_error mhfs_cl_track_open_ma_decoder(mhfs_cl_track *pTrack, 
         tryorder[0] = pTrack->decoderConfig.encodingFormat;
         max_try_count = 1;
     }
-    // attempt to speed up guesses by mime
+    // attempt to speed up guesses checking magic numbers
+    else if((pTrack->vf.buf != NULL) && (memcmp(pTrack->vf.buf, "fLaC", 4) == 0))
+    {
+        mhfs_cl_track_swap_tryorder(&tryorder[DAF_FLAC], &tryorder[0]);
+    }
+    else if((pTrack->vf.buf != NULL) && (memcmp(pTrack->vf.buf, "RIFF", 4) == 0))
+    {
+        mhfs_cl_track_swap_tryorder(&tryorder[DAF_WAV], &tryorder[0]);
+    }
+    // fallback, attempt to speed up guesses by mime
     else if(strcmp(pTrack->mime, "audio/flac") == 0)
     {
-        tryorder[DAF_FLAC] = tryorder[0];
-        tryorder[0] = ma_encoding_format_flac;
+        mhfs_cl_track_swap_tryorder(&tryorder[DAF_FLAC], &tryorder[0]);
     }
     else if((strcmp(pTrack->mime, "audio/wave") == 0) || (strcmp(pTrack->mime, "audio/wav") == 0))
     {
-        tryorder[DAF_WAV] = tryorder[0];
-        tryorder[0] = ma_encoding_format_wav;
+        mhfs_cl_track_swap_tryorder(&tryorder[DAF_WAV], &tryorder[0]);
     }
     else if(strcmp(pTrack->mime, "audio/mpeg") == 0)
     {
-        tryorder[DAF_MP3] = tryorder[0];
-        tryorder[0] = ma_encoding_format_mp3;
+        mhfs_cl_track_swap_tryorder(&tryorder[DAF_MP3], &tryorder[0]);
+    }
+    // fallback, fallback attempt to speed up guesses with file extension
+    else if(strcmp(lastFourChars, "flac") == 0)
+    {
+        mhfs_cl_track_swap_tryorder(&tryorder[DAF_FLAC], &tryorder[0]);
+    }
+    else if(strcmp(lastFourChars, ".wav") == 0)
+    {
+        mhfs_cl_track_swap_tryorder(&tryorder[DAF_WAV], &tryorder[0]);
+    }
+    else if(strcmp(lastFourChars, ".mp3") == 0)
+    {
+        mhfs_cl_track_swap_tryorder(&tryorder[DAF_MP3], &tryorder[0]);
+    }
+    // check ID3 tags last as signal for mp3 as they could be anything
+    else if((pTrack->vf.buf != NULL) && (memcmp(pTrack->vf.buf, "ID3", 3) == 0))
+    {
+        mhfs_cl_track_swap_tryorder(&tryorder[DAF_MP3], &tryorder[0]);
     }
     else
     {
-        printf("warning: unable to guess format by mime\n");
+        printf("warning: unable to guess format\n");
     }
 
     // finally attempt to open encoders
@@ -351,7 +392,11 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
 
                 // fallback to initializing from ma_decoder info
                 uint64_t totalPCMFrameCount = 0;
-                ma_decoder_get_length_in_pcm_frames(&pTrack->decoder, &totalPCMFrameCount);
+                // disable this on mp3 for now
+                if(pTrack->decoderConfig.encodingFormat != ma_encoding_format_mp3)
+                {
+                    ma_decoder_get_length_in_pcm_frames(&pTrack->decoder, &totalPCMFrameCount);
+                }
                 mhfs_cl_track_metadata_init(&pTrack->meta, totalPCMFrameCount, pTrack->decoder.outputSampleRate, pTrack->decoder.outputChannels, 0);
             } while(0);
 
