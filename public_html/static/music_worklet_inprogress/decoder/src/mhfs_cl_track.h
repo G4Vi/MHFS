@@ -23,8 +23,11 @@ typedef struct {
 } mhfs_cl_track_allocs;
 
 typedef struct {
-    mhfs_cl_track_allocs allocs;
     mhfs_cl_track_allocs backup;
+    ma_decoder backupDecoder;
+    unsigned backupFileOffset;
+
+    mhfs_cl_track_allocs allocs;
     ma_decoder_config decoderConfig;
     ma_decoder decoder;
     bool dec_initialized;
@@ -241,15 +244,45 @@ void mhfs_cl_track_free(void* p, void* pUserData)
     printf("%s: failed to record free %p\n", __func__, p);
 }
 
-void mhfs_cl_track_allocs_backup(const mhfs_cl_track_allocs *copyFrom, mhfs_cl_track_allocs *saveTo)
+static inline void mhfs_cl_track_allocs_backup_or_restore(mhfs_cl_track *pTrack, const bool backup)
 {
+    const mhfs_cl_track_allocs *pSrcAllocs;
+    mhfs_cl_track_allocs *pDestAllocs;
+
+    if(backup)
+    {
+        pSrcAllocs = &pTrack->allocs;
+        pDestAllocs = &pTrack->backup;
+
+        pTrack->backupDecoder    = pTrack->decoder;
+        pTrack->backupFileOffset = pTrack->vf.fileoffset;
+    }
+    else
+    {
+        pSrcAllocs = &pTrack->backup;
+        pDestAllocs = &pTrack->allocs;
+
+        pTrack->decoder       = pTrack->backupDecoder;
+        pTrack->vf.fileoffset = pTrack->backupFileOffset;
+    }
+
     for(unsigned i = 0; i < MHFS_CL_TRACK_MAX_ALLOCS; i++)
     {
-        if(copyFrom->allocptrs[i] != NULL)
+        if(pSrcAllocs->allocptrs[i] != NULL)
         {
-            memcpy(saveTo->allocptrs[i], copyFrom->allocptrs[i], saveTo->allocsizes[i]);
+            memcpy(pDestAllocs->allocptrs[i], pSrcAllocs->allocptrs[i], pDestAllocs->allocsizes[i]);
         }
     }
+}
+
+static inline void mhfs_cl_track_allocs_backup(mhfs_cl_track *pTrack)
+{
+    return mhfs_cl_track_allocs_backup_or_restore(pTrack, true);
+}
+
+static inline void mhfs_cl_track_allocs_restore(mhfs_cl_track *pTrack)
+{
+    return mhfs_cl_track_allocs_backup_or_restore(pTrack, false);
 }
 
 void mhfs_cl_track_init(mhfs_cl_track *pTrack, const unsigned blocksize, const char *mime, const char *fullfilename)
@@ -503,10 +536,7 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
     // seek to sample
     printf("seek to %u d_pcmframes %u\n", pTrack->currentFrame, desired_pcm_frames);
     const uint32_t currentPCMFrame32 = 0xFFFFFFFF;
-    mhfs_cl_track_allocs_backup(&pTrack->allocs, &pTrack->backup);
-    ma_decoder decoderBackup = pTrack->decoder;
-    unsigned offsetBackup = pTrack->vf.fileoffset;
-
+    mhfs_cl_track_allocs_backup(pTrack);
     const bool seekres = MA_SUCCESS == ma_decoder_seek_to_pcm_frame(&pTrack->decoder, pTrack->currentFrame);
     if(!BLOCKVF_OK(&pTrack->vf))
     {
@@ -515,9 +545,7 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
         printf("%s: failed seek_to_pcm_frame NOT OK current: %u desired: %u\n", __func__, currentPCMFrame32, pTrack->currentFrame);
         //goto mhfs_cl_track_read_pcm_frames_f32_FAIL;
 
-        pTrack->vf.fileoffset = offsetBackup;
-        pTrack->decoder = decoderBackup;
-        mhfs_cl_track_allocs_backup(&pTrack->backup, &pTrack->allocs);
+        mhfs_cl_track_allocs_restore(pTrack);
         return retval;
     }
     if(!seekres)
@@ -538,9 +566,7 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
         printf("expected frames %"PRIu64"\n", toread);
 
         // decode to pcm
-        mhfs_cl_track_allocs_backup(&pTrack->allocs, &pTrack->backup);
-        decoderBackup = pTrack->decoder;
-        offsetBackup = pTrack->vf.fileoffset;
+        mhfs_cl_track_allocs_backup(pTrack);
         ma_result decRes = ma_decoder_read_pcm_frames(&pTrack->decoder, outFloat, toread, &frames_decoded);
         if(!BLOCKVF_OK(&pTrack->vf))
         {
@@ -549,9 +575,7 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
             printf("mhfs_cl_track_read_pcm_frames_f32_mem: failed read_pcm_frames_f32\n");
             //goto mhfs_cl_track_read_pcm_frames_f32_FAIL;
 
-            pTrack->vf.fileoffset = offsetBackup;
-            pTrack->decoder = decoderBackup;
-            mhfs_cl_track_allocs_backup(&pTrack->backup, &pTrack->allocs);
+            mhfs_cl_track_allocs_restore(pTrack);
             return retval;
         }
         if(decRes != MA_SUCCESS)
