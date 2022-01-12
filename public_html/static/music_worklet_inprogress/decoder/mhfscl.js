@@ -165,7 +165,8 @@ const MHFSCLTrack = async function(theURL, gsignal) {
         let start = 0;
         const firstreq = await that._downloadChunk(start, gsignal);
         const mime = firstreq.getResponseHeader('Content-Type') || '';
-        MHFSCL.mhfs_cl_track_init(that.ptr, that.CHUNKSIZE, mime, theURL);
+        const totalPCMFrames = firstreq.getResponseHeader('X-MHFS-totalPCMFrameCount') || 0;
+        MHFSCL.mhfs_cl_track_init(that.ptr, that.CHUNKSIZE, mime, theURL, totalPCMFrames);
         that.initialized = true;
         that._storeChunk(firstreq, start);
 
@@ -252,7 +253,7 @@ const MHFSCLDecoder = function(outputSampleRate, outputChannelCount) {
         return that.seek_input_pcm_frames(Math.floor(floatseconds * that.track.sampleRate));
     }
 
-    that.read_pcm_frames_f32_interleaved = async function(todec, destdata, mysignal) {
+    that.read_pcm_frames_f32_deinterleaved = async function(todec, destdata, mysignal) {
               
         while(1) {              
             // attempt to decode the samples
@@ -276,14 +277,14 @@ const MHFSCLDecoder = function(outputSampleRate, outputChannelCount) {
         }        
     };
 
-    that.read_pcm_frames_f32_interleaved_AudioBuffer = async function(todec, mysignal) {
+    that.read_pcm_frames_f32_AudioBuffer = async function(todec, mysignal) {
         const f32_size = 4;
         const pcm_float_frame_size = f32_size * that.outputChannelCount;
         let theerror;
         let returnval;
         const destdata = MHFSCL.Module._malloc(todec*pcm_float_frame_size);
         try {
-            const frames = await that.read_pcm_frames_f32_interleaved(todec, destdata, mysignal);
+            const frames = await that.read_pcm_frames_f32_deinterleaved(todec, destdata, mysignal);
             if(frames) {
                 const audiobuffer = new AudioBuffer({'length' : frames, 'numberOfChannels' : that.outputChannelCount, 'sampleRate' : that.outputSampleRate});                
                 for( let i = 0; i < that.outputChannelCount; i++) {
@@ -334,7 +335,7 @@ Module().then(function(MHFSCLMod){
     MHFSCL.MHFS_CL_TRACK_GENERIC_ERROR = MHFSCLMod.ccall('MHFS_CL_TRACK_GENERIC_ERROR_func', "number");
     MHFSCL.MHFS_CL_TRACK_NEED_MORE_DATA = MHFSCLMod.ccall('MHFS_CL_TRACK_NEED_MORE_DATA_func', "number");
 
-    MHFSCL.mhfs_cl_track_init = MHFSCLMod.cwrap('mhfs_cl_track_init', null, ["number", "number", "string", "string"]);
+    MHFSCL.mhfs_cl_track_init = MHFSCLMod.cwrap('mhfs_cl_track_init', null, ["number", "number", "string", "string", "number"]);
 
     MHFSCL.mhfs_cl_track_deinit = MHFSCLMod.cwrap('mhfs_cl_track_deinit', null, ["number"]);
 

@@ -23,11 +23,11 @@ typedef struct {
 } mhfs_cl_track_allocs;
 
 typedef struct {
-    mhfs_cl_track_allocs backup;
+    // for backup and restore
     ma_decoder backupDecoder;
     unsigned backupFileOffset;
-
     mhfs_cl_track_allocs allocs;
+
     ma_decoder_config decoderConfig;
     ma_decoder decoder;
     bool dec_initialized;
@@ -57,7 +57,7 @@ typedef union {
 #define LIBEXPORT
 #endif
 
-LIBEXPORT void mhfs_cl_track_init(mhfs_cl_track *pTrack, const unsigned blocksize, const char *mime, const char *fullfilename);
+LIBEXPORT void mhfs_cl_track_init(mhfs_cl_track *pTrack, const unsigned blocksize, const char *mime, const char *fullfilename, const uint64_t totalPCMFrameCount);
 LIBEXPORT void mhfs_cl_track_deinit(mhfs_cl_track *pTrack);
 LIBEXPORT void *mhfs_cl_track_add_block(mhfs_cl_track *pTrack, const uint32_t block_start, const unsigned filesize);
 LIBEXPORT int mhfs_cl_track_seek_to_pcm_frame(mhfs_cl_track *pTrack, const uint32_t pcmFrameIndex);
@@ -180,12 +180,13 @@ uint8_t mhfs_cl_track_channels(const mhfs_cl_track *pTrack)
     return pTrack->meta.channels;
 }
 
-static inline size_t round8(const size_t toround)
+// round up to nearest multiple of 8
+static inline size_t ceil8(const size_t toround)
 {
     return ((toround +7) & (~7));
 }
 
-void *mhfs_cl_track_malloc(size_t sz, void* pUserData)
+static void *mhfs_cl_track_malloc(size_t sz, void* pUserData)
 {
     mhfs_cl_track *pTrack = (mhfs_cl_track *)pUserData;
     mhfs_cl_track_allocs *pAllocs = &pTrack->allocs;
@@ -193,7 +194,7 @@ void *mhfs_cl_track_malloc(size_t sz, void* pUserData)
     {
         if(pAllocs->allocptrs[i] == NULL)
         {
-            const size_t rsz = round8(sz);
+            const size_t rsz = ceil8(sz);
             uint8_t *res = malloc(rsz * 2);
             if(res == NULL)
             {
@@ -202,8 +203,6 @@ void *mhfs_cl_track_malloc(size_t sz, void* pUserData)
             printf("%s: %zu %p\n", __func__, sz, res);
             pAllocs->allocsizes[i]= sz;
             pAllocs->allocptrs[i] = res;
-            pTrack->backup.allocsizes[i] = sz;
-            pTrack->backup.allocptrs[i] = res + rsz;
             return res;
         }
     }
@@ -211,21 +210,7 @@ void *mhfs_cl_track_malloc(size_t sz, void* pUserData)
     return NULL;
 }
 
-void *mhfs_cl_track_realloc(void *p, size_t sz, void* pUserData)
-{
-    if(p == NULL)
-    {
-        printf("%s: %zu realloc passing to malloc\n", __func__, sz);
-        return mhfs_cl_track_malloc(sz, pUserData);
-    }
-    else
-    {
-        printf("%s: %zu realloc not implemented\n", __func__, sz);
-        return NULL;
-    }
-}
-
-void mhfs_cl_track_free(void* p, void* pUserData)
+static void mhfs_cl_track_free(void* p, void* pUserData)
 {
     mhfs_cl_track *pTrack = (mhfs_cl_track *)pUserData;
     mhfs_cl_track_allocs *pAllocs = &pTrack->allocs;
@@ -237,40 +222,102 @@ void mhfs_cl_track_free(void* p, void* pUserData)
             printf("%s: 0x%p\n", __func__, p);
             free(p);
             pAllocs->allocptrs[i] = NULL;
-            pTrack->backup.allocptrs[i] = NULL;
             return;
         }
     }
     printf("%s: failed to record free %p\n", __func__, p);
 }
 
+static void *mhfs_cl_track_realloc(void *p, size_t sz, void* pUserData)
+{
+    if(p == NULL)
+    {
+        printf("%s: %zu realloc passing to malloc\n", __func__, sz);
+        return mhfs_cl_track_malloc(sz, pUserData);
+    }
+    else if(sz == 0)
+    {
+        printf("%s: %zu realloc passing to free\n", __func__, sz);
+        mhfs_cl_track_free(p, pUserData);
+        return NULL;
+    }
+
+    mhfs_cl_track *pTrack = (mhfs_cl_track *)pUserData;
+    mhfs_cl_track_allocs *pAllocs = &pTrack->allocs;
+    for(unsigned i = 0; i < MHFS_CL_TRACK_MAX_ALLOCS; i++)
+    {
+        if(pAllocs->allocptrs[i] == p)
+        {
+            const size_t osz = pAllocs->allocsizes[i];
+            const size_t orsz = ceil8(pAllocs->allocsizes[i]);
+            const size_t rsz = ceil8(sz);
+            // avoid losing the start of backup by moving it down
+            if(rsz < orsz)
+            {
+                uint8_t *ogalloc = p;
+                memmove(ogalloc+rsz, ogalloc+orsz, sz);
+            }
+            uint8_t *newalloc = realloc(p, rsz*2);
+            if(newalloc == NULL)
+            {
+                if(rsz >= orsz)
+                {
+                    printf("%s: %zu realloc failed\n", __func__, sz);
+                    return NULL;
+                }
+                // we moved the data down so we can't fail
+                newalloc = p;
+            }
+            // move the backup data forward
+            else if(rsz > orsz)
+            {
+                memmove(newalloc+rsz, newalloc+orsz, osz);
+            }
+
+            pAllocs->allocsizes[i]= sz;
+            pAllocs->allocptrs[i] = newalloc;
+            return newalloc;
+        }
+    }
+    printf("%s: %zu failed to find\n", __func__, sz);
+    return NULL;
+}
+
 static inline void mhfs_cl_track_allocs_backup_or_restore(mhfs_cl_track *pTrack, const bool backup)
 {
-    const mhfs_cl_track_allocs *pSrcAllocs;
-    mhfs_cl_track_allocs *pDestAllocs;
-
+    // copy ma_decoder and blockvf fileoffset
     if(backup)
     {
-        pSrcAllocs = &pTrack->allocs;
-        pDestAllocs = &pTrack->backup;
-
         pTrack->backupDecoder    = pTrack->decoder;
         pTrack->backupFileOffset = pTrack->vf.fileoffset;
     }
     else
     {
-        pSrcAllocs = &pTrack->backup;
-        pDestAllocs = &pTrack->allocs;
-
         pTrack->decoder       = pTrack->backupDecoder;
         pTrack->vf.fileoffset = pTrack->backupFileOffset;
     }
 
+    // copy the allocations
+    mhfs_cl_track_allocs *pAllocs = &pTrack->allocs;
     for(unsigned i = 0; i < MHFS_CL_TRACK_MAX_ALLOCS; i++)
     {
-        if(pSrcAllocs->allocptrs[i] != NULL)
+        if(pAllocs->allocptrs[i] != NULL)
         {
-            memcpy(pDestAllocs->allocptrs[i], pSrcAllocs->allocptrs[i], pDestAllocs->allocsizes[i]);
+            const size_t offset = ceil8(pAllocs->allocsizes[i]);
+            uint8_t *allocBuf = pAllocs->allocptrs[i];
+            const uint8_t *srcBuf;
+            uint8_t *destBuf;
+            if(backup)
+            {
+                srcBuf = allocBuf;
+                destBuf = allocBuf + offset;
+            }
+            else
+            {
+                srcBuf = allocBuf + offset;
+                destBuf = allocBuf;
+            }
+            memcpy(destBuf, srcBuf, pAllocs->allocsizes[i]);
         }
     }
 }
@@ -285,7 +332,7 @@ static inline void mhfs_cl_track_allocs_restore(mhfs_cl_track *pTrack)
     return mhfs_cl_track_allocs_backup_or_restore(pTrack, false);
 }
 
-void mhfs_cl_track_init(mhfs_cl_track *pTrack, const unsigned blocksize, const char *mime, const char *fullfilename)
+void mhfs_cl_track_init(mhfs_cl_track *pTrack, const unsigned blocksize, const char *mime, const char *fullfilename, const uint64_t totalPCMFrameCount)
 {
     for(unsigned i = 0; i < MHFS_CL_TRACK_MAX_ALLOCS; i++)
     {
@@ -304,6 +351,7 @@ void mhfs_cl_track_init(mhfs_cl_track *pTrack, const unsigned blocksize, const c
     pTrack->dec_initialized = false;
     blockvf_init(&pTrack->vf, blocksize);
     pTrack->meta_initialized = false;
+    pTrack->meta.totalPCMFrameCount = totalPCMFrameCount;
     pTrack->currentFrame = 0;
 }
 
@@ -517,9 +565,8 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
                     }
                 }
 
-                // fallback to initializing from ma_decoder info
-                uint64_t totalPCMFrameCount = 0;
-                // disable this on mp3 for now
+                // fallback to initializing from ma_decoder or from passed in value
+                uint64_t totalPCMFrameCount = pTrack->meta.totalPCMFrameCount;
                 if(pTrack->decoderConfig.encodingFormat != ma_encoding_format_mp3)
                 {
                     ma_decoder_get_length_in_pcm_frames(&pTrack->decoder, &totalPCMFrameCount);

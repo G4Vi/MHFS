@@ -8,6 +8,8 @@
 #define DR_FLAC_IMPLEMENTATION
 #include "dr_flac.h"
 #include "FLAC/stream_encoder.h"
+#define MINIAUDIO_IMPLEMENTATION
+#include "../miniaudio/miniaudio.h"
 
 typedef void *(* malloc_ptr) (size_t);
 typedef void  (* free_ptr)   (void*);
@@ -43,6 +45,22 @@ MHFS_XS_Track *_MHFS_XS_Track_new(const char *filename, malloc_ptr mymalloc, fre
     }
 
 	return track;
+}
+
+uint64_t _MHFS_XS_Track_get_totalPCMFrameCount(const char *filename)
+{
+    ma_uint64 totalPCMFrameCount = 0;
+    ma_decoder decoder;
+    if(ma_decoder_init_file(filename, NULL, &decoder) == MA_SUCCESS)
+    {
+        ma_decoder_get_length_in_pcm_frames(&decoder, &totalPCMFrameCount);
+        ma_decoder_uninit(&decoder);
+    }
+    else
+    {
+        printf("failed to open ma_decoder\n");
+    }
+    return (uint64_t)totalPCMFrameCount;
 }
 
 FLAC__StreamEncoderWriteStatus writecb(const FLAC__StreamEncoder *encoder, const FLAC__byte buffer[], size_t bytes, unsigned samples, unsigned current_frame, void *client_data)
@@ -539,5 +557,13 @@ get_vorbis_comments(filename)
         }
     RETVAL = thedata;
     sv_2mortal((SV*)RETVAL);
+    OUTPUT:
+        RETVAL
+
+SV *
+get_totalPCMFrameCount(filename)
+        const char *filename
+    CODE:
+        RETVAL = newSVuv(_MHFS_XS_Track_get_totalPCMFrameCount(filename));
     OUTPUT:
         RETVAL

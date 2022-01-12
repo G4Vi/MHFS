@@ -397,7 +397,7 @@ const MHFSPlayer = async function(opt) {
                 // decode
                 let audiobuffer;
                 try {
-                    audiobuffer = await decoder.read_pcm_frames_f32_interleaved_AudioBuffer(todec, mysignal);
+                    audiobuffer = await decoder.read_pcm_frames_f32_AudioBuffer(todec, mysignal);
                     if(!audiobuffer) break SAMPLELOOP;                
                 }
                 catch(error) {

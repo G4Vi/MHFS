@@ -2998,6 +2998,16 @@ package MusicLibrary {
             if($request->{'qs'}{'action'} && ($request->{'qs'}{'action'} eq 'dl')) {
                 $request->{'responseopt'}{'cd_file'} = 'attachment';
             }
+            # Send the total pcm frame count for mp3
+            elsif(lc(substr($tosend, -4)) eq '.mp3') {
+                if($MusicLibrary::HAS_MHFS_XS) {
+                    if(! $TRACKINFO{$tosend}) {
+                        $TRACKINFO{$tosend} = { 'TOTALSAMPLES' => MHFS::XS::get_totalPCMFrameCount($tosend) };
+                        say "mp3 totalPCMFrames: " . $TRACKINFO{$tosend}{'TOTALSAMPLES'};
+                    }
+                    $request->{'outheaders'}{'X-MHFS-totalPCMFrameCount'} = $TRACKINFO{$tosend}{'TOTALSAMPLES'};
+                }
+            }
             $request->SendLocalFile($tosend);
         }
     }
