@@ -24,6 +24,7 @@ typedef struct {
 
 typedef struct {
     mhfs_cl_track_allocs allocs;
+    mhfs_cl_track_allocs backup;
     ma_decoder_config decoderConfig;
     ma_decoder decoder;
     bool dec_initialized;
@@ -176,106 +177,77 @@ uint8_t mhfs_cl_track_channels(const mhfs_cl_track *pTrack)
     return pTrack->meta.channels;
 }
 
-void *mhfs_cl_track_allocs_malloc(size_t sz, void* pUserData)
+static inline size_t round8(const size_t toround)
 {
-    mhfs_cl_track_allocs *pAllocs = (mhfs_cl_track_allocs *)pUserData;
-    void *res = malloc(sz);
-    printf("%s: %zu %p\n", __func__, sz, res);
+    return ((toround +7) & (~7));
+}
+
+void *mhfs_cl_track_malloc(size_t sz, void* pUserData)
+{
+    mhfs_cl_track *pTrack = (mhfs_cl_track *)pUserData;
+    mhfs_cl_track_allocs *pAllocs = &pTrack->allocs;
     for(unsigned i = 0; i < MHFS_CL_TRACK_MAX_ALLOCS; i++)
     {
         if(pAllocs->allocptrs[i] == NULL)
         {
+            const size_t rsz = round8(sz);
+            uint8_t *res = malloc(rsz * 2);
+            if(res == NULL)
+            {
+                printf("%s: %zu malloc failed\n", __func__, sz);
+            }
+            printf("%s: %zu %p\n", __func__, sz, res);
             pAllocs->allocsizes[i]= sz;
             pAllocs->allocptrs[i] = res;
+            pTrack->backup.allocsizes[i] = sz;
+            pTrack->backup.allocptrs[i] = res + rsz;
             return res;
         }
     }
-    printf("%s: %zu %p failed to record alloc\n", __func__, sz, res);
-    return res;
+    printf("%s: %zu failed to find slot for alloc\n", __func__, sz);
+    return NULL;
 }
 
-void *mhfs_cl_track_allocs_realloc(void *p, size_t sz, void* pUserData)
+void *mhfs_cl_track_realloc(void *p, size_t sz, void* pUserData)
 {
-    mhfs_cl_track_allocs *pAllocs = (mhfs_cl_track_allocs *)pUserData;
-    void *res = realloc(p, sz);
-    printf("%s: 0x%p new %p %zu\n", __func__, p, res, sz);
-    if(res == NULL) return res;
+    if(p == NULL)
+    {
+        printf("%s: %zu realloc passing to malloc\n", __func__, sz);
+        return mhfs_cl_track_malloc(sz, pUserData);
+    }
+    else
+    {
+        printf("%s: %zu realloc not implemented\n", __func__, sz);
+        return NULL;
+    }
+}
+
+void mhfs_cl_track_free(void* p, void* pUserData)
+{
+    mhfs_cl_track *pTrack = (mhfs_cl_track *)pUserData;
+    mhfs_cl_track_allocs *pAllocs = &pTrack->allocs;
 
     for(unsigned i = 0; i < MHFS_CL_TRACK_MAX_ALLOCS; i++)
     {
         if(pAllocs->allocptrs[i] == p)
         {
-            pAllocs->allocptrs[i] = res;
-            pAllocs->allocsizes[i] = sz;
-            return res;
-        }
-    }
-    printf("%s: %zu %p failed to record realloc\n", __func__, sz, res);
-    return res;
-}
-
-void mhfs_cl_track_allocs_free(void* p, void* pUserData)
-{
-    mhfs_cl_track_allocs *pAllocs = (mhfs_cl_track_allocs *)pUserData;
-    printf("%s: 0x%p\n", __func__, p);
-    free(p);
-    for(unsigned i = 0; i < MHFS_CL_TRACK_MAX_ALLOCS; i++)
-    {
-        if(pAllocs->allocptrs[i] == p)
-        {
+            printf("%s: 0x%p\n", __func__, p);
+            free(p);
             pAllocs->allocptrs[i] = NULL;
+            pTrack->backup.allocptrs[i] = NULL;
             return;
         }
     }
     printf("%s: failed to record free %p\n", __func__, p);
 }
 
-void mhfs_cl_track_allocs_backup(mhfs_cl_track_allocs *copyFrom, mhfs_cl_track_allocs *saveTo)
+void mhfs_cl_track_allocs_backup(const mhfs_cl_track_allocs *copyFrom, mhfs_cl_track_allocs *saveTo)
 {
     for(unsigned i = 0; i < MHFS_CL_TRACK_MAX_ALLOCS; i++)
     {
         if(copyFrom->allocptrs[i] != NULL)
         {
-            saveTo->allocsizes[i] =  copyFrom->allocsizes[i];
-            saveTo->allocptrs[i] = malloc(saveTo->allocsizes[i]);
             memcpy(saveTo->allocptrs[i], copyFrom->allocptrs[i], saveTo->allocsizes[i]);
-        }
-        else
-        {
-            saveTo->allocptrs[i] = NULL;
-        }
-    }
-}
-
-void mhfs_cl_track_allocs_restore(mhfs_cl_track_allocs *restoreTo, mhfs_cl_track_allocs *copyFrom)
-{
-    for(unsigned i = 0; i < MHFS_CL_TRACK_MAX_ALLOCS; i++)
-    {
-        if(((restoreTo->allocptrs[i] == NULL) && (copyFrom->allocptrs[i] != NULL)) ||
-        ((restoreTo->allocptrs[i] != NULL) && (copyFrom->allocptrs[i] == NULL))
-        )
-        {
-            printf("ptr mismatch, some are NULL in one, but not in the other\n");
-            continue;
-        }
-
-        if((restoreTo->allocptrs[i] != NULL) && (restoreTo->allocsizes[i] != copyFrom->allocsizes[i]))
-        {
-            printf("size mismatch\n");
-            continue;
-        }
-
-        memcpy(restoreTo->allocptrs[i], copyFrom->allocptrs[i], copyFrom->allocsizes[i]);
-    }
-}
-
-void mhfs_cl_track_allocs_free_all(mhfs_cl_track_allocs *p)
-{
-    for(unsigned i = 0; i < MHFS_CL_TRACK_MAX_ALLOCS; i++)
-    {
-        if(p->allocptrs[i] != NULL)
-        {
-            free(p->allocptrs[i]);
         }
     }
 }
@@ -290,10 +262,10 @@ void mhfs_cl_track_init(mhfs_cl_track *pTrack, const unsigned blocksize, const c
     snprintf(pTrack->fullfilename, mhfs_cl_member_size(mhfs_cl_track, fullfilename), "%s", fullfilename);
     pTrack->decoderConfig = ma_decoder_config_init(ma_format_f32, 0, 0);
     ma_allocation_callbacks cbs;
-    cbs.pUserData = &pTrack->allocs;
-    cbs.onMalloc = &mhfs_cl_track_allocs_malloc;
-    cbs.onRealloc = &mhfs_cl_track_allocs_realloc;
-    cbs.onFree = &mhfs_cl_track_allocs_free;
+    cbs.pUserData = pTrack;
+    cbs.onMalloc = &mhfs_cl_track_malloc;
+    cbs.onRealloc = &mhfs_cl_track_realloc;
+    cbs.onFree = &mhfs_cl_track_free;
     pTrack->decoderConfig.allocationCallbacks = cbs;
 
     pTrack->dec_initialized = false;
@@ -531,23 +503,23 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
     // seek to sample
     printf("seek to %u d_pcmframes %u\n", pTrack->currentFrame, desired_pcm_frames);
     const uint32_t currentPCMFrame32 = 0xFFFFFFFF;
-    //mhfs_cl_track_allocs backup;
-    //mhfs_cl_track_allocs_backup(&pTrack->allocs, &backup);
-    //ma_decoder decoderBackup = pTrack->decoder;
+    mhfs_cl_track_allocs_backup(&pTrack->allocs, &pTrack->backup);
+    ma_decoder decoderBackup = pTrack->decoder;
+    unsigned offsetBackup = pTrack->vf.fileoffset;
+
     const bool seekres = MA_SUCCESS == ma_decoder_seek_to_pcm_frame(&pTrack->decoder, pTrack->currentFrame);
     if(!BLOCKVF_OK(&pTrack->vf))
     {
         retval = mhfs_cl_track_error_from_blockvf_error(pTrack->vf.lastdata.code);
         pReturnData->needed_offset = pTrack->vf.lastdata.extradata;
         printf("%s: failed seek_to_pcm_frame NOT OK current: %u desired: %u\n", __func__, currentPCMFrame32, pTrack->currentFrame);
-        goto mhfs_cl_track_read_pcm_frames_f32_FAIL;
+        //goto mhfs_cl_track_read_pcm_frames_f32_FAIL;
 
-        //pTrack->decoder = decoderBackup;
-        //mhfs_cl_track_allocs_restore(&pTrack->allocs, &backup);
-        //mhfs_cl_track_allocs_free_all(&backup);
-        //return retval;
+        pTrack->vf.fileoffset = offsetBackup;
+        pTrack->decoder = decoderBackup;
+        mhfs_cl_track_allocs_backup(&pTrack->backup, &pTrack->allocs);
+        return retval;
     }
-    //mhfs_cl_track_allocs_free_all(&backup);
     if(!seekres)
     {
         printf("%s: seek failed current: %u desired: %u\n", __func__, currentPCMFrame32, pTrack->currentFrame);
@@ -566,22 +538,22 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
         printf("expected frames %"PRIu64"\n", toread);
 
         // decode to pcm
-        //mhfs_cl_track_allocs_backup(&pTrack->allocs, &backup);
-        //decoderBackup = pTrack->decoder;
+        mhfs_cl_track_allocs_backup(&pTrack->allocs, &pTrack->backup);
+        decoderBackup = pTrack->decoder;
+        offsetBackup = pTrack->vf.fileoffset;
         ma_result decRes = ma_decoder_read_pcm_frames(&pTrack->decoder, outFloat, toread, &frames_decoded);
         if(!BLOCKVF_OK(&pTrack->vf))
         {
             retval = mhfs_cl_track_error_from_blockvf_error(pTrack->vf.lastdata.code);
             pReturnData->needed_offset = pTrack->vf.lastdata.extradata;
             printf("mhfs_cl_track_read_pcm_frames_f32_mem: failed read_pcm_frames_f32\n");
-            goto mhfs_cl_track_read_pcm_frames_f32_FAIL;
+            //goto mhfs_cl_track_read_pcm_frames_f32_FAIL;
 
-            //pTrack->decoder = decoderBackup;
-            //mhfs_cl_track_allocs_restore(&pTrack->allocs, &backup);
-            //mhfs_cl_track_allocs_free_all(&backup);
-            //return retval;
+            pTrack->vf.fileoffset = offsetBackup;
+            pTrack->decoder = decoderBackup;
+            mhfs_cl_track_allocs_backup(&pTrack->backup, &pTrack->allocs);
+            return retval;
         }
-        //mhfs_cl_track_allocs_free_all(&backup);
         if(decRes != MA_SUCCESS)
         {
             printf("mhfs_cl_track_read_pcm_frames_f32_mem: failed read_pcm_frames_f32(decode), ma_result %u\n", decRes);
