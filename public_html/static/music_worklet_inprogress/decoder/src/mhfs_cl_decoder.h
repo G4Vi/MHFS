@@ -15,7 +15,7 @@ typedef struct {
 
 
 LIBEXPORT mhfs_cl_decoder *mhfs_cl_decoder_create(const unsigned outputSampleRate, const unsigned outputChannels);
-LIBEXPORT mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(mhfs_cl_decoder *mhfs_d, mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *outFloat, mhfs_cl_track_return_data *pReturnData);
+LIBEXPORT mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(mhfs_cl_decoder *mhfs_d, mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *tempData, float32_t *outFloat, mhfs_cl_track_return_data *pReturnData);
 LIBEXPORT void mhfs_cl_decoder_close(mhfs_cl_decoder *mhfs_d);
 LIBEXPORT void mhfs_cl_decoder_flush(mhfs_cl_decoder *mhfs_d);
 
@@ -124,10 +124,9 @@ mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32(mhfs_cl_decoder *mhfs_d,
     }
 }
 
-mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(mhfs_cl_decoder *mhfs_d, mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *outFloat, mhfs_cl_track_return_data *pReturnData)
+mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(mhfs_cl_decoder *mhfs_d, mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *tempData, float32_t *outFloat, mhfs_cl_track_return_data *pReturnData)
 {
-    float32_t *data = malloc(desired_pcm_frames * sizeof(float32_t)*mhfs_d->outputChannels);
-    const mhfs_cl_track_error code = mhfs_cl_decoder_read_pcm_frames_f32(mhfs_d, pTrack, desired_pcm_frames, data, pReturnData);
+    const mhfs_cl_track_error code = mhfs_cl_decoder_read_pcm_frames_f32(mhfs_d, pTrack, desired_pcm_frames, tempData, pReturnData);
     if(code == MHFS_CL_TRACK_SUCCESS)
     {
         for(unsigned i = 0; i < pReturnData->frames_read; i++)
@@ -135,13 +134,11 @@ mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(mhfs_cl_de
             for(unsigned j = 0; j < mhfs_d->outputChannels; j++)
             {
                 unsigned chanIndex = j*pReturnData->frames_read;
-                float32_t sample = data[(i*mhfs_d->outputChannels) + j];
+                float32_t sample = tempData[(i*mhfs_d->outputChannels) + j];
                 outFloat[chanIndex+i] = sample;
             }
         }
     }
-
-    free(data);
     return code;
 }
 

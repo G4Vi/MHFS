@@ -134,7 +134,10 @@ const MHFSPlayer = async function(opt) {
     await that.ac.audioWorklet.addModule(workletProcessorPath);
     let MusicNode = new AudioWorkletNode(that.ac, 'MusicProcessor',  {'numberOfOutputs' : 1, 'outputChannelCount': [that.channels]});
     MusicNode.connect(that.GainNode);
-    MusicNode.port.postMessage({'message' : 'init', 'audiobuffer' : that._ab.to()});     
+    MusicNode.port.postMessage({'message' : 'init', 'audiobuffer' : that._ab.to()});
+
+    // open the decoder
+    that.decoder = await MHFSCLDecoder(that.sampleRate, that.channels);
 
 
     that.FACAbortController = new AbortController();
@@ -286,10 +289,8 @@ const MHFSPlayer = async function(opt) {
 
     that.QState = that.STATES.NEED_FAQ;
     that.Tracks_HEAD;
-    that.Tracks_TAIL;   
-    that.CurrentMHFSCLTrack;
-    that.FAQ_MUTEX = new Mutex();	
-    that.MHFSCLDecoder = MHFSCLDecoder;
+    that.Tracks_TAIL;
+    that.FAQ_MUTEX = new Mutex();
 
     async function fillAudioQueue(track, time) {
         if(that.QState !== that.STATES.NEED_FAQ) {
@@ -309,10 +310,8 @@ const MHFSPlayer = async function(opt) {
             that.QState = that.STATES.NEED_FAQ;
             return;
         }
-    
-        if(!that.decoder) that.decoder = that.MHFSCLDecoder(that.sampleRate, that.channels);
-        const decoder = that.decoder;    
-        
+
+        const decoder = that.decoder;
         time = time || 0;
         // while there's a track to queue
     TRACKLOOP:for(; track; track = that.repeattrack ?  track : track.next) {
@@ -329,25 +328,11 @@ const MHFSPlayer = async function(opt) {
                 that.gui.SetEndtimeText(track.duration || 0);        
             }
     
-            // open the track in the decoder
-            try {
-                await decoder.openURL(track.url, mysignal);
-                that.CurrentMHFSCLTrack = decoder.track;
-            }
-            catch(error) {
-                time = 0;
-                console.error(error);
-                if(mysignal.aborted) {
-                    break;
-                }
-                continue;
-            }
-    
-            // seek
+            // open the track in the decoder and seek to where we want to start decoding if necessary
             const start_output_time = time;
             time = 0;
-            try{
-                await decoder.seek(start_output_time);
+            try {
+                await decoder.openTrack(mysignal, track, start_output_time);
             }
             catch(error) {
                 console.error(error);
@@ -355,11 +340,9 @@ const MHFSPlayer = async function(opt) {
                     break;
                 }
                 continue;
-            }        
-            track.duration = that.CurrentMHFSCLTrack.duration;
-
+            }
             // We better not modify the AQ if we're cancelled
-            if(mysignal.aborted) break;      
+            if(mysignal.aborted) break;
     
             // decode the track
             let pbtrack = {
@@ -379,14 +362,7 @@ const MHFSPlayer = async function(opt) {
                     }
                 }           
     
-                // wait for there to be space                         
-                /*while((AQDecTime()+todec) > maxsamples) {
-                    const tosleep = ((AQDecTime() + todec - maxsamples)/ that.ac.sampleRate) * 1000; 
-                    if(!(await abortablesleep_status(tosleep, mysignal)))
-                    {
-                        break TRACKLOOP;                    
-                    }
-                }*/
+                // wait for there to be space
                 while(that.decoderdatawriter.getspace() < that.ac.sampleRate) {
                     if(!(await abortablesleep_status(250, mysignal)))
                     {
@@ -405,9 +381,7 @@ const MHFSPlayer = async function(opt) {
                     if(mysignal.aborted) {
                         break TRACKLOOP;
                     }
-                    that.CurrentMHFSCLTrack.close();
-                    that.CurrentMHFSCLTrack = null;
-                    decoder.track = null;
+                    await decoder.closeCurrentTrack();
                     break SAMPLELOOP;
                 }
                 // We better not modify the AQ if we're cancelled

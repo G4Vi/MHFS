@@ -555,6 +555,7 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
                     drflac *pFlac = drflac_open_with_metadata(&mhfs_cl_track_on_read_drflac, &mhfs_cl_track_on_seek_drflac, &mhfs_cl_track_on_meta_drflac, pTrack, NULL);
                     if(pFlac != NULL)
                     {
+                        printf("flac samplerate %u\n", pFlac->sampleRate);
                         mhfs_cl_track_metadata_init(&pTrack->meta, pFlac->totalPCMFrameCount, pFlac->sampleRate, pFlac->channels, pFlac->bitsPerSample);
                         drflac_close(pFlac);
                         if(!pTrack->meta.hasSeekTable)
@@ -571,6 +572,7 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
                 {
                     ma_decoder_get_length_in_pcm_frames(&pTrack->decoder, &totalPCMFrameCount);
                 }
+                printf("decoder output samplerate %u\n", pTrack->decoder.outputSampleRate);
                 mhfs_cl_track_metadata_init(&pTrack->meta, totalPCMFrameCount, pTrack->decoder.outputSampleRate, pTrack->decoder.outputChannels, 0);
             } while(0);
 
@@ -627,7 +629,7 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
         }
         if(decRes != MA_SUCCESS)
         {
-            printf("mhfs_cl_track_read_pcm_frames_f32_mem: failed read_pcm_frames_f32(decode), ma_result %u\n", decRes);
+            printf("mhfs_cl_track_read_pcm_frames_f32_mem: failed read_pcm_frames_f32(decode), ma_result %d\n", decRes);
             goto mhfs_cl_track_read_pcm_frames_f32_FAIL;
         }
         if(frames_decoded != desired_pcm_frames)
