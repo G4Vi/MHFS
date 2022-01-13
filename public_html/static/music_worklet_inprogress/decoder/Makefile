@@ -15,13 +15,16 @@ $(TARGET): $(SRCDIR)/mhfs_cl.c $(DRFLACDIR)/dr_flac.h $(MINIAUDIODIR)/miniaudio.
 	mkdir -p $(OUTDIR)
 	$(CC) $(CFLAGS) -o $@ $<
 
-debug: CFLAGS += -O0 -g4 --source-map-base ./ -s SAFE_HEAP=1
+debug: CFLAGS += -O0 -g4 --source-map-base ./ -s SAFE_HEAP=1 -DMHFSCLTR_PRINT_ON=1 -DMHFSCLDEC_PRINT_ON=1
 debug: $(TARGET)
 #rsync -a $(SRCDIR) $(OUTDIR)/
 #cp $(MINIAUDIODIR)/miniaudio.h $(OUTDIR)/src/
 #cat $(OUTDIR)/_mhfscl.wasm.map | sed -e 's|$(MINIAUDIODIR)/miniaudio.h|src/miniaudio.h|' > $(OUTDIR)/src/_mhfscl.wasm.map
 
+fulldbg: CFLAGS += -DBLOCKVF_PRINT_ON=1
+fulldbg: debug
+
 clean:
 	rm -rf $(OUTDIR)/*
 
-.PHONY: debug clean
+.PHONY: debug clean fulldbg

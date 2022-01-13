@@ -23,6 +23,13 @@ LIBEXPORT void mhfs_cl_decoder_flush(mhfs_cl_decoder *mhfs_d);
 #ifndef mhfs_cl_decoder_c
 #define mhfs_cl_decoder_c
 
+#ifndef MHFSCLDEC_PRINT_ON
+    #define MHFSCLDEC_PRINT_ON 0
+#endif
+
+#define MHFSCLDEC_PRINT(...) \
+    do { if (MHFSCLDEC_PRINT_ON) fprintf(stdout, __VA_ARGS__); } while (0)
+
 mhfs_cl_decoder *mhfs_cl_decoder_create(const unsigned outputSampleRate, const unsigned outputChannels)
 {
     mhfs_cl_decoder *mhfs_d = malloc(sizeof(mhfs_cl_decoder));
@@ -53,7 +60,7 @@ mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32(mhfs_cl_decoder *mhfs_d,
     // open the decoder if needed
     if(!pTrack->dec_initialized)
     {
-        printf("force open ma_decoder (not initialized)\n");
+        MHFSCLDEC_PRINT("force open ma_decoder (not initialized)\n");
         const mhfs_cl_track_error openCode = mhfs_cl_track_read_pcm_frames_f32(pTrack, 0, NULL, pReturnData);
         if(openCode != MHFS_CL_TRACK_SUCCESS)
         {
@@ -79,17 +86,17 @@ mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32(mhfs_cl_decoder *mhfs_d,
             ma_data_converter_config config = ma_data_converter_config_init(ma_format_f32, ma_format_f32, mhfs_cl_track_channels(pTrack), mhfs_d->outputChannels, mhfs_cl_track_sampleRate(pTrack), mhfs_d->outputSampleRate);
             if(ma_data_converter_init(&config, NULL, &mhfs_d->madc) != MA_SUCCESS)
             {
-                printf("failed to init data converter\n");
+                MHFSCLDEC_PRINT("failed to init data converter\n");
                 return MHFS_CL_TRACK_GENERIC_ERROR;
             }
             mhfs_d->has_madc = true;
-            printf("success init data converter\n"); 
+            MHFSCLDEC_PRINT("success init data converter\n"); 
         }
         else if(mhfs_d->madc.sampleRateIn != mhfs_cl_track_sampleRate(pTrack))
         {
             if(ma_data_converter_set_rate(&mhfs_d->madc, mhfs_cl_track_sampleRate(pTrack), mhfs_d->outputSampleRate) != MA_SUCCESS)
             {
-                printf("failed to change data converter samplerate\n");
+                MHFSCLDEC_PRINT("failed to change data converter samplerate\n");
                 return MHFS_CL_TRACK_GENERIC_ERROR;
             }
         }
@@ -98,7 +105,7 @@ mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32(mhfs_cl_decoder *mhfs_d,
         uint64_t dec_frames_req;
         if(ma_data_converter_get_required_input_frame_count(&mhfs_d->madc, desired_pcm_frames, &dec_frames_req) != MA_SUCCESS)
         {
-            printf("failed to get data converter input frame count\n");
+            MHFSCLDEC_PRINT("failed to get data converter input frame count\n");
             return MHFS_CL_TRACK_GENERIC_ERROR;
         }
         float32_t *tempOut = malloc(dec_frames_req * sizeof(float32_t)*mhfs_cl_track_channels(pTrack));
@@ -116,7 +123,7 @@ mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32(mhfs_cl_decoder *mhfs_d,
         free(tempOut);
         if(result != MA_SUCCESS)
         {
-            printf("resample failed\n");
+            MHFSCLDEC_PRINT("resample failed\n");
             return MHFS_CL_TRACK_GENERIC_ERROR;
         }
         pReturnData->frames_read = frameCountOut;

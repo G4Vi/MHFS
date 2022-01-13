@@ -82,6 +82,13 @@ LIBEXPORT double mhfs_cl_track_durationInSecs(const mhfs_cl_track *pTrack);
 #ifndef mhfs_cl_track_c
 #define mhfs_cl_track_c
 
+#ifndef MHFSCLTR_PRINT_ON
+    #define MHFSCLTR_PRINT_ON 0
+#endif
+
+#define MHFSCLTR_PRINT(...) \
+    do { if (MHFSCLTR_PRINT_ON) fprintf(stdout, __VA_ARGS__); } while (0)
+
 #define mhfs_cl_member_size(type, member) sizeof(((type *)0)->member)
 
 static void mhfs_cl_track_metadata_init(mhfs_cl_track_metadata *pMetadata, const uint64_t totalPCMFrameCount, const uint32_t sampleRate, const uint8_t channels, const uint8_t bitsPerSample)
@@ -133,12 +140,12 @@ static void mhfs_cl_track_on_meta_drflac(void *pUserData, drflac_metadata *pMeta
         const char *comment;
         while((comment = drflac_next_vorbis_comment(&comment_iterator, &commentLength)) != NULL)
         {
-            printf("%.*s\n", commentLength, comment);
+            MHFSCLTR_PRINT("%.*s\n", commentLength, comment);
         }
     }
     else if(pMetadata->type == DRFLAC_METADATA_BLOCK_TYPE_PICTURE)
     {
-        printf("Picture mime: %.*s\n", pMetadata->data.picture.mimeLength, pMetadata->data.picture.mime);
+        MHFSCLTR_PRINT("Picture mime: %.*s\n", pMetadata->data.picture.mimeLength, pMetadata->data.picture.mime);
     }
     else if(pMetadata->type == DRFLAC_METADATA_BLOCK_TYPE_SEEKTABLE)
     {
@@ -198,15 +205,15 @@ static void *mhfs_cl_track_malloc(size_t sz, void* pUserData)
             uint8_t *res = malloc(rsz * 2);
             if(res == NULL)
             {
-                printf("%s: %zu malloc failed\n", __func__, sz);
+                MHFSCLTR_PRINT("%s: %zu malloc failed\n", __func__, sz);
             }
-            printf("%s: %zu %p\n", __func__, sz, res);
+            MHFSCLTR_PRINT("%s: %zu %p\n", __func__, sz, res);
             pAllocs->allocsizes[i]= sz;
             pAllocs->allocptrs[i] = res;
             return res;
         }
     }
-    printf("%s: %zu failed to find slot for alloc\n", __func__, sz);
+    MHFSCLTR_PRINT("%s: %zu failed to find slot for alloc\n", __func__, sz);
     return NULL;
 }
 
@@ -219,25 +226,25 @@ static void mhfs_cl_track_free(void* p, void* pUserData)
     {
         if(pAllocs->allocptrs[i] == p)
         {
-            printf("%s: 0x%p\n", __func__, p);
+            MHFSCLTR_PRINT("%s: 0x%p\n", __func__, p);
             free(p);
             pAllocs->allocptrs[i] = NULL;
             return;
         }
     }
-    printf("%s: failed to record free %p\n", __func__, p);
+    MHFSCLTR_PRINT("%s: failed to record free %p\n", __func__, p);
 }
 
 static void *mhfs_cl_track_realloc(void *p, size_t sz, void* pUserData)
 {
     if(p == NULL)
     {
-        printf("%s: %zu realloc passing to malloc\n", __func__, sz);
+        MHFSCLTR_PRINT("%s: %zu realloc passing to malloc\n", __func__, sz);
         return mhfs_cl_track_malloc(sz, pUserData);
     }
     else if(sz == 0)
     {
-        printf("%s: %zu realloc passing to free\n", __func__, sz);
+        MHFSCLTR_PRINT("%s: %zu realloc passing to free\n", __func__, sz);
         mhfs_cl_track_free(p, pUserData);
         return NULL;
     }
@@ -262,7 +269,7 @@ static void *mhfs_cl_track_realloc(void *p, size_t sz, void* pUserData)
             {
                 if(rsz >= orsz)
                 {
-                    printf("%s: %zu realloc failed\n", __func__, sz);
+                    MHFSCLTR_PRINT("%s: %zu realloc failed\n", __func__, sz);
                     return NULL;
                 }
                 // we moved the data down so we can't fail
@@ -279,7 +286,7 @@ static void *mhfs_cl_track_realloc(void *p, size_t sz, void* pUserData)
             return newalloc;
         }
     }
-    printf("%s: %zu failed to find\n", __func__, sz);
+    MHFSCLTR_PRINT("%s: %zu failed to find\n", __func__, sz);
     return NULL;
 }
 
@@ -490,7 +497,7 @@ static mhfs_cl_track_error mhfs_cl_track_open_ma_decoder(mhfs_cl_track *pTrack, 
     }
     else
     {
-        printf("warning: unable to guess format\n");
+        MHFSCLTR_PRINT("warning: unable to guess format\n");
     }
 
     // finally attempt to open encoders
@@ -531,6 +538,56 @@ static mhfs_cl_track_error mhfs_cl_track_open_ma_decoder(mhfs_cl_track *pTrack, 
     return res;
 }
 
+// pTrack must have an opened ma_decoder
+static mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData)
+{
+    mhfs_cl_track_error retval = MHFS_CL_TRACK_SUCCESS;
+    unsigned savefileoffset = pTrack->vf.fileoffset;
+    pTrack->vf.fileoffset = 0;
+    do {
+        if(pTrack->decoderConfig.encodingFormat == ma_encoding_format_flac)
+        {
+            pTrack->meta.hasSeekTable = false;
+            drflac *pFlac = drflac_open_with_metadata(&mhfs_cl_track_on_read_drflac, &mhfs_cl_track_on_seek_drflac, &mhfs_cl_track_on_meta_drflac, pTrack, NULL);
+            if(!BLOCKVF_OK(&pTrack->vf))
+            {
+                retval = mhfs_cl_track_error_from_blockvf_error(pTrack->vf.lastdata.code);
+                pReturnData->needed_offset = pTrack->vf.lastdata.extradata;
+                MHFSCLTR_PRINT("%s failed: drflac_open_with_metadata blockvf error\n", __func__);                    
+                break;
+            }               
+            else if(pFlac != NULL)
+            {
+                MHFSCLTR_PRINT("flac samplerate %u\n", pFlac->sampleRate);
+                mhfs_cl_track_metadata_init(&pTrack->meta, pFlac->totalPCMFrameCount, pFlac->sampleRate, pFlac->channels, pFlac->bitsPerSample);
+                drflac_close(pFlac);
+                if(!pTrack->meta.hasSeekTable)
+                {
+                    MHFSCLTR_PRINT("warning: track does NOT have seektable!\n");
+                }
+                break;
+            }
+        }
+
+        // fallback to initializing from ma_decoder or from passed in value
+        uint64_t totalPCMFrameCount = pTrack->meta.totalPCMFrameCount;
+        if(pTrack->decoderConfig.encodingFormat != ma_encoding_format_mp3)
+        {
+            ma_decoder_get_length_in_pcm_frames(&pTrack->decoder, &totalPCMFrameCount);
+        }
+        MHFSCLTR_PRINT("decoder output samplerate %u\n", pTrack->decoder.outputSampleRate);
+        mhfs_cl_track_metadata_init(&pTrack->meta, totalPCMFrameCount, pTrack->decoder.outputSampleRate, pTrack->decoder.outputChannels, 0);
+    } while(0);
+
+    if(retval == MHFS_CL_TRACK_SUCCESS)
+    {
+        pTrack->meta_initialized = true;
+    }
+    pTrack->vf.fileoffset = savefileoffset;
+    pTrack->vf.lastdata.code = BLOCKVF_SUCCESS;
+    return retval;
+}
+
 mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *outFloat, mhfs_cl_track_return_data *pReturnData)
 {
     mhfs_cl_track_return_data rd;
@@ -543,47 +600,16 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
     {
         retval = mhfs_cl_track_open_ma_decoder(pTrack, pReturnData);
         if(retval != MHFS_CL_TRACK_SUCCESS) return retval;
-
-        if(!pTrack->meta_initialized)
-        {
-            unsigned savefileoffset = pTrack->vf.fileoffset;
-            pTrack->vf.fileoffset = 0;
-            do {
-                if(pTrack->decoderConfig.encodingFormat == ma_encoding_format_flac)
-                {
-                    pTrack->meta.hasSeekTable = false;
-                    drflac *pFlac = drflac_open_with_metadata(&mhfs_cl_track_on_read_drflac, &mhfs_cl_track_on_seek_drflac, &mhfs_cl_track_on_meta_drflac, pTrack, NULL);
-                    if(pFlac != NULL)
-                    {
-                        printf("flac samplerate %u\n", pFlac->sampleRate);
-                        mhfs_cl_track_metadata_init(&pTrack->meta, pFlac->totalPCMFrameCount, pFlac->sampleRate, pFlac->channels, pFlac->bitsPerSample);
-                        drflac_close(pFlac);
-                        if(!pTrack->meta.hasSeekTable)
-                        {
-                            printf("warning: track does NOT have seektable!\n");
-                        }
-                        break;
-                    }
-                }
-
-                // fallback to initializing from ma_decoder or from passed in value
-                uint64_t totalPCMFrameCount = pTrack->meta.totalPCMFrameCount;
-                if(pTrack->decoderConfig.encodingFormat != ma_encoding_format_mp3)
-                {
-                    ma_decoder_get_length_in_pcm_frames(&pTrack->decoder, &totalPCMFrameCount);
-                }
-                printf("decoder output samplerate %u\n", pTrack->decoder.outputSampleRate);
-                mhfs_cl_track_metadata_init(&pTrack->meta, totalPCMFrameCount, pTrack->decoder.outputSampleRate, pTrack->decoder.outputChannels, 0);
-            } while(0);
-
-            pTrack->vf.fileoffset = savefileoffset;
-            pTrack->vf.lastdata.code = BLOCKVF_SUCCESS;
-            pTrack->meta_initialized = true;
-        }
+    }
+    // initialize the metadata if necessary
+    if(!pTrack->meta_initialized)
+    {
+        retval = mhfs_cl_track_load_metadata(pTrack, pReturnData);
+        if(retval != MHFS_CL_TRACK_SUCCESS) return retval;
     }
 
     // seek to sample
-    printf("seek to %u d_pcmframes %u\n", pTrack->currentFrame, desired_pcm_frames);
+    MHFSCLTR_PRINT("seek to %u d_pcmframes %u\n", pTrack->currentFrame, desired_pcm_frames);
     const uint32_t currentPCMFrame32 = 0xFFFFFFFF;
     mhfs_cl_track_allocs_backup(pTrack);
     const bool seekres = MA_SUCCESS == ma_decoder_seek_to_pcm_frame(&pTrack->decoder, pTrack->currentFrame);
@@ -591,7 +617,7 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
     {
         retval = mhfs_cl_track_error_from_blockvf_error(pTrack->vf.lastdata.code);
         pReturnData->needed_offset = pTrack->vf.lastdata.extradata;
-        printf("%s: failed seek_to_pcm_frame NOT OK current: %u desired: %u\n", __func__, currentPCMFrame32, pTrack->currentFrame);
+        MHFSCLTR_PRINT("%s: failed seek_to_pcm_frame NOT OK current: %u desired: %u\n", __func__, currentPCMFrame32, pTrack->currentFrame);
         //goto mhfs_cl_track_read_pcm_frames_f32_FAIL;
 
         mhfs_cl_track_allocs_restore(pTrack);
@@ -599,7 +625,7 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
     }
     if(!seekres)
     {
-        printf("%s: seek failed current: %u desired: %u\n", __func__, currentPCMFrame32, pTrack->currentFrame);
+        MHFSCLTR_PRINT("%s: seek failed current: %u desired: %u\n", __func__, currentPCMFrame32, pTrack->currentFrame);
         retval = MHFS_CL_TRACK_GENERIC_ERROR;
         goto mhfs_cl_track_read_pcm_frames_f32_FAIL;
     }
@@ -612,7 +638,7 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
         //uint64_t aframes;
         //ma_decoder_get_available_frames(&pTrack->decoder, &aframes);
         //if(aframes < toread) toread = aframes;
-        printf("expected frames %"PRIu64"\n", toread);
+        MHFSCLTR_PRINT("expected frames %"PRIu64"\n", toread);
 
         // decode to pcm
         mhfs_cl_track_allocs_backup(pTrack);
@@ -621,7 +647,7 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
         {
             retval = mhfs_cl_track_error_from_blockvf_error(pTrack->vf.lastdata.code);
             pReturnData->needed_offset = pTrack->vf.lastdata.extradata;
-            printf("mhfs_cl_track_read_pcm_frames_f32_mem: failed read_pcm_frames_f32\n");
+            MHFSCLTR_PRINT("mhfs_cl_track_read_pcm_frames_f32_mem: failed read_pcm_frames_f32\n");
             //goto mhfs_cl_track_read_pcm_frames_f32_FAIL;
 
             mhfs_cl_track_allocs_restore(pTrack);
@@ -629,17 +655,17 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
         }
         if(decRes != MA_SUCCESS)
         {
-            printf("mhfs_cl_track_read_pcm_frames_f32_mem: failed read_pcm_frames_f32(decode), ma_result %d\n", decRes);
+            MHFSCLTR_PRINT("mhfs_cl_track_read_pcm_frames_f32_mem: failed read_pcm_frames_f32(decode), ma_result %d\n", decRes);
             goto mhfs_cl_track_read_pcm_frames_f32_FAIL;
         }
         if(frames_decoded != desired_pcm_frames)
         {
-            printf("mhfs_cl_track_read_pcm_frames_f32_mem: expected %u decoded %"PRIu64"\n", desired_pcm_frames, frames_decoded);
+            MHFSCLTR_PRINT("mhfs_cl_track_read_pcm_frames_f32_mem: expected %u decoded %"PRIu64"\n", desired_pcm_frames, frames_decoded);
         }
         pTrack->currentFrame += frames_decoded;
     }
 
-    printf("returning from pTrack->currentFrame: %u, totalFrames %"PRIu64" frames_decoded %"PRIu64" desired %u\n", pTrack->currentFrame, mhfs_cl_track_totalPCMFrameCount(pTrack), frames_decoded, desired_pcm_frames);
+    MHFSCLTR_PRINT("returning from pTrack->currentFrame: %u, totalFrames %"PRIu64" frames_decoded %"PRIu64" desired %u\n", pTrack->currentFrame, mhfs_cl_track_totalPCMFrameCount(pTrack), frames_decoded, desired_pcm_frames);
     pReturnData->frames_read = frames_decoded;
     return MHFS_CL_TRACK_SUCCESS;
 
