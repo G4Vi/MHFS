@@ -4,6 +4,10 @@ typedef struct {
     unsigned outputChannels;
     bool has_madc;
     ma_data_converter madc;
+    size_t dcTempOutSize;
+    float32_t *pDCTempOut;
+    unsigned interleaveData_pcm_frames;
+    float32_t interleavedData[];
 } mhfs_cl_decoder;
 
 #ifdef __EMSCRIPTEN__
@@ -14,9 +18,8 @@ typedef struct {
 #endif
 
 
-LIBEXPORT mhfs_cl_decoder *mhfs_cl_decoder_create(const unsigned outputSampleRate, const unsigned outputChannels);
-// decodes to outFloat, with each channel deinterleaved, i.e. for stereo LLLLLL RRRRRR channel_pcm_size controls where the next channels audio should be decoded. tempData is used as an intermediary buffer
-LIBEXPORT mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(mhfs_cl_decoder *mhfs_d, mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, const uint32_t channel_pcm_size, float32_t *tempData, float32_t *outFloat, mhfs_cl_track_return_data *pReturnData);
+LIBEXPORT mhfs_cl_decoder *mhfs_cl_decoder_open(const unsigned outputSampleRate, const unsigned outputChannels, const unsigned deinterleave_max_pcm_frames);
+LIBEXPORT mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(mhfs_cl_decoder *mhfs_d, mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *outFloat[], mhfs_cl_track_return_data *pReturnData);
 LIBEXPORT void mhfs_cl_decoder_close(mhfs_cl_decoder *mhfs_d);
 LIBEXPORT void mhfs_cl_decoder_flush(mhfs_cl_decoder *mhfs_d);
 
@@ -31,19 +34,28 @@ LIBEXPORT void mhfs_cl_decoder_flush(mhfs_cl_decoder *mhfs_d);
 #define MHFSCLDEC_PRINT(...) \
     do { if (MHFSCLDEC_PRINT_ON) fprintf(stdout, __VA_ARGS__); } while (0)
 
-mhfs_cl_decoder *mhfs_cl_decoder_create(const unsigned outputSampleRate, const unsigned outputChannels)
+inline size_t mhfs_cl_decoder_size(const unsigned outputChannels, const unsigned deinterleave_max_pcm_frames)
 {
-    mhfs_cl_decoder *mhfs_d = malloc(sizeof(mhfs_cl_decoder));
+    return sizeof(mhfs_cl_decoder) + (sizeof(float32_t*) * outputChannels * deinterleave_max_pcm_frames);
+}
+
+mhfs_cl_decoder *mhfs_cl_decoder_open(const unsigned outputSampleRate, const unsigned outputChannels, const unsigned deinterleave_max_pcm_frames)
+{
+    mhfs_cl_decoder *mhfs_d = malloc(mhfs_cl_decoder_size(outputChannels, deinterleave_max_pcm_frames));
     if(mhfs_d == NULL) return NULL;
     mhfs_d->outputSampleRate = outputSampleRate;
     mhfs_d->outputChannels = outputChannels;
     mhfs_d->has_madc = false;
-    return mhfs_d;    
+    mhfs_d->dcTempOutSize = 0;
+    mhfs_d->pDCTempOut = NULL;
+    mhfs_d->interleaveData_pcm_frames = deinterleave_max_pcm_frames;
+    return mhfs_d;
 }
 
 void mhfs_cl_decoder_close(mhfs_cl_decoder *mhfs_d)
 {
     if(mhfs_d->has_madc)  ma_data_converter_uninit(&mhfs_d->madc, NULL);
+    if(mhfs_d->pDCTempOut != NULL) free(mhfs_d->pDCTempOut);
     free(mhfs_d);
 }
 
@@ -109,19 +121,28 @@ mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32(mhfs_cl_decoder *mhfs_d,
             MHFSCLDEC_PRINT("failed to get data converter input frame count\n");
             return MHFS_CL_TRACK_GENERIC_ERROR;
         }
-        float32_t *tempOut = malloc(dec_frames_req * sizeof(float32_t)*mhfs_cl_track_channels(pTrack));
-        const mhfs_cl_track_error readCode = mhfs_cl_track_read_pcm_frames_f32(pTrack, dec_frames_req, tempOut, pReturnData);
+        const size_t reqBytes = dec_frames_req * sizeof(float32_t)*mhfs_cl_track_channels(pTrack);
+        if(reqBytes > mhfs_d->dcTempOutSize)
+        {
+            float32_t *tempOut = realloc(mhfs_d->pDCTempOut, reqBytes);
+            if(tempOut == NULL)
+            {
+                MHFSCLDEC_PRINT("realloc failed\n");
+                return MHFS_CL_TRACK_GENERIC_ERROR;
+            }
+            mhfs_d->dcTempOutSize = reqBytes;
+            mhfs_d->pDCTempOut = tempOut;
+        }
+        const mhfs_cl_track_error readCode = mhfs_cl_track_read_pcm_frames_f32(pTrack, dec_frames_req, mhfs_d->pDCTempOut, pReturnData);
         if((readCode != MHFS_CL_TRACK_SUCCESS) || (pReturnData->frames_read == 0))
         {
-            free(tempOut);
             return readCode;
         }
         uint64_t decoded_frames = pReturnData->frames_read;
 
         // resample
         uint64_t frameCountOut = desired_pcm_frames;       
-        ma_result result = ma_data_converter_process_pcm_frames(&mhfs_d->madc, tempOut, &decoded_frames, outFloat, &frameCountOut);
-        free(tempOut);
+        ma_result result = ma_data_converter_process_pcm_frames(&mhfs_d->madc, mhfs_d->pDCTempOut, &decoded_frames, outFloat, &frameCountOut);
         if(result != MA_SUCCESS)
         {
             MHFSCLDEC_PRINT("resample failed\n");
@@ -132,18 +153,22 @@ mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32(mhfs_cl_decoder *mhfs_d,
     }
 }
 
-mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(mhfs_cl_decoder *mhfs_d, mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, const uint32_t channel_pcm_size, float32_t *tempData, float32_t *outFloat, mhfs_cl_track_return_data *pReturnData)
+mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(mhfs_cl_decoder *mhfs_d, mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *outFloat[], mhfs_cl_track_return_data *pReturnData)
 {
-    const mhfs_cl_track_error code = mhfs_cl_decoder_read_pcm_frames_f32(mhfs_d, pTrack, desired_pcm_frames, tempData, pReturnData);
+    if(desired_pcm_frames > mhfs_d->interleaveData_pcm_frames)
+    {
+        MHFSCLDEC_PRINT("%s: Not enough space to deinterleave internally\n", __func__);
+        return MHFS_CL_TRACK_GENERIC_ERROR;
+    }
+    const mhfs_cl_track_error code = mhfs_cl_decoder_read_pcm_frames_f32(mhfs_d, pTrack, desired_pcm_frames, mhfs_d->interleavedData, pReturnData);
     if(code == MHFS_CL_TRACK_SUCCESS)
     {
         for(unsigned i = 0; i < pReturnData->frames_read; i++)
         {
             for(unsigned j = 0; j < mhfs_d->outputChannels; j++)
             {
-                float32_t sample = tempData[(i*mhfs_d->outputChannels) + j];
-                const unsigned chanIndex = j*channel_pcm_size;
-                outFloat[chanIndex+i] = sample;
+                const float32_t sample = mhfs_d->interleavedData[(i*mhfs_d->outputChannels) + j];
+                outFloat[j][i] = sample;
             }
         }
     }

@@ -227,14 +227,55 @@ const MHFSCLAllocation = function(size) {
     return that;
 };
 
+// allocates size bytes for each item. creates array of ptrs to point to the data
+// [[ptr0, ptr1, ptr...][data0][data1][data...]]
+const MHFSCLArrsAlloc = function(nitems, size) {
+    const that = {};
+    that.nitems = nitems;
+    that.ptrarrsize = nitems * MHFSCL.PTRSIZE;
+    that.size = 0;
+
+    that.free = function() {
+        if(that.alloc) {
+            that.alloc.free();
+            that.alloc = null;
+        }
+        that.nitems = 0;
+        that.ptrarrsize = 0;
+        that.size = 0;
+    };
+
+    that.setptrs = function(size) {
+        const myarr = new Uint32Array(MHFSCL.Module.HEAPU8.buffer, that.alloc.ptr, that.nitems);
+        let dataptr = that.alloc.ptr + that.ptrarrsize;
+        for( let i = 0; i < that.nitems; i++) {
+            myarr[i] = dataptr;
+            dataptr += size;
+        }
+    };
+
+    that.with = function(sz) {
+        sz = MHFSCL.AlignedSize(sz);
+        if(that.alloc && (sz <= that.size)) {
+            return that.alloc.ptr;
+        }
+        that.alloc = MHFSCLAllocation(that.ptrarrsize + (nitems * sz));
+        that.size = sz;
+        that.setptrs(sz);
+        return that.alloc.ptr;
+    };
+    that.with(size);
+    return that;
+};
+
 const MHFSCLDecoder = async function(outputSampleRate, outputChannelCount) {
     if(!MHFSCL.ready) {
         console.log('MHFSCLDecoder, waiting for MHFSCL to be ready');
         await waitForEvent(MHFSCL, 'ready');
     }
 	const that = {};
-	that.ptr = MHFSCL.mhfs_cl_decoder_create(outputSampleRate, outputChannelCount);
-    if(! that.ptr) throw("Failed to create decoder");
+	that.ptr = MHFSCL.mhfs_cl_decoder_open(outputSampleRate, outputChannelCount, outputSampleRate);
+    if(! that.ptr) throw("Failed to open decoder");
 
     that.outputSampleRate = outputSampleRate;
     that.outputChannelCount = outputChannelCount;
@@ -242,8 +283,7 @@ const MHFSCLDecoder = async function(outputSampleRate, outputChannelCount) {
     that.pcm_float_frame_size = that.f32_size * that.outputChannelCount;
 
     that.returnDataAlloc = MHFSCLAllocation(MHFSCL.mhfs_cl_track_return_data_sizeof);
-    that.interleaveDataAlloc = MHFSCLAllocation(0);
-    that.deinterleaveDataAlloc = MHFSCLAllocation(0);
+    that.deinterleaveDataAlloc = MHFSCLArrsAlloc(outputChannelCount, that.outputSampleRate*that.f32_size);
 
     that.flush = async function() {
         MHFSCL.mhfs_cl_decoder_flush(that.ptr);
@@ -261,7 +301,6 @@ const MHFSCLDecoder = async function(outputSampleRate, outputChannelCount) {
         MHFSCL.mhfs_cl_decoder_close(that.ptr);
         that.ptr = 0;
         that.returnDataAlloc.free();
-        that.interleaveDataAlloc.free();
         that.deinterleaveDataAlloc.free();
     };
     
@@ -312,8 +351,7 @@ const MHFSCLDecoder = async function(outputSampleRate, outputChannelCount) {
         while(1) {              
             // attempt to decode the samples
             const rd = that.returnDataAlloc.ptr;
-            const tempData = that.interleaveDataAlloc.with(todec * that.pcm_float_frame_size);
-            const code = MHFSCL.mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(that.ptr, that.track.ptr, todec, todec, tempData, destdata, rd);
+            const code = MHFSCL.mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(that.ptr, that.track.ptr, todec, destdata, rd);
             const retdata = MHFSCL.UINT32Value(rd);
 
             // success, retdata is frames read
@@ -334,14 +372,14 @@ const MHFSCLDecoder = async function(outputSampleRate, outputChannelCount) {
     that.read_pcm_frames_f32_AudioBuffer = async function(todec, mysignal) {
         let theerror;
         let returnval;
-        const destdata = that.deinterleaveDataAlloc.with(todec*that.pcm_float_frame_size);
+        const destdata = that.deinterleaveDataAlloc.with(todec*that.f32_size);
         try {
             const frames = await that.read_pcm_frames_f32_deinterleaved(todec, destdata, mysignal);
             if(frames) {
-                const audiobuffer = new AudioBuffer({'length' : frames, 'numberOfChannels' : that.outputChannelCount, 'sampleRate' : that.outputSampleRate});                
+                const audiobuffer = new AudioBuffer({'length' : frames, 'numberOfChannels' : that.outputChannelCount, 'sampleRate' : that.outputSampleRate});
+                const chanPtrs = new Uint32Array(MHFSCL.Module.HEAPU8.buffer, destdata, that.outputChannelCount);
                 for( let i = 0; i < that.outputChannelCount; i++) {
-                    const chanPtr = destdata + ((that.f32_size * todec) * i);
-                    const buf = new Float32Array(MHFSCL.Module.HEAPU8.buffer, chanPtr, frames);
+                    const buf = new Float32Array(MHFSCL.Module.HEAPU8.buffer, chanPtrs[i], frames);
                     audiobuffer.copyToChannel(buf, i);
                 }
                 returnval = audiobuffer;
@@ -363,6 +401,8 @@ export { MHFSCLDecoder };
 
 Module().then(function(MHFSCLMod){
     MHFSCL.Module = MHFSCLMod;
+
+    MHFSCL.PTRSIZE = 4;
 
     MHFSCL.UINT32Value = function(ptr) {
         return MHFSCL.Module.HEAPU32[ptr >> 2];
@@ -404,9 +444,9 @@ Module().then(function(MHFSCLMod){
 
     MHFSCL.mhfs_cl_track_durationInSecs = MHFSCLMod.cwrap('mhfs_cl_track_durationInSecs', "number", ["number"]);
     
-    MHFSCL.mhfs_cl_decoder_create = MHFSCLMod.cwrap('mhfs_cl_decoder_create', "number", ["number", "number"]);
+    MHFSCL.mhfs_cl_decoder_open = MHFSCLMod.cwrap('mhfs_cl_decoder_open', "number", ["number", "number", "number"]);
 
-    MHFSCL.mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved = MHFSCLMod.cwrap('mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved', "number", ["number", "number", "number", "number", "number", "number", "number"]);
+    MHFSCL.mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved = MHFSCLMod.cwrap('mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved', "number", ["number", "number", "number", "number", "number"]);
 
     MHFSCL.mhfs_cl_decoder_close = MHFSCLMod.cwrap('mhfs_cl_decoder_close', null, ["number"]);
 
