@@ -313,7 +313,7 @@ const MHFSCLDecoder = async function(outputSampleRate, outputChannelCount) {
             // attempt to decode the samples
             const rd = that.returnDataAlloc.ptr;
             const tempData = that.interleaveDataAlloc.with(todec * that.pcm_float_frame_size);
-            const code = MHFSCL.mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(that.ptr, that.track.ptr, todec, tempData, destdata, rd);
+            const code = MHFSCL.mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(that.ptr, that.track.ptr, todec, todec, tempData, destdata, rd);
             const retdata = MHFSCL.UINT32Value(rd);
 
             // success, retdata is frames read
@@ -340,7 +340,8 @@ const MHFSCLDecoder = async function(outputSampleRate, outputChannelCount) {
             if(frames) {
                 const audiobuffer = new AudioBuffer({'length' : frames, 'numberOfChannels' : that.outputChannelCount, 'sampleRate' : that.outputSampleRate});                
                 for( let i = 0; i < that.outputChannelCount; i++) {
-                    const buf = that._getChannelData(destdata, frames, i);
+                    const chanPtr = destdata + ((that.f32_size * todec) * i);
+                    const buf = new Float32Array(MHFSCL.Module.HEAPU8.buffer, chanPtr, frames);
                     audiobuffer.copyToChannel(buf, i);
                 }
                 returnval = audiobuffer;
@@ -353,11 +354,6 @@ const MHFSCLDecoder = async function(outputSampleRate, outputChannelCount) {
             if(theerror) throw(theerror);
             return returnval;
         }        
-    };
-
-    that._getChannelData = function(ptr, frames, channel) {
-        const chansize = frames * 4;
-        return new Float32Array(MHFSCL.Module.HEAPU8.buffer, ptr+(chansize*channel), frames);
     };
 	
 	return that;
@@ -410,7 +406,7 @@ Module().then(function(MHFSCLMod){
     
     MHFSCL.mhfs_cl_decoder_create = MHFSCLMod.cwrap('mhfs_cl_decoder_create', "number", ["number", "number"]);
 
-    MHFSCL.mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved = MHFSCLMod.cwrap('mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved', "number", ["number", "number", "number", "number", "number", "number"]);
+    MHFSCL.mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved = MHFSCLMod.cwrap('mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved', "number", ["number", "number", "number", "number", "number", "number", "number"]);
 
     MHFSCL.mhfs_cl_decoder_close = MHFSCLMod.cwrap('mhfs_cl_decoder_close', null, ["number"]);
 

@@ -15,7 +15,8 @@ typedef struct {
 
 
 LIBEXPORT mhfs_cl_decoder *mhfs_cl_decoder_create(const unsigned outputSampleRate, const unsigned outputChannels);
-LIBEXPORT mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(mhfs_cl_decoder *mhfs_d, mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *tempData, float32_t *outFloat, mhfs_cl_track_return_data *pReturnData);
+// decodes to outFloat, with each channel deinterleaved, i.e. for stereo LLLLLL RRRRRR channel_pcm_size controls where the next channels audio should be decoded. tempData is used as an intermediary buffer
+LIBEXPORT mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(mhfs_cl_decoder *mhfs_d, mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, const uint32_t channel_pcm_size, float32_t *tempData, float32_t *outFloat, mhfs_cl_track_return_data *pReturnData);
 LIBEXPORT void mhfs_cl_decoder_close(mhfs_cl_decoder *mhfs_d);
 LIBEXPORT void mhfs_cl_decoder_flush(mhfs_cl_decoder *mhfs_d);
 
@@ -131,7 +132,7 @@ mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32(mhfs_cl_decoder *mhfs_d,
     }
 }
 
-mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(mhfs_cl_decoder *mhfs_d, mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *tempData, float32_t *outFloat, mhfs_cl_track_return_data *pReturnData)
+mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(mhfs_cl_decoder *mhfs_d, mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, const uint32_t channel_pcm_size, float32_t *tempData, float32_t *outFloat, mhfs_cl_track_return_data *pReturnData)
 {
     const mhfs_cl_track_error code = mhfs_cl_decoder_read_pcm_frames_f32(mhfs_d, pTrack, desired_pcm_frames, tempData, pReturnData);
     if(code == MHFS_CL_TRACK_SUCCESS)
@@ -140,8 +141,8 @@ mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(mhfs_cl_de
         {
             for(unsigned j = 0; j < mhfs_d->outputChannels; j++)
             {
-                unsigned chanIndex = j*pReturnData->frames_read;
                 float32_t sample = tempData[(i*mhfs_d->outputChannels) + j];
+                const unsigned chanIndex = j*channel_pcm_size;
                 outFloat[chanIndex+i] = sample;
             }
         }
