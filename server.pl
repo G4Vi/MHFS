@@ -1056,7 +1056,7 @@ package HTTP::BS::Server::Client::Request {
             $filename = $opt->{'inline'};
         }
         if($filename) {
-            my $sendablebytes = encode('UTF-8', '"'.MusicLibrary::get_printable_utf8($filename));
+            my $sendablebytes = encode('UTF-8', MusicLibrary::get_printable_utf8($filename));
             $headtext .=   "Content-Disposition: $disposition; filename*=UTF-8''".uri_escape($sendablebytes)."; filename=\"$sendablebytes\"\r\n";
         }
 
