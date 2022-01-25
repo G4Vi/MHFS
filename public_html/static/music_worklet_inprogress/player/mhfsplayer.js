@@ -371,10 +371,10 @@ const MHFSPlayer = async function(opt) {
                 }
                 
                 // decode
-                let audiobuffer;
+                let decdata;
                 try {
-                    audiobuffer = await decoder.read_pcm_frames_f32_AudioBuffer(todec, mysignal);
-                    if(!audiobuffer) break SAMPLELOOP;                
+                    decdata = await decoder.read_pcm_frames_f32_arrs(todec, mysignal);
+                    if(!decdata) break SAMPLELOOP;
                 }
                 catch(error) {
                     console.error(error);
@@ -387,15 +387,11 @@ const MHFSPlayer = async function(opt) {
                 // We better not modify the AQ if we're cancelled
                 if(mysignal.aborted) break TRACKLOOP;                     
     
-                pbtrack.sampleCount += audiobuffer.length;
-                let arrs = [];
-                for(let i = 0; i < that.channels; i++) {
-                    arrs[i] = audiobuffer.getChannelData(i);
-                }
-                that.decoderdatawriter.write(arrs);                         
+                pbtrack.sampleCount += decdata.length;
+                that.decoderdatawriter.write(decdata.chanData);
                 
                 // break out at end
-                if(audiobuffer.length < todec) {
+                if(decdata.length < todec) {
                     break SAMPLELOOP;
                 }                      
             }

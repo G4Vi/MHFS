@@ -393,6 +393,30 @@ const MHFSCLDecoder = async function(outputSampleRate, outputChannelCount) {
             return returnval;
         }        
     };
+
+    that.read_pcm_frames_f32_arrs = async function(todec, mysignal) {
+        let theerror;
+        let returnval;
+        const destdata = that.deinterleaveDataAlloc.with(todec*that.f32_size);
+        try {
+            const frames = await that.read_pcm_frames_f32_deinterleaved(todec, destdata, mysignal);
+            if(frames) {
+                const chanPtrs = new Uint32Array(MHFSCL.Module.HEAPU8.buffer, destdata, that.outputChannelCount);
+                const obj = { 'length' : frames, 'chanData' : []};
+                for( let i = 0; i < that.outputChannelCount; i++) {
+                    obj.chanData[i] = new Float32Array(MHFSCL.Module.HEAPU8.buffer, chanPtrs[i], frames);
+                }
+                returnval = obj;
+            }
+        }
+        catch(error) {
+            theerror = error;
+        }
+        finally {
+            if(theerror) throw(theerror);
+            return returnval;
+        }
+    };
 	
 	return that;
 };
