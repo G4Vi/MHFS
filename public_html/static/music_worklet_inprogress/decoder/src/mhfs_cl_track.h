@@ -635,10 +635,6 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
     if(desired_pcm_frames != 0)
     {
         uint64_t toread = desired_pcm_frames;
-        //uint64_t aframes;
-        //ma_decoder_get_available_frames(&pTrack->decoder, &aframes);
-        //if(aframes < toread) toread = aframes;
-        MHFSCLTR_PRINT("expected frames %"PRIu64"\n", toread);
 
         // decode to pcm
         mhfs_cl_track_allocs_backup(pTrack);

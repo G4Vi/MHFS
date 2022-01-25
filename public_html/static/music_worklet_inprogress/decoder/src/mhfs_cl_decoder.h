@@ -34,7 +34,7 @@ LIBEXPORT void mhfs_cl_decoder_flush(mhfs_cl_decoder *mhfs_d);
 #define MHFSCLDEC_PRINT(...) \
     do { if (MHFSCLDEC_PRINT_ON) fprintf(stdout, __VA_ARGS__); } while (0)
 
-inline size_t mhfs_cl_decoder_size(const unsigned outputChannels, const unsigned deinterleave_max_pcm_frames)
+size_t mhfs_cl_decoder_size(const unsigned outputChannels, const unsigned deinterleave_max_pcm_frames)
 {
     return sizeof(mhfs_cl_decoder) + (sizeof(float32_t*) * outputChannels * deinterleave_max_pcm_frames);
 }
@@ -82,7 +82,7 @@ mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32(mhfs_cl_decoder *mhfs_d,
     }
     
     // fast path, no resampling / channel conversion needed
-    if((mhfs_cl_track_sampleRate(pTrack) == mhfs_d->outputSampleRate) && (mhfs_cl_track_channels(pTrack) != mhfs_d->outputChannels))
+    if((mhfs_cl_track_sampleRate(pTrack) == mhfs_d->outputSampleRate) && (mhfs_cl_track_channels(pTrack) == mhfs_d->outputChannels))
     {
         return mhfs_cl_track_read_pcm_frames_f32(pTrack, desired_pcm_frames, outFloat, pReturnData);
     }
