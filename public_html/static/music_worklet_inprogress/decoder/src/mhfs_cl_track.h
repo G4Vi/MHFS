@@ -612,7 +612,7 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
     MHFSCLTR_PRINT("seek to %u d_pcmframes %u\n", pTrack->currentFrame, desired_pcm_frames);
     const uint32_t currentPCMFrame32 = 0xFFFFFFFF;
     mhfs_cl_track_allocs_backup(pTrack);
-    const bool seekres = MA_SUCCESS == ma_decoder_seek_to_pcm_frame(&pTrack->decoder, pTrack->currentFrame);
+    const ma_result seekRes = ma_decoder_seek_to_pcm_frame(&pTrack->decoder, pTrack->currentFrame);
     if(!BLOCKVF_OK(&pTrack->vf))
     {
         retval = mhfs_cl_track_error_from_blockvf_error(pTrack->vf.lastdata.code);
@@ -623,9 +623,9 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
         mhfs_cl_track_allocs_restore(pTrack);
         return retval;
     }
-    if(!seekres)
+    if(seekRes != MA_SUCCESS)
     {
-        MHFSCLTR_PRINT("%s: seek failed current: %u desired: %u\n", __func__, currentPCMFrame32, pTrack->currentFrame);
+        MHFSCLTR_PRINT("%s: seek failed current: %u desired: %u ma_result %d\n", __func__, currentPCMFrame32, pTrack->currentFrame, seekRes);
         retval = MHFS_CL_TRACK_GENERIC_ERROR;
         goto mhfs_cl_track_read_pcm_frames_f32_FAIL;
     }
@@ -652,6 +652,11 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
         if(decRes != MA_SUCCESS)
         {
             MHFSCLTR_PRINT("mhfs_cl_track_read_pcm_frames_f32_mem: failed read_pcm_frames_f32(decode), ma_result %d\n", decRes);
+            retval = MHFS_CL_TRACK_GENERIC_ERROR;
+            if(decRes == MA_AT_END)
+            {
+                MHFSCLTR_PRINT("MA_AT_END\n"); // not a real error
+            }
             goto mhfs_cl_track_read_pcm_frames_f32_FAIL;
         }
         if(frames_decoded != desired_pcm_frames)
