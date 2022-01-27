@@ -215,9 +215,12 @@ const MHFSPlayer = async function(opt) {
             const duration =  (track && track.duration) ? track.duration : 0;
             seekbar.max = duration;
             that.gui.SetEndtimeText(duration);
-            that.gui.SetPlayText(track ? track.trackname : '');
-            that.gui.SetPrevText((track && track.prev) ? track.prev.trackname : '');            
-            that.gui.SetNextText((track && track.next) ? track.next.trackname : '');            
+            //that.gui.SetPlayText(track ? track.trackname : '');
+            //that.gui.SetPrevText((track && track.prev) ? track.prev.trackname : '');            
+            //that.gui.SetNextText((track && track.next) ? track.next.trackname : '');
+            that.gui.SetPrevTrack(track ? track.prev : undefined);
+            that.gui.SetPlayTrack(track);
+            that.gui.SetNextTrack(track ? track.next : undefined);            
         }
     }
 
@@ -318,11 +321,14 @@ const MHFSPlayer = async function(opt) {
             
             // render the text if nothing is queued
             if(!that.AudioQueue[0]) {
-                let prevtext = track.prev ? track.prev.trackname : '';
-                that.gui.SetPrevText(prevtext);
-                that.gui.SetPlayText(track.trackname + ' {LOADING}');
-                let nexttext =  track.next ? track.next.trackname : '';
-                that.gui.SetNextText(nexttext);
+                //let prevtext = track.prev ? track.prev.trackname : '';
+                //that.gui.SetPrevText(prevtext);
+                //that.gui.SetPlayText(track.trackname + ' {LOADING}');
+                //let nexttext =  track.next ? track.next.trackname : '';
+                //that.gui.SetNextText(nexttext);
+                that.gui.SetPrevTrack(track.prev);
+                that.gui.SetPlayTrack(track, true);
+                that.gui.SetNextTrack(track.next);
                 that.gui.SetCurtimeText(time || 0);
                 if(!time) that.gui.SetSeekbarValue(time || 0);
                 that.gui.SetEndtimeText(track.duration || 0);        
@@ -419,7 +425,7 @@ const MHFSPlayer = async function(opt) {
 
     that.USERMUTEX = new Mutex(); 
     that._queuetrack = function(trackname, after) {
-        const track = {'trackname' : trackname, 'url' : that.gui.geturl(trackname)};
+        const track = {'trackname' : trackname, 'url' : that.gui.geturl(trackname), 'arturl' : that.gui.getarturl(trackname)};
 
         // if not specified queue at tail
         after = after || that.Tracks_TAIL;    

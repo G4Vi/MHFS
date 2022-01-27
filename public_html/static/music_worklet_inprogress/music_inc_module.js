@@ -35,6 +35,55 @@ const SetEndtimeText = function(seconds) {
     endtimetxt.value = seconds.toHHMMSS();
 }
 
+const TrackHTML = function(track, isLoading) {
+    const trackdiv = document.createElement("div");
+    trackdiv.setAttribute('class', 'trackdiv');
+    if(0) {
+    //if(track && track.arturl) {
+        const artelm = document.createElement("img");
+        artelm.setAttribute("class", "albumart");
+        artelm.setAttribute("src", track.arturl);
+        artelm.setAttribute("alt", "album art");
+        const artdiv = document.createElement("div");
+        artdiv.appendChild(artelm);
+        trackdiv.appendChild(artdiv);
+    }
+    let trackname = track ? track.trackname : '';
+    if(isLoading) {
+        trackname += ' {LOADING}';
+    }
+    const metadiv = document.createElement("div");
+    const textnode = document.createTextNode(trackname);
+    metadiv.appendChild(textnode);
+    trackdiv.appendChild(metadiv);
+    return trackdiv;
+
+
+    //if(isLoading) {
+    //    trackname += ' {LOADING}';
+    //}
+    //if(track && track.arturl) {
+    //    trackname += '<img class="albumart" src="' + track.arturl + '" alt="album art"></img>';
+    //}
+    ////return '<span>' + trackname + '</span>';
+    //return trackname;
+}
+
+const SetNextTrack = function(track, isLoading) {
+    nexttxt.replaceChildren(TrackHTML(track, isLoading));
+    //nexttxt.innerHTML = TrackHTML(track, isLoading);
+}
+
+const SetPrevTrack = function(track, isLoading) {
+    prevtxt.replaceChildren(TrackHTML(track, isLoading));
+    //prevtxt.innerHTML = TrackHTML(track, isLoading);
+}
+
+const SetPlayTrack = function(track, isLoading) {
+    playtxt.replaceChildren(TrackHTML(track, isLoading));
+    //playtxt.innerHTML = TrackHTML(track, isLoading);
+}
+
 const SetNextText = function(text) {
     nexttxt.innerHTML = '<span>' + text + '</span>';
 }
@@ -62,16 +111,24 @@ const InitPPText = function(playerstate) {
 
 const onQueueUpdate = function(track) {
     if(track) {
-        SetPrevText(track.prev ?  track.prev.trackname : '');
-        SetPlayText(track.trackname);
-        SetNextText(track.next ? track.next.trackname : '')
-    }    
+        //SetPrevText(track.prev ?  track.prev.trackname : '');
+        //SetPlayText(track.trackname);
+        //SetNextText(track.next ? track.next.trackname : '')
+        SetPrevTrack(track.prev);
+        SetPlayTrack(track);
+        SetNextTrack(track.next);
+    }
 };
 
 const geturl = function(trackname) {
     let url = '../../music_dl?name=' + encodeURIComponent(trackname);
     //url  += '&max_sample_rate=' + DesiredSampleRate;
     //url  += '&fmt=flac';
+    return url;
+}
+
+const getarturl = function(trackname) {
+    let url = '../../music_art?name=' + encodeURIComponent(trackname);
     return url;
 }
 
@@ -87,12 +144,16 @@ const onTrackEnd = function(nostart) {
 const MHFSPLAYER = await MHFSPlayer({'sampleRate' : DesiredSampleRate, 'channels' : DesiredChannels, 'maxdecodetime' : AQMaxDecodedTime, 'gui' : {
     'OnQueueUpdate'   : onQueueUpdate,
     'geturl'          : geturl,
+    'getarturl'       : getarturl,
     'SetCurtimeText'  : SetCurtimeText,
     'SetEndtimeText'  : SetEndtimeText,
     'SetSeekbarValue' : SetSeekbarValue,
     'SetPrevText'     : SetPrevText,
     'SetPlayText'     : SetPlayText,
     'SetNextText'     : SetNextText,
+    'SetPrevTrack'    : SetPrevTrack,
+    'SetPlayTrack'    : SetPlayTrack,
+    'SetNextTrack'    : SetNextTrack,
     'InitPPText'      : InitPPText,
     'onTrackEnd'      : onTrackEnd   
 }});

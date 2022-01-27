@@ -3341,6 +3341,45 @@ package MusicLibrary {
         $request->Send404;
     }
 
+    sub SendArt {
+        my ($self, $request) = @_;
+
+        my $utf8name = decode('UTF-8', $request->{'qs'}{'name'});
+        foreach my $source (@{$self->{'sources'}}) {
+            my $node = FindInLibrary($source, $utf8name);
+            next if ! $node;
+            my $dname = dirname($node->{'path'});
+            if(opendir(my $dh, $dname)) {
+                my @files;
+                while(my $fname = readdir($dh)) {
+                    my $last = lc(substr($fname, -4));
+                    push @files, $fname if(($last eq '.png') || ($last eq '.jpg') || ($last eq 'jpeg'));
+                }
+                closedir($dh);
+                if( ! @files) {
+                    $request->Send404;
+                    return 1;
+                }
+                my $tosend = "$dname/" . $files[0];
+                foreach my $file (@files) {
+                   foreach my $expname ('cover', 'front', 'album') {
+                        if(substr($file, 0, length($expname)) eq $expname) {
+                            $tosend = "$dname/$file";
+                            last;
+                        }
+                   }
+                }
+                $request->SendLocalFile($tosend);
+                return 1;
+            }
+            else {
+                $request->Send404;
+            }
+
+            return 1;
+        }
+    }
+
     sub UpdateLibrariesAsync {
         my ($self, $evp, $onUpdateEnd) = @_;
         HTTP::BS::Server::Process->new_output_child($evp, sub {
@@ -3429,6 +3468,10 @@ package MusicLibrary {
             ['/music', $musicpageroute],
             ['/music_dl', $musicdlroute],
             ['/music_resources', $musicresourcesroute],
+            ['/music_art', sub {
+                my ($request) = @_;
+                return $self->SendArt($request);
+            }]
         ];
 
         $self->{'timers'} = [
