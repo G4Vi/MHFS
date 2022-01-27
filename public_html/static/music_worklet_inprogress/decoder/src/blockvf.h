@@ -172,7 +172,7 @@ ma_result blockvf_seek(blockvf *pBlockvf, int64_t offset, ma_seek_origin origin)
     {
         tempoffset = offset;
     }
-    if((pBlockvf->filesize != 0) &&  (tempoffset >= pBlockvf->filesize))
+    if((pBlockvf->filesize != 0) &&  (tempoffset > pBlockvf->filesize))
     {
         BLOCKVF_PRINT("blockvf_seek: seek past end of stream\n");        
         return MA_ERROR;
