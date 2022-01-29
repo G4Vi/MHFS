@@ -38,23 +38,24 @@ const SetEndtimeText = function(seconds) {
 const TrackHTML = function(track, isLoading) {
     const trackdiv = document.createElement("div");
     trackdiv.setAttribute('class', 'trackdiv');
-    if(0) {
-    //if(track && track.arturl) {
+    if(track && track.arturl) {
         const artelm = document.createElement("img");
         artelm.setAttribute("class", "albumart");
         artelm.setAttribute("src", track.arturl);
         artelm.setAttribute("alt", "album art");
-        const artdiv = document.createElement("div");
-        artdiv.appendChild(artelm);
-        trackdiv.appendChild(artdiv);
+        trackdiv.appendChild(artelm);
     }
     let trackname = track ? track.trackname : '';
     if(isLoading) {
         trackname += ' {LOADING}';
     }
     const metadiv = document.createElement("div");
+    metadiv.setAttribute('class', 'trackmetadata')
+    const metainner = document.createElement("div");
+    metainner.setAttribute('class', 'trackmetadatainner')
     const textnode = document.createTextNode(trackname);
-    metadiv.appendChild(textnode);
+    metainner.appendChild(textnode);
+    metadiv.appendChild(metainner)
     trackdiv.appendChild(metadiv);
     return trackdiv;
 

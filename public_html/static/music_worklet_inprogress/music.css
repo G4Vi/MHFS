@@ -64,11 +64,24 @@ audio {
 }
 
 .albumart {
-    display: block;
+    /*display: block;*/
+    display: inline-block;
     max-width:200px;
     max-height:100px;
     width: auto;
     height: auto;
+    margin-right: 20px;
+}
+
+.trackmetadata {
+    display: inline-block;
+    margin-left: 20px;
+}
+
+.trackmetadatainner {
+    /* doesn't work */
+    display: flex;
+    align-items: center;
 }
 
 .trackdiv {
