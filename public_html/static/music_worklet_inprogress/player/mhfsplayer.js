@@ -114,7 +114,14 @@ const MHFSPlayer = async function(opt) {
         return mycontext;
     };
     // create AC
-    that.ac = that._createaudiocontext({'sampleRate' : opt.sampleRate, 'latencyHint' : 0.1}); 
+    that.ac = that._createaudiocontext({'sampleRate' : opt.sampleRate, 'latencyHint' : 0.1});
+    that.lastACState = that.ac.state;
+    that.ac.onstatechange = function() {
+        console.log('changing acstate was ' + that.lastACState + ' now ' + that.ac.state);
+        that.lastACState = that.ac.state;
+        that.gui.InitPPText(that.lastACState);
+    };
+
     // connect GainNode  
     that.GainNode = that.ac.createGain();
     that.GainNode.connect(that.ac.destination);
@@ -301,8 +308,10 @@ const MHFSPlayer = async function(opt) {
             return;        
         }
         that.QState = that.STATES.FAQ_RUNNING;
-        that.ac.resume();        
-        that.gui.InitPPText(that.ac.state);    
+        if(that.ac.state === "running") {
+            that.gui.InitPPText('running');
+        }
+        that.ac.resume();
         
         that.FACAbortController = new AbortController();  
         const mysignal = that.FACAbortController.signal;

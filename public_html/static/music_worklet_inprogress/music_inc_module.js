@@ -35,6 +35,7 @@ const SetEndtimeText = function(seconds) {
     endtimetxt.value = seconds.toHHMMSS();
 }
 
+let ArtCnt = 0;
 const TrackHTML = function(track, isLoading) {
     const trackdiv = document.createElement("div");
     trackdiv.setAttribute('class', 'trackdiv');
@@ -43,6 +44,32 @@ const TrackHTML = function(track, isLoading) {
         artelm.setAttribute("class", "albumart");
         artelm.setAttribute("src", track.arturl);
         artelm.setAttribute("alt", "album art");
+
+        // we want to show the art big when clicked
+        // if the big image or any album art is clicked, hide the big image
+        // if the album art is a different image, show that instead
+        const fsimg = document.createElement("img");
+        fsimg.setAttribute("class", "fsalbumart");
+        fsimg.setAttribute("src", track.arturl);
+        fsimg.setAttribute("alt", "album art");
+        const fsimgid = "a"+ArtCnt;
+        ArtCnt++;
+        fsimg.setAttribute("id", fsimgid);
+        fsimg.addEventListener('click', function(ev) {
+            this.remove();
+        });
+        artelm.addEventListener('click', function(ev) {
+            const fsimages = document.getElementsByClassName("fsalbumart");
+            if(fsimages[0]) {
+                const isSameImage = fsimages[0].id === fsimgid;
+                fsimages[0].remove();
+                if(isSameImage) {
+                    return;
+                }
+            }
+            dbarea.appendChild(fsimg);
+        });
+
         trackdiv.appendChild(artelm);
     }
     let trackname = track ? track.trackname : '';
@@ -70,19 +97,39 @@ const TrackHTML = function(track, isLoading) {
     //return trackname;
 }
 
+
+let GuiNextTrack;
+let GuiCurrentTrack;
+let GuiCurrentTrackWasLoading;
+let GuiPrevTrack;
+
 const SetNextTrack = function(track, isLoading) {
-    nexttxt.replaceChildren(TrackHTML(track, isLoading));
-    //nexttxt.innerHTML = TrackHTML(track, isLoading);
+    if(!GuiNextTrack || (track !== GuiNextTrack)) {
+        GuiNextTrack = track;
+        nexttxt.replaceChildren(TrackHTML(track, isLoading));
+    }
 }
 
 const SetPrevTrack = function(track, isLoading) {
-    prevtxt.replaceChildren(TrackHTML(track, isLoading));
-    //prevtxt.innerHTML = TrackHTML(track, isLoading);
+    if(!GuiPrevTrack || (track !== GuiPrevTrack)) {
+        GuiPrevTrack = track;
+        prevtxt.replaceChildren(TrackHTML(track, isLoading));
+    }
 }
 
 const SetPlayTrack = function(track, isLoading) {
-    playtxt.replaceChildren(TrackHTML(track, isLoading));
-    //playtxt.innerHTML = TrackHTML(track, isLoading);
+    if(!GuiCurrentTrack || (track !== GuiCurrentTrack)) {
+        GuiCurrentTrack = track;
+        playtxt.replaceChildren(TrackHTML(track, isLoading));
+    }
+    else if(isLoading !== GuiCurrentTrackWasLoading) {
+        let trackname = track ? track.trackname : '';
+        if(isLoading) {
+            trackname += ' {LOADING}';
+        }
+        playtxt.getElementsByClassName("trackmetadatainner")[0].textContent = trackname;
+    }
+    GuiCurrentTrackWasLoading = isLoading;
 }
 
 const SetNextText = function(text) {
@@ -105,8 +152,12 @@ const InitPPText = function(playerstate) {
     if(playerstate === "suspended") {
         ppbtn.textContent = "PLAY";
     }
-    else {
+    else if(playerstate === "running"){
         ppbtn.textContent = "PAUSE";
+    }
+    // not real AudioContext state
+    else if(playerstate === "idle") {
+        ppbtn.textContent = "IDLE";
     }           
 }
 
@@ -137,7 +188,8 @@ const onTrackEnd = function(nostart) {
     SBAR_UPDATING = 0;
     if(nostart) {
         SetCurtimeText(0);
-        SetSeekbarValue(0);        
+        SetSeekbarValue(0);
+        InitPPText('idle');
     }
 };
 
