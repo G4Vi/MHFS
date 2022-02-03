@@ -119,6 +119,10 @@ const MHFSPlayer = async function(opt) {
     that.ac.onstatechange = function() {
         console.log('changing acstate was ' + that.lastACState + ' now ' + that.ac.state);
         that.lastACState = that.ac.state;
+        if(! that.Tracks_HEAD) {
+            console.log('Not updating ppbtn, there are no tracks');
+            return;
+        }
         that.gui.InitPPText(that.lastACState);
     };
 
