@@ -12,11 +12,13 @@
         
     </div>
 </div>
-<div class="footer row">  
-    <table border="1" width="80%" class="playertable">
-    <tr><th>Previous</th><th width="60%">Now Playing</th><th>Next</th></tr>
+<div class="footer row">
+    <div class="ptdiv">
+    <table border="1" class="playertable">
+    <tr><th>Previous</th><th>Now Playing</th><th>Next</th></tr>
 	<tr><td><div id="prev_text"></div></td><td><div id="play_text"></div></td><td><div id="next_text"></div></td></tr>  
-	</table> 
+	</table>
+    </div>
     <input type="button" value="PREV" id="prevbtn" class="controlbtns">
     <button id="ppbtn" type="button" class="controlbtns">IDLE</button> 
     <input id="curtime" type="text" class="timedisplay" name="curseconds" value="0:00">
