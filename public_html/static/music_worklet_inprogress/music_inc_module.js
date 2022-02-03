@@ -67,7 +67,7 @@ const TrackHTML = function(track, isLoading) {
                     return;
                 }
             }
-            dbarea.appendChild(fsimg);
+            document.getElementsByTagName('body')[0].appendChild(fsimg);
         });
 
         trackdiv.appendChild(artelm);

@@ -94,6 +94,7 @@ audio {
 }
 
 
+/*
 .fsalbumart {
     position: fixed;
     top: 7%;
@@ -104,6 +105,15 @@ audio {
     height: 70%;
     text-align: center;
     z-index: 201;
+}
+*/
+
+.fsalbumart {
+    position: fixed;
+    top:90px;
+    left: 25px;
+    z-index: 201;
+    height: 65%;
 }
 
 #prev_text {
