@@ -226,9 +226,6 @@ const MHFSPlayer = async function(opt) {
             const duration =  (track && track.duration) ? track.duration : 0;
             seekbar.max = duration;
             that.gui.SetEndtimeText(duration);
-            //that.gui.SetPlayText(track ? track.trackname : '');
-            //that.gui.SetPrevText((track && track.prev) ? track.prev.trackname : '');            
-            //that.gui.SetNextText((track && track.next) ? track.next.trackname : '');
             that.gui.SetPrevTrack(track ? track.prev : undefined);
             that.gui.SetPlayTrack(track);
             that.gui.SetNextTrack(track ? track.next : undefined);            
@@ -334,11 +331,6 @@ const MHFSPlayer = async function(opt) {
             
             // render the text if nothing is queued
             if(!that.AudioQueue[0]) {
-                //let prevtext = track.prev ? track.prev.trackname : '';
-                //that.gui.SetPrevText(prevtext);
-                //that.gui.SetPlayText(track.trackname + ' {LOADING}');
-                //let nexttext =  track.next ? track.next.trackname : '';
-                //that.gui.SetNextText(nexttext);
                 that.gui.SetPrevTrack(track.prev);
                 that.gui.SetPlayTrack(track, true);
                 that.gui.SetNextTrack(track.next);
