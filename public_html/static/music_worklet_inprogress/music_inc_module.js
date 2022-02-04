@@ -78,11 +78,8 @@ const TrackHTML = function(track, isLoading) {
     }
     const metadiv = document.createElement("div");
     metadiv.setAttribute('class', 'trackmetadata')
-    const metainner = document.createElement("div");
-    metainner.setAttribute('class', 'trackmetadatainner')
     const textnode = document.createTextNode(trackname);
-    metainner.appendChild(textnode);
-    metadiv.appendChild(metainner)
+    metadiv.appendChild(textnode)
     trackdiv.appendChild(metadiv);
     return trackdiv;
 
@@ -127,7 +124,7 @@ const SetPlayTrack = function(track, isLoading) {
         if(isLoading) {
             trackname += ' {LOADING}';
         }
-        playtxt.getElementsByClassName("trackmetadatainner")[0].textContent = trackname;
+        playtxt.getElementsByClassName("trackmetadata")[0].textContent = trackname;
     }
     GuiCurrentTrackWasLoading = isLoading;
 }
