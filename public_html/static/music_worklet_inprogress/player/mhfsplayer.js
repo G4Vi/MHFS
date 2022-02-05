@@ -350,6 +350,13 @@ const MHFSPlayer = async function(opt) {
                 if(mysignal.aborted) {
                     break;
                 }
+                that.AudioQueue.push({
+                    'track' : track,
+                    'skiptime' : 0,
+                    'sampleCount' : 0,
+                    'donedecode' : 1,
+                    'queued' : 1
+                });
                 continue;
             }
             // We better not modify the AQ if we're cancelled
