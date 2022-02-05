@@ -341,6 +341,11 @@ const MHFSPlayer = async function(opt) {
     
             // open the track in the decoder and seek to where we want to start decoding if necessary
             const start_output_time = time;
+            const pbtrack = {
+                'track' : track,
+                'skiptime' : start_output_time,
+                'sampleCount' : 0
+            };
             time = 0;
             try {
                 await decoder.openTrack(mysignal, track, start_output_time);
@@ -350,26 +355,16 @@ const MHFSPlayer = async function(opt) {
                 if(mysignal.aborted) {
                     break;
                 }
-                that.AudioQueue.push({
-                    'track' : track,
-                    'skiptime' : 0,
-                    'sampleCount' : 0,
-                    'donedecode' : 1,
-                    'queued' : 1
-                });
+                pbtrack.donedecode = 1;
+                pbtrack.queued = 1;
+                that.AudioQueue.push(pbtrack);
                 continue;
             }
             // We better not modify the AQ if we're cancelled
             if(mysignal.aborted) break;
     
             // decode the track
-            let pbtrack = {
-                'track' : track,          
-                'skiptime' : start_output_time,
-                'sampleCount' : 0
-            };
-            that.AudioQueue.push(pbtrack);        
-         
+            that.AudioQueue.push(pbtrack);
             const todec = that.ac.sampleRate;         
             SAMPLELOOP: while(1) {
                 // yield so buffers can be queued
