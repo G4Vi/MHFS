@@ -227,7 +227,6 @@ const PlayTracks = function(tracks) {
 var prevbtn    = document.getElementById("prevbtn");
 var seekbar    = document.getElementById("seekbar");
 var ppbtn      = document.getElementById("ppbtn");
-var rptrackbtn = document.getElementById("repeattrack");
 var curtimetxt = document.getElementById("curtime");
 var endtimetxt = document.getElementById("endtime");
 var nexttxt    = document.getElementById('next_text');
@@ -236,8 +235,8 @@ var playtxt    = document.getElementById('play_text');
 var dbarea     = document.getElementById('musicdb');
 
 // BEGIN UI handlers
-rptrackbtn.addEventListener('change', function(e) {
-   MHFSPLAYER.rptrackchanged(e.target.checked);   
+document.getElementById('playback_order').addEventListener('change', function(e){
+    MHFSPLAYER.pborderchange(e.target.value);
 });
  
  ppbtn.addEventListener('click', function (e) {

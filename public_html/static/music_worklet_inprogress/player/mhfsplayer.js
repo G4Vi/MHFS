@@ -106,7 +106,7 @@ const MHFSPlayer = async function(opt) {
     that.gui = opt.gui;
     that.sampleRate = opt.sampleRate;
     that.channels   = opt.channels;
-    that.repeattrack = 0;
+    that.pborder = "pborder_default";
     that.maxdecodetime = opt.maxdecodetime;
 
     that._createaudiocontext = function(options) {
@@ -301,6 +301,19 @@ const MHFSPlayer = async function(opt) {
     that.QState = that.STATES.NEED_FAQ;
     that.Tracks_HEAD;
     that.Tracks_TAIL;
+
+    const getNextTrack = function(currentTrack) {
+        if(that.pborder === "pborder_rptrack") {
+            return currentTrack;
+        }
+        else if(that.pborder === "pborder_rpplaylist") {
+            return currentTrack.next ? currentTrack.next : that.Tracks_HEAD;
+        }
+
+        // default playback order
+        return currentTrack.next;
+    };
+
     that.FAQ_MUTEX = new Mutex();
 
     async function fillAudioQueue(track, time) {
@@ -327,7 +340,7 @@ const MHFSPlayer = async function(opt) {
         const decoder = that.decoder;
         time = time || 0;
         // while there's a track to queue
-    TRACKLOOP:for(; track; track = that.repeattrack ?  track : track.next) {
+    TRACKLOOP:for(; track; track = getNextTrack(track)) {
             
             // render the text if nothing is queued
             if(!that.AudioQueue[0]) {
@@ -531,8 +544,9 @@ const MHFSPlayer = async function(opt) {
         that.StartQueue(track, stime); 
     };
 
-    that._rptrackchanged = async function(isOn) {
-        that.repeattrack = isOn;
+    that._pborderchanged = async function(pbstate) {
+        that.pborder = pbstate;
+
         // we need either the last decoded but not queued track or the last track if everything is queued
         let ti;
         for(ti = 0; ;ti++) {
@@ -553,8 +567,8 @@ const MHFSPlayer = async function(opt) {
         // cancel cached decoded audio that's not apart of AQ
         that.truncateDecoded();        
         
-        // queue the repeat or new track (stopping the current decoding)
-        const track = that.repeattrack ? that.AudioQueue[ti].track : that.AudioQueue[ti].track.next;
+        // queue following the playback order
+        const track = getNextTrack(that.AudioQueue[ti].track);
         that.StartQueue(track);
     };
 
@@ -624,9 +638,9 @@ const MHFSPlayer = async function(opt) {
         unlock();
     };
 
-    that.rptrackchanged = async function(isOn) {
+    that.pborderchange = async function(pbstate) {
         const unlock = await that.USERMUTEX.lock();
-        await that._rptrackchanged(isOn);
+        await that._pborderchanged(pbstate);
         unlock();
     };
     
