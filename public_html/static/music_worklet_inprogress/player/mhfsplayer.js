@@ -560,15 +560,21 @@ const MHFSPlayer = async function(opt) {
         }   
     
         // make ti our last track
-        that.AudioQueue.length = ti+1;       
+        that.AudioQueue.length = ti+1;
         
-        await that.StopQueue();        
-        
-        // cancel cached decoded audio that's not apart of AQ
-        that.truncateDecoded();        
-        
-        // queue following the playback order
+        // determine the next track we want to queue
         const track = getNextTrack(that.AudioQueue[ti].track);
+        
+        await that.StopQueue();
+
+        // cancel cached decoded audio that's not apart of AQ
+        that.truncateDecoded();
+        
+        if(!that.AudioQueue[ti]) {
+            console.log('no track');
+        }
+        
+        // queue following the playback order        
         that.StartQueue(track);
     };
 

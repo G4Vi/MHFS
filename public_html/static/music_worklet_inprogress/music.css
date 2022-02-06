@@ -28,7 +28,7 @@ body {
     box-sizing: border-box;
     padding-left: 2%;
     width: 100%;
-    max-height: calc(100% - max(20%, 200px) - max(10%, 90px)); /*the whole page minus the header and footer*/
+    max-height: calc(100% - max(20%, 250px) - max(10%, 90px)); /*the whole page minus the header and footer*/
 }
 
 .track:hover {
@@ -42,7 +42,7 @@ body {
     padding-left: 2%;
     z-index: 201;
     max-width: 100%;
-    max-height: calc(100% - max(20%, 200px) - max(10%, 90px)); /*the whole page minus the header and footer*/
+    max-height: calc(100% - max(20%, 250px) - max(10%, 90px)); /*the whole page minus the header and footer*/
 }
 
 /* music player is always shown at the bottom */
@@ -51,15 +51,14 @@ body {
     box-sizing: border-box;
     bottom: 0;
     width: 100%;
-    height: max(20%, 200px);
+    height: max(20%, 250px);
     padding-left: 2%;
-    padding-bottom: 35px;
+    padding-top: 10px;
     background-color:blue;    
 }
 
 /* First the prev, current, and next tracks*/
 .ptdiv {
-    margin-top: 10px;
     position: absolute;
     height: 70%;
     width: 80%;
@@ -137,7 +136,10 @@ body {
 }
 
 #seekbar {
-    width: 60%; margin:20px;
+    width: 60%;
+    margin-left: 20px;
+    margin-right: 20px;
+    margin-top: 30px;
 }
 
 .timedisplay {
