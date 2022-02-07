@@ -108,6 +108,7 @@ body {
     max-width: 10%;
     max-height: 100%;
     padding-right: 5px;
+    min-width: 40px;
 }
 
 .trackmetadata {

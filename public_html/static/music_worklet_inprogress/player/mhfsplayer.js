@@ -309,6 +309,27 @@ const MHFSPlayer = async function(opt) {
         else if(that.pborder === "pborder_rpplaylist") {
             return currentTrack.next ? currentTrack.next : that.Tracks_HEAD;
         }
+        else if(that.pborder === "pborder_random") {
+            // count the tracks
+            let tcount = 0;
+            for(let track = that.Tracks_HEAD; track; track = track.next) {
+                tcount++;
+            }
+            if(tcount === 0) {
+                console.log("Tried to get random track when there aren't any tracks!");
+                return undefined;
+            }
+            // decide on a random track
+            let tracknum = Math.floor(Math.random() * tcount);
+            console.log('pborder_random, chose track ' + tracknum + ' tcount ' + tcount);
+            // find the track
+            let track = that.Tracks_HEAD;
+            while(tracknum > 0) {
+                track = track.next;
+                tracknum--;
+            }
+            return track;
+        }
 
         // default playback order
         return currentTrack.next;
@@ -340,6 +361,7 @@ const MHFSPlayer = async function(opt) {
         const decoder = that.decoder;
         time = time || 0;
         // while there's a track to queue
+        let firstFailedTrack;
     TRACKLOOP:for(; track; track = getNextTrack(track)) {
             
             // render the text if nothing is queued
@@ -368,11 +390,17 @@ const MHFSPlayer = async function(opt) {
                 if(mysignal.aborted) {
                     break;
                 }
+                if(firstFailedTrack === track) {
+                    console.error("FAQ done, encountered same track failing again");
+                    break;
+                }
+                firstFailedTrack ||= track;
                 pbtrack.donedecode = 1;
                 pbtrack.queued = 1;
                 that.AudioQueue.push(pbtrack);
                 continue;
             }
+            firstFailedTrack = undefined;
             // We better not modify the AQ if we're cancelled
             if(mysignal.aborted) break;
     
