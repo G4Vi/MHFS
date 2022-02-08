@@ -181,7 +181,7 @@ const MHFSPlayer = async function(opt) {
         if(!aqitem.starttime) {
             aqitem.starttime = time - aqitem.skiptime;
             aqitem._starttime = time;
-            aqitem.needsstart = 1;  
+            aqitem.needsstart = 1;
         }
     
         aqitem.endTime = time + (duration/that.ac.sampleRate);    
@@ -199,15 +199,15 @@ const MHFSPlayer = async function(opt) {
                 aqitem.needsstart = 0;
                 needsStart = 1;            
             }
-    
+
+            // nothing more to do if track hasn't ended
+            if( (!aqitem.queued) || (aqitem.endTime && (aqitem.endTime > that.ac.currentTime))) {
+                break;
+            }
+
             // mark ended track
-            if(aqitem.queued) {
-                // if there's no endtime or has passed
-                if((!aqitem.endTime) || (aqitem.endTime <= that.ac.currentTime)) {
-                    needsStart = 0; //invalidate previous starts as something later ended
-                    toDelete++;
-                }
-            }        
+            needsStart = 0; //invalidate previous starts as something later ended
+            toDelete++;
         }
         
         // perform the queue update
@@ -392,6 +392,12 @@ const MHFSPlayer = async function(opt) {
                 }
                 if(firstFailedTrack === track) {
                     console.error("FAQ done, encountered same track failing again");
+                    //that.AudioQueue.push({
+                    //    'track' : track,
+                    //    'skiptime' : start_output_time,
+                    //    'sampleCount' : 0,
+                    //    'forceEnd' : 1
+                    //});
                     break;
                 }
                 firstFailedTrack ||= track;
@@ -614,6 +620,12 @@ const MHFSPlayer = async function(opt) {
 
     that.play = function() {
         that.ac.resume();
+
+        //if((that.QState === that.STATES.NEED_FAQ) && that.AudioQueue[0] && that.AudioQueue[0].forceEnd) {
+        //    const track = that.AudioQueue[0].track;
+        //    that.AudioQueue.length = 0;
+        //    that.StartQueue(track);
+        //}
     };
 
     that.pause = function() {

@@ -152,17 +152,10 @@ const InitPPText = function(playerstate) {
     else if(playerstate === "running"){
         ppbtn.textContent = "PAUSE";
     }
-    // not real AudioContext state
-    else if(playerstate === "idle") {
-        ppbtn.textContent = "IDLE";
-    }           
 }
 
 const onQueueUpdate = function(track) {
     if(track) {
-        //SetPrevText(track.prev ?  track.prev.trackname : '');
-        //SetPlayText(track.trackname);
-        //SetNextText(track.next ? track.next.trackname : '')
         SetPrevTrack(track.prev);
         SetPlayTrack(track);
         SetNextTrack(track.next);
@@ -186,7 +179,7 @@ const onTrackEnd = function(nostart) {
     if(nostart) {
         SetCurtimeText(0);
         SetSeekbarValue(0);
-        InitPPText('idle');
+        InitPPText('suspended');
     }
 };
 
