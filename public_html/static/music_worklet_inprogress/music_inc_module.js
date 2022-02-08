@@ -129,18 +129,6 @@ const SetPlayTrack = function(track, isLoading) {
     GuiCurrentTrackWasLoading = isLoading;
 }
 
-const SetNextText = function(text) {
-    nexttxt.innerHTML = '<span>' + text + '</span>';
-}
-
-const SetPrevText = function(text) {
-    prevtxt.innerHTML = '<span>' + text + '</span>';
-}
-
-const SetPlayText = function(text) {
-    playtxt.innerHTML = '<span>' + text + '</span>';
-}
-
 const SetSeekbarValue = function(seconds) {
     seekbar.value = seconds;           
 }
@@ -191,9 +179,6 @@ const MHFSPLAYER = await MHFSPlayer({'sampleRate' : DesiredSampleRate, 'channels
     'SetCurtimeText'  : SetCurtimeText,
     'SetEndtimeText'  : SetEndtimeText,
     'SetSeekbarValue' : SetSeekbarValue,
-    'SetPrevText'     : SetPrevText,
-    'SetPlayText'     : SetPlayText,
-    'SetNextText'     : SetNextText,
     'SetPrevTrack'    : SetPrevTrack,
     'SetPlayTrack'    : SetPlayTrack,
     'SetNextTrack'    : SetNextTrack,

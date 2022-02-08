@@ -209,26 +209,41 @@ const MHFSPlayer = async function(opt) {
             needsStart = 0; //invalidate previous starts as something later ended
             toDelete++;
         }
+
+        let startedLoading = that.AudioQueue[0] && that.AudioQueue[0].startedLoading;
         
         // perform the queue update
-        if(needsStart || toDelete) {
+        if(needsStart || toDelete || startedLoading || that.redraw) {
+            that.redraw = 0;
+            if(startedLoading) {
+                that.AudioQueue[0].startedLoading = undefined;
+                const time = that.AudioQueue[0].skiptime;
+                that.gui.SetCurtimeText(time || 0);
+                if(!time) that.gui.SetSeekbarValue(time || 0);
+            }
+
+            // determine the current track;
             let track;
             if(toDelete) {
-                track = that.AudioQueue[toDelete-1].track.next ? that.AudioQueue[toDelete-1].track.next : {'prev' : that.AudioQueue[toDelete-1].track, 'trackname' : ''};
+                const lastTrack = that.AudioQueue[that.AudioQueue.length-1].track;
                 that.AudioQueue.splice(0, toDelete);
-                that.gui.onTrackEnd(!needsStart);                 
-            }        
-            
-            
-            track = that.AudioQueue[0] ? that.AudioQueue[0].track : track;           
-                
+                that.gui.onTrackEnd(that.AudioQueue.length === 0);
+                if(that.AudioQueue.length === 0) {
+                    track = lastTrack;
+                    that.playlistCursor = track;
+                    startedLoading = 0;
+                }
+            }
+            track ||= that.AudioQueue[0].track;
+
+            // show the track
             seekbar.min = 0;
-            const duration =  (track && track.duration) ? track.duration : 0;
+            const duration =  track.duration || 0;
             seekbar.max = duration;
             that.gui.SetEndtimeText(duration);
-            that.gui.SetPrevTrack(track ? track.prev : undefined);
-            that.gui.SetPlayTrack(track);
-            that.gui.SetNextTrack(track ? track.next : undefined);            
+            that.gui.SetPrevTrack(track.prev);
+            that.gui.SetPlayTrack(track, startedLoading);
+            that.gui.SetNextTrack(track.next);
         }
     }
 
@@ -301,6 +316,7 @@ const MHFSPlayer = async function(opt) {
     that.QState = that.STATES.NEED_FAQ;
     that.Tracks_HEAD;
     that.Tracks_TAIL;
+    that.playlistCursor;
 
     const getNextTrack = function(currentTrack) {
         if(that.pborder === "pborder_rptrack") {
@@ -329,6 +345,9 @@ const MHFSPlayer = async function(opt) {
                 tracknum--;
             }
             return track;
+        }
+        else if(that.pborder === 'pborder_reverse') {
+            return currentTrack.prev;
         }
 
         // default playback order
@@ -363,55 +382,41 @@ const MHFSPlayer = async function(opt) {
         // while there's a track to queue
         let firstFailedTrack;
     TRACKLOOP:for(; track; track = getNextTrack(track)) {
-            
-            // render the text if nothing is queued
-            if(!that.AudioQueue[0]) {
-                that.gui.SetPrevTrack(track.prev);
-                that.gui.SetPlayTrack(track, true);
-                that.gui.SetNextTrack(track.next);
-                that.gui.SetCurtimeText(time || 0);
-                if(!time) that.gui.SetSeekbarValue(time || 0);
-                that.gui.SetEndtimeText(track.duration || 0);        
-            }
     
             // open the track in the decoder and seek to where we want to start decoding if necessary
             const start_output_time = time;
             const pbtrack = {
                 'track' : track,
                 'skiptime' : start_output_time,
-                'sampleCount' : 0
+                'sampleCount' : 0,
+                'startedLoading' : 1
             };
+            that.AudioQueue.push(pbtrack)
             time = 0;
             try {
                 await decoder.openTrack(mysignal, track, start_output_time);
             }
             catch(error) {
+                pbtrack.startedLoading = undefined;
+                pbtrack.donedecode = 1;
+                pbtrack.queued = 1;
                 console.error(error);
                 if(mysignal.aborted) {
                     break;
                 }
                 if(firstFailedTrack === track) {
                     console.error("FAQ done, encountered same track failing again");
-                    //that.AudioQueue.push({
-                    //    'track' : track,
-                    //    'skiptime' : start_output_time,
-                    //    'sampleCount' : 0,
-                    //    'forceEnd' : 1
-                    //});
                     break;
                 }
                 firstFailedTrack ||= track;
-                pbtrack.donedecode = 1;
-                pbtrack.queued = 1;
-                that.AudioQueue.push(pbtrack);
                 continue;
             }
+
             firstFailedTrack = undefined;
             // We better not modify the AQ if we're cancelled
             if(mysignal.aborted) break;
     
             // decode the track
-            that.AudioQueue.push(pbtrack);
             const todec = that.ac.sampleRate;         
             SAMPLELOOP: while(1) {
                 // yield so buffers can be queued
@@ -434,6 +439,7 @@ const MHFSPlayer = async function(opt) {
                 let decdata;
                 try {
                     decdata = await decoder.read_pcm_frames_f32_arrs(todec, mysignal);
+                    pbtrack.startedLoading = undefined;
                     if(!decdata) break SAMPLELOOP;
                 }
                 catch(error) {
@@ -510,7 +516,7 @@ const MHFSPlayer = async function(opt) {
             that.StartQueue(track); 
         }
         else {
-            that.gui.OnQueueUpdate(that.AudioQueue[0] ? that.AudioQueue[0].track : null);
+            that.redraw = 1;
         }
     
         return track;
@@ -520,7 +526,10 @@ const MHFSPlayer = async function(opt) {
         let queuePos;
         if(that.AudioQueue[0]) {
             queuePos = that.AudioQueue[0].track;
-        }       
+        }
+        else if(that.playlistCursor) {
+            queuePos = that.playlistCursor;
+        }
     
         // stop all audio
         await that.StopQueue();
@@ -540,8 +549,9 @@ const MHFSPlayer = async function(opt) {
             if(!that.AudioQueue[0].track.prev) return;
             prevtrack = that.AudioQueue[0].track.prev;
         }    
-        else if(that.Tracks_TAIL) {
-            prevtrack = that.Tracks_TAIL;
+        else if(that.playlistCursor) {
+            if(!that.playlistCursor.prev) return;
+            prevtrack = that.playlistCursor.prev;
         }
         else {
             return;
@@ -557,7 +567,11 @@ const MHFSPlayer = async function(opt) {
         if(that.AudioQueue[0]) {
             if(!that.AudioQueue[0].track.next) return;
             nexttrack = that.AudioQueue[0].track.next;
-        }    
+        }
+        else if(that.playlistCursor) {
+            if(!that.playlistCursor.next) return;
+            nexttrack = that.playlistCursor.next;
+        }
         else {
             return;
         }
@@ -568,10 +582,18 @@ const MHFSPlayer = async function(opt) {
     };
 
     that._seek = async function(time) {
-        if(!that.AudioQueue[0]) return;
+        let track;
+        if(that.AudioQueue[0]) {
+            track = that.AudioQueue[0].track;
+        }
+        else if(that.playlistCursor) {
+            track = that.playlistCursor;
+        }
+        else {
+            return;
+        }
         const stime = Number(time);
         console.log('SEEK ' + stime);
-        const track = that.AudioQueue[0].track;
     
         await that.StopQueue();
         that.StopAudio();        
@@ -621,11 +643,10 @@ const MHFSPlayer = async function(opt) {
     that.play = function() {
         that.ac.resume();
 
-        //if((that.QState === that.STATES.NEED_FAQ) && that.AudioQueue[0] && that.AudioQueue[0].forceEnd) {
-        //    const track = that.AudioQueue[0].track;
-        //    that.AudioQueue.length = 0;
-        //    that.StartQueue(track);
-        //}
+        // start playback again
+        if((that.AudioQueue.length === 0) && that.playlistCursor) {
+            that.StartQueue(that.playlistCursor);
+        }
     };
 
     that.pause = function() {
