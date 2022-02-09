@@ -125,12 +125,17 @@ const DownloadManager = function(chunksize) {
 
     that._AbortIfExists = function() {
         if(that.aController) {
+            console.log('abort req');
             that.aController.abort();
             that.aController = null;
         }
     };
 
     that.GetChunk = async function(url, startOffset, signal) {
+        if(that.inuse) {
+            throw("GetChunk is inuse");
+        }
+        that.inuse = 1;
 
         try {
             if(that.ExternalSignal) {
@@ -139,9 +144,21 @@ const DownloadManager = function(chunksize) {
             that.ExternalSignal = signal;
             that.ExternalSignal.addEventListener('abort', that._AbortIfExists);
 
-            if((url !== that.url) || (that.curOffset !== startOffset)) {
+            const sd = (that.curOffset === startOffset) ? ' SAME' : ' DIFF DFDFDFDFDFFSDFSFS';
+            console.log('curOffset '+ that.curOffset + 'startOffset ' + startOffset + sd);
+
+            // if the url doesn't match or the offset isn't within range, launch a new request
+            //if((url !== that.url) || (that.curOffset !== startOffset)) {
+            if((url !== that.url) || (startOffset < that.curOffset) || ((that.curOffset + that.data.byteLength) < startOffset)) {
+                console.log('abort from url or size');
                 that._AbortIfExists();
                 await that._newDownload(url, startOffset);
+            }
+            // skip to the requested data
+            else if(that.curOffset !== startOffset) {
+                const toskip = startOffset - that.curOffset;
+                that.data = new Uint8Array(that.data.subarray(toskip));
+                that.curOffset = startOffset;
             }
             for(;;) {
                 if((that.data.byteLength >= that.CHUNKSIZE) || that.done) {
@@ -149,6 +166,7 @@ const DownloadManager = function(chunksize) {
                     const tmp = new Uint8Array(that.data.subarray(0, maxread));
                     that.data = new Uint8Array(that.data.subarray(maxread));
                     that.curOffset += maxread;
+                    //console.log('set CI to ' + that.curOffset + ' tmp length ' + tmp.byteLength);
                     return {'filesize' : that.size, 'data' : tmp, 'headers' : that.headers};
                 }
                 const { value: chunk, done: readerDone } = await that.reader.read();
@@ -162,10 +180,15 @@ const DownloadManager = function(chunksize) {
             }
         }
         catch(err) {
-            throw('that.GetChunk error');
+            if(err.name === "AbortError") {
+                throw('AbortError');
+            }
+            else {
+                throw('other that.GetChunk error');
+            }
         }
         finally {
-
+            that.inuse = 0;
         }
     };
 
@@ -184,8 +207,10 @@ const GetFileSize = function(xhr) {
 const DefDownloadManager = function(chunksize) {
     const that = {};
     that.CHUNKSIZE = chunksize;
-
+    that.curOffset;
     that.GetChunk = async function(url, startOffset, signal) {
+        const sd = (that.curOffset === startOffset) ? ' SAME' : ' DIFF DFDFDFDFDFFSDFSFS';
+        console.log('curOffset '+ that.curOffset + 'startOffset ' + startOffset + sd);
         const def_end = startOffset+that.CHUNKSIZE-1;
         const end = that.filesize ? Math.min(def_end, that.filesize-1) : def_end;
         const xhr = await makeRequest('GET', url, startOffset, end, signal);
@@ -199,6 +224,7 @@ const DefDownloadManager = function(chunksize) {
         if(tpcmcnt) {
             headers['X-MHFS-totalPCMFrameCount'] = tpcmcnt;
         }
+        that.curOffset = startOffset + xhr.response.byteLength;
 
         return {'filesize' : that.filesize, 'data' : new Uint8Array(xhr.response), 'headers' : headers};
     };
@@ -394,7 +420,7 @@ const MHFSCLDecoder = async function(outputSampleRate, outputChannelCount) {
 
     that.returnDataAlloc = MHFSCLAllocation(MHFSCL.mhfs_cl_track_return_data_sizeof);
     that.deinterleaveDataAlloc = MHFSCLArrsAlloc(outputChannelCount, that.outputSampleRate*that.f32_size);
-    that.DM = DownloadManager(262144);
+    //that.DM = DownloadManager(262144);
 
     that.flush = async function() {
         MHFSCL.mhfs_cl_decoder_flush(that.ptr);

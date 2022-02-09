@@ -82,16 +82,6 @@ const TrackHTML = function(track, isLoading) {
     metadiv.appendChild(textnode)
     trackdiv.appendChild(metadiv);
     return trackdiv;
-
-
-    //if(isLoading) {
-    //    trackname += ' {LOADING}';
-    //}
-    //if(track && track.arturl) {
-    //    trackname += '<img class="albumart" src="' + track.arturl + '" alt="album art"></img>';
-    //}
-    ////return '<span>' + trackname + '</span>';
-    //return trackname;
 }
 
 
@@ -186,31 +176,15 @@ const MHFSPLAYER = await MHFSPlayer({'sampleRate' : DesiredSampleRate, 'channels
     'onTrackEnd'      : onTrackEnd   
 }});
 
-const QueueTrack = function(trackname) {
-    MHFSPLAYER.queuetrack(trackname);
-}
-
-const PlayTrack = function(trackname) {
-    MHFSPLAYER.playtrack(trackname);
-}
-
-const QueueTracks = function(tracks) {
-    MHFSPLAYER.queuetracks(tracks);
-}
-
-const PlayTracks = function(tracks) {
-    MHFSPLAYER.playtracks(tracks);
-}
-
-var prevbtn    = document.getElementById("prevbtn");
-var seekbar    = document.getElementById("seekbar");
-var ppbtn      = document.getElementById("ppbtn");
-var curtimetxt = document.getElementById("curtime");
-var endtimetxt = document.getElementById("endtime");
-var nexttxt    = document.getElementById('next_text');
-var prevtxt    = document.getElementById('prev_text');
-var playtxt    = document.getElementById('play_text');
-var dbarea     = document.getElementById('musicdb');
+const prevbtn    = document.getElementById("prevbtn");
+const seekbar    = document.getElementById("seekbar");
+const ppbtn      = document.getElementById("ppbtn");
+const curtimetxt = document.getElementById("curtime");
+const endtimetxt = document.getElementById("endtime");
+const nexttxt    = document.getElementById('next_text');
+const prevtxt    = document.getElementById('prev_text');
+const playtxt    = document.getElementById('play_text');
+const dbarea     = document.getElementById('musicdb');
 
 // BEGIN UI handlers
 document.getElementById('playback_order').addEventListener('change', function(e){
@@ -242,6 +216,10 @@ document.getElementById('playback_order').addEventListener('change', function(e)
     SBAR_UPDATING = 0;
     MHFSPLAYER.seek(e.target.value);                
  });
+
+ //seekbar.addEventListener('mouseup', function(e) {
+ //   SBAR_UPDATING = 0;
+ //});
  
  prevbtn.addEventListener('click', function (e) {
     MHFSPLAYER.prev();        
@@ -339,36 +317,35 @@ const GetChildTracks = function(path, nnodes) {
     });
     return tracks;
 }
- 
- dbarea.addEventListener('click', function (e) {
-     if (e.target !== e.currentTarget) {
-         console.log(e.target + ' clicked with text ' + e.target.textContent);
-         if (e.target.textContent == 'Queue') {
-             let path = GetItemPath(e.target.parentNode.parentNode);
-             console.log("Queuing - " + path);
-             if (e.target.parentNode.tagName == 'TD') {
-                QueueTrack(path);
-             }
-             else {
-                 var tracks = GetChildTracks(path, e.target.parentNode.parentNode.parentNode.childNodes);
-                 QueueTracks(tracks);
-             }
-             e.preventDefault();
-         }
-         else if (e.target.textContent == 'Play') {
-             let path = GetItemPath(e.target.parentNode.parentNode);
-             console.log("Playing - " + path);
-             if (e.target.parentNode.tagName == 'TD') {
-                PlayTrack(path);
-             }
-             else {
-                 var tracks = GetChildTracks(path, e.target.parentNode.parentNode.parentNode.childNodes);
-                 PlayTracks(tracks);
-             }
-             e.preventDefault();
-         }
-     }
-     e.stopPropagation();
+
+// play or queue clicked tracks
+dbarea.addEventListener('click', function (e) {
+    do {
+        if(e.target.tagName !== 'A') break;
+        let operation;
+        if(e.target.textContent === 'Queue') {
+            operation = MHFSPLAYER.queuetracks;
+        }
+        else if(e.target.textContent === 'Play'){
+            operation = MHFSPLAYER.playtracks;
+        }
+        else {
+            break;
+        }
+        const path = GetItemPath(e.target.parentNode.parentNode);
+        if (e.target.parentNode.tagName === 'TD') {
+            operation([path]);
+        }
+        else if(e.target.parentNode.tagName === 'TH')  {
+            const tracks = GetChildTracks(path, e.target.parentNode.parentNode.parentNode.childNodes);
+            operation(tracks);
+        }
+        else {
+            break;
+        }
+        e.preventDefault();
+    } while(0);
+    e.stopPropagation();
  });
  // End ui handlers
 
