@@ -89,6 +89,91 @@ return new Promise(function (resolve, reject) {
 });
 }
 
+const DownloadManager = function(chunksize) {
+    const that = {};
+    that.CHUNKSIZE = chunksize;
+
+    that._newDownload = async function(url, startOffset) {
+        that.done = 0;
+        that.url = url;
+        that.aController = new AbortController();
+        that.acSignal = that.aController.signal;
+        that.curOffset = startOffset;
+        that.fetchResponse = await fetch(url, {
+            signal: that.acSignal,
+            headers: {
+                'Range': 'bytes='+startOffset+'-'
+            }
+        });
+        const contentrange = that.fetchResponse.headers.get('Content-Range');
+        const re = new RegExp('/([0-9]+)');
+        const res = re.exec(contentrange);
+        if(!res) throw("Failed to get filesize");
+        that.size = Number(res[1]);
+        that.reader = that.fetchResponse.body.getReader();
+        that.data = new Uint8Array(0);
+        that.headers = {};
+        const ct = that.fetchResponse.headers.get('Content-Type');
+        if(ct) {
+            that.headers['Content-Type'] = ct;
+        }
+        const tpcmcnt = that.fetchResponse.headers.get('X-MHFS-totalPCMFrameCount');
+        if(tpcmcnt) {
+            that.headers['X-MHFS-totalPCMFrameCount'] = tpcmcnt;
+        }
+    };
+
+    that._AbortIfExists = function() {
+        if(that.aController) {
+            that.aController.abort();
+            that.aController = null;
+        }
+    };
+
+    that.GetChunk = async function(url, startOffset, signal) {
+
+        try {
+            if(that.ExternalSignal) {
+                that.ExternalSignal.removeEventListener('abort', that._AbortIfExists);
+            }
+            that.ExternalSignal = signal;
+            that.ExternalSignal.addEventListener('abort', that._AbortIfExists);
+
+            if((url !== that.url) || (that.curOffset !== startOffset)) {
+                that._AbortIfExists();
+                await that._newDownload(url, startOffset);
+            }
+            for(;;) {
+                if((that.data.byteLength >= that.CHUNKSIZE) || that.done) {
+                    const maxread = Math.min(that.data.byteLength, that.CHUNKSIZE);
+                    const tmp = new Uint8Array(that.data.subarray(0, maxread));
+                    that.data = new Uint8Array(that.data.subarray(maxread));
+                    that.curOffset += maxread;
+                    return {'filesize' : that.size, 'data' : tmp, 'headers' : that.headers};
+                }
+                const { value: chunk, done: readerDone } = await that.reader.read();
+                if(chunk) {
+                    const tmp = new Uint8Array(that.data.byteLength + chunk.byteLength);
+                    tmp.set(that.data, 0);
+                    tmp.set(chunk, that.data.byteLength);
+                    that.data = tmp;
+                }
+                that.done = readerDone;
+            }
+        }
+        catch(err) {
+            throw('that.GetChunk error');
+        }
+        finally {
+
+        }
+    };
+
+
+    return that;
+
+};
+
 const GetFileSize = function(xhr) {
     let re = new RegExp('/([0-9]+)');
     let res = re.exec(xhr.getResponseHeader('Content-Range'));
@@ -96,7 +181,32 @@ const GetFileSize = function(xhr) {
     return Number(res[1]);
 };
 
-const MHFSCLTrack = async function(gsignal, theURL) {
+const DefDownloadManager = function(chunksize) {
+    const that = {};
+    that.CHUNKSIZE = chunksize;
+
+    that.GetChunk = async function(url, startOffset, signal) {
+        const def_end = startOffset+that.CHUNKSIZE-1;
+        const end = that.filesize ? Math.min(def_end, that.filesize-1) : def_end;
+        const xhr = await makeRequest('GET', url, startOffset, end, signal);
+        that.filesize = GetFileSize(xhr);
+        const headers = {};
+        const ct = xhr.getResponseHeader('Content-Type');
+        if(ct) {
+            headers['Content-Type'] = ct;
+        }
+        const tpcmcnt = xhr.getResponseHeader('X-MHFS-totalPCMFrameCount');
+        if(tpcmcnt) {
+            headers['X-MHFS-totalPCMFrameCount'] = tpcmcnt;
+        }
+
+        return {'filesize' : that.filesize, 'data' : new Uint8Array(xhr.response), 'headers' : headers};
+    };
+
+    return that;
+};
+
+const MHFSCLTrack = async function(gsignal, theURL, DLMGR) {
     if(!MHFSCL.ready) {
         console.log('MHFSCLTrack, waiting for MHFSCL to be ready');
         await waitForEvent(MHFSCL, 'ready');
@@ -104,32 +214,32 @@ const MHFSCLTrack = async function(gsignal, theURL) {
     let that = {};
     that.CHUNKSIZE = 262144;
 
+    DLMGR ||= DefDownloadManager(that.CHUNKSIZE);
+
     that._downloadChunk = async function(start, mysignal) {
         if(start % that.CHUNKSIZE)
         {
             throw("start is not a multiple of CHUNKSIZE: " + start);
-        }        
-        const def_end = start+that.CHUNKSIZE-1;
-        const end = that.filesize ? Math.min(def_end, that.filesize-1) : def_end; 
-        let xhr = await makeRequest('GET', theURL, start, end, mysignal);
-        that.filesize = GetFileSize(xhr);
-        return xhr;
+        }
+        const chunk = await DLMGR.GetChunk(theURL, start, mysignal);
+        that.filesize = chunk.filesize;
+        return chunk;
     };
 
-    that._storeChunk = function(xhr, start) {
+    that._storeChunk = function(chunk, start) {
         let blockptr = MHFSCL.mhfs_cl_track_add_block(that.ptr, start, that.filesize);
         if(!blockptr)
         {
             throw("failed MHFSCL.mhfs_cl_track_add_block");
         }
-        let dataHeap = new Uint8Array(MHFSCL.Module.HEAPU8.buffer, blockptr, xhr.response.byteLength);
-        dataHeap.set(new Uint8Array(xhr.response));
+        let dataHeap = new Uint8Array(MHFSCL.Module.HEAPU8.buffer, blockptr, chunk.data.byteLength);
+        dataHeap.set(chunk.data);
     };
 
     that.downloadAndStoreChunk = async function(start, mysignal) {
-        let xhr = await that._downloadChunk(start, mysignal);
-        that._storeChunk(xhr, start);
-        return xhr;
+        const chunk = await that._downloadChunk(start, mysignal);
+        that._storeChunk(chunk, start);
+        return chunk;
     };
 
     that.close = function() {
@@ -163,8 +273,8 @@ const MHFSCLTrack = async function(gsignal, theURL) {
         // initialize the track
         let start = 0;
         const firstreq = await that._downloadChunk(start, gsignal);
-        const mime = firstreq.getResponseHeader('Content-Type') || '';
-        const totalPCMFrames = firstreq.getResponseHeader('X-MHFS-totalPCMFrameCount') || 0;
+        const mime = firstreq.headers['Content-Type'] || '';
+        const totalPCMFrames = firstreq.headers['X-MHFS-totalPCMFrameCount'] || 0;
         MHFSCL.mhfs_cl_track_init(that.ptr, that.CHUNKSIZE, mime, theURL, totalPCMFrames);
         that.initialized = true;
         that._storeChunk(firstreq, start);
@@ -284,6 +394,7 @@ const MHFSCLDecoder = async function(outputSampleRate, outputChannelCount) {
 
     that.returnDataAlloc = MHFSCLAllocation(MHFSCL.mhfs_cl_track_return_data_sizeof);
     that.deinterleaveDataAlloc = MHFSCLArrsAlloc(outputChannelCount, that.outputSampleRate*that.f32_size);
+    that.DM = DownloadManager(262144);
 
     that.flush = async function() {
         MHFSCL.mhfs_cl_decoder_flush(that.ptr);
@@ -320,7 +431,7 @@ const MHFSCLDecoder = async function(outputSampleRate, outputChannelCount) {
                     throw("abort after closing track");
                 }                                
             }
-            that.track = await MHFSCLTrack(signal, url);
+            that.track = await MHFSCLTrack(signal, url, that.DM);
         } while(0);
 
         if(doseek) {
