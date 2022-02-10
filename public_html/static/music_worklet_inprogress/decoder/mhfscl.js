@@ -307,7 +307,7 @@ const MHFSCLTrack = async function(gsignal, theURL, DLMGR) {
 
         // load enough of the track that the metadata loads
         for(;;) {
-            const code = MHFSCL.mhfs_cl_track_read_pcm_frames_f32(that.ptr, 0, 0, rd);
+            const code = MHFSCL.mhfs_cl_track_load_metadata(that.ptr, rd);
             if(code === MHFSCL.MHFS_CL_TRACK_SUCCESS) break;
             if(code !== MHFSCL.MHFS_CL_TRACK_NEED_MORE_DATA){
                 that.close();
@@ -588,6 +588,8 @@ Module().then(function(MHFSCLMod){
     MHFSCL.mhfs_cl_track_deinit = MHFSCLMod.cwrap('mhfs_cl_track_deinit', null, ["number"]);
 
     MHFSCL.mhfs_cl_track_add_block = MHFSCLMod.cwrap('mhfs_cl_track_add_block', "number", ["number", "number", "number"]);
+
+    MHFSCL.mhfs_cl_track_load_metadata = MHFSCLMod.cwrap('mhfs_cl_track_load_metadata', "number", ["number", "number"]);
     
     MHFSCL.mhfs_cl_track_seek_to_pcm_frame = MHFSCLMod.cwrap('mhfs_cl_track_seek_to_pcm_frame', "number", ["number", "number"]);
 
