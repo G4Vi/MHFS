@@ -1336,8 +1336,16 @@ package HTTP::BS::Server::Client::Request {
             $buf      =  substr($buf, $start, ($end-$start) + 1);
         }
 
-        my %fileitem;
-        $fileitem{'localbuf'} = $buf;
+        # Use perlio to read from the buf
+        my $fh;
+        if(!open($fh, '<', \$buf)) {
+            $self->Send404;
+            return;
+        }
+        my %fileitem = (
+            'fh' => $fh,
+            'get_current_length' => sub { return undef }
+        );
         $self->_SendDataItem(\%fileitem, {
            'size'     => $bytesize,
            'mime'     => $mime,
@@ -1813,15 +1821,8 @@ package HTTP::BS::Server::Client {
                 $buf = undef;
             }
 
-            if(defined $dataitem->{'localbuf'}) {
-                $buf = $dataitem->{'localbuf'};
-                $dataitem->{'localbuf'} = undef;
-                $bytesToSend = length $buf;
-            }
-            elsif(defined $dataitem->{'fh'}) {
-                #try to grab a buf from the file
+            if(defined $dataitem->{'fh'}) {
                 my $FH = $dataitem->{'fh'};
-                #my $req_length = $dataitem->{'length'}; # if the file is still locked/we haven't checked for it yet it will be 99999999999
                 my $req_length = $dataitem->{'get_current_length'}->();
                 my $filepos = tell($FH);
                 if($req_length && ($filepos >= $req_length)) {
