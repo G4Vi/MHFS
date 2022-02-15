@@ -1793,7 +1793,7 @@ package HTTP::BS::Server::Client {
                 }
 
                 # update the number of bytes sent
-                $sentthiscall += $bytesToSend - length($remdata);
+                $sentthiscall += ($bytesToSend - length($remdata));
 
                 # if we sent data, kill the send timer
                 if($remdata ne $buf) {
@@ -1816,6 +1816,7 @@ package HTTP::BS::Server::Client {
             if(defined $dataitem->{'localbuf'}) {
                 $buf = $dataitem->{'localbuf'};
                 $dataitem->{'localbuf'} = undef;
+                $bytesToSend = length $buf;
             }
             elsif(defined $dataitem->{'fh'}) {
                 #try to grab a buf from the file
