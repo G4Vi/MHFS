@@ -1078,6 +1078,12 @@ package HTTP::BS::Server::Client::Request {
 
         $headtext .= "\r\n";
         $dataitem->{'buf'} = $headtext;
+
+        if($dataitem->{'fh'}) {
+            $dataitem->{'fh_pos'} = tell($dataitem->{'fh'});
+            $dataitem->{'get_current_length'} //= sub { return undef };
+        }
+
         $self->_SendResponse($dataitem);
     }
 
@@ -1814,10 +1820,14 @@ package HTTP::BS::Server::Client {
             if(defined $dataitem->{'fh'}) {
                 my $FH = $dataitem->{'fh'};
                 my $req_length = $dataitem->{'get_current_length'}->();
-                my $filepos = tell($FH);
+                my $filepos = $dataitem->{'fh_pos'};
+                # TODO, remove this assert
+                if($filepos != tell($FH)) {
+                    die('tell mismatch');
+                }
                 if($req_length && ($filepos >= $req_length)) {
                     if($filepos > $req_length) {
-                        die "Reading too much tell: $filepos req_length: $req_length";
+                        say "Reading too much tell: $filepos req_length: $req_length";
                     }
                     say "file read done";
                     close($FH);
@@ -1846,6 +1856,9 @@ package HTTP::BS::Server::Client {
                             _TSRReturnPrint($sentthiscall);
                             return '';
                         }
+                    }
+                    else {
+                        $dataitem->{'fh_pos'} += $bytesRead;
                     }
                 }
             }
