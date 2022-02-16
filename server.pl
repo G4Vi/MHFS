@@ -1780,19 +1780,16 @@ package HTTP::BS::Server::Client {
         my ($client) = @_;
         my $csock = $client->{'sock'};
         my $dataitem = $client->{'request'}{'response'};
-        my ($buf, $bytesToSend);
-        if(defined $dataitem->{'buf'}) {
-            $buf = $dataitem->{'buf'};
-            $dataitem->{'buf'} = undef;
-            $bytesToSend = length $buf;
-        }
+        my $buf = $dataitem->{'buf'};
+        $dataitem->{'buf'} = undef;
         my $sentthiscall = 0;
         do {
             # Try to send the buf if set
             if(defined $buf) {
                 # there's data to send start the send timer
                 $client->{'sendresponsetimerid'} //= $client->AddClientCloseTimer($client->{'server'}{'settings'}{'sendresponsetimeout'}, $client->{'CONN-ID'});
-                my $remdata = TrySendItem($csock, $buf, $bytesToSend);
+                my $origBufLen = length($buf);
+                my $remdata = TrySendItem($csock, $buf, $origBufLen);
 
                 # critical conn error
                 if(! defined($remdata)) {
@@ -1801,7 +1798,7 @@ package HTTP::BS::Server::Client {
                 }
 
                 # update the number of bytes sent
-                $sentthiscall += ($bytesToSend - length($remdata));
+                $sentthiscall += ($origBufLen - length($remdata));
 
                 # if we sent data, kill the send timer
                 if($remdata ne $buf) {
@@ -1839,12 +1836,12 @@ package HTTP::BS::Server::Client {
                         $readamt = $tmpsend if($tmpsend < $readamt);
                     }
                     # this is blocking, it shouldn't block for long but it could if it's a pipe especially
-                    $bytesToSend = read($FH, $buf, $readamt);
-                    if(! defined($bytesToSend)) {
+                    my $bytesRead = read($FH, $buf, $readamt);
+                    if(! defined($bytesRead)) {
                         $buf = undef;
                         say "READ ERROR: $!";
                     }
-                    elsif($bytesToSend == 0) {
+                    elsif($bytesRead == 0) {
                         # read EOF, better remove the error
                         if(! $req_length) {
                             say '$req_length not set and read 0 bytes, treating as EOF';
@@ -1861,7 +1858,6 @@ package HTTP::BS::Server::Client {
             }
             elsif(defined $dataitem->{'cb'}) {
                 $buf = $dataitem->{'cb'}->($dataitem);
-                $bytesToSend = length $buf;
             }
 
             # chunked encoding
@@ -1887,19 +1883,9 @@ package HTTP::BS::Server::Client {
     }
 
     sub TrySendItem {
-        my ($csock, $data, $n) = @_;
-        my $total = $n;
-        my $sret;
-        # croaks when peer is no longer connected
-        #$sret = eval { return $csock->send($data, MSG_DONTWAIT); };
-        #if ($@) {
-        #    warn "func blew up: $@";
-        #    print "send errno $!\n";
-        #    return undef;
-        #}
-        #$sret = $csock->send($data, MSG_DONTWAIT);
-        $sret = send($csock, $data, MSG_DONTWAIT);
-        #if(! defined($sret = $csock->send($data, MSG_DONTWAIT))) {
+        my ($csock, $data) = @_;
+        my $origBufLen = length($data);
+        my $sret = send($csock, $data, MSG_DONTWAIT);
         if(! defined($sret)) {
             if($!{ECONNRESET}) {
                 print "ECONNRESET\n";
@@ -1918,9 +1904,8 @@ package HTTP::BS::Server::Client {
                 return undef;
             }
         }
-        elsif($sret != $n) {
+        elsif($sret != $origBufLen) {
             $data = substr($data, $sret);
-            $n = $n - $sret;
             return $data;
         }
         else {
@@ -4370,28 +4355,6 @@ sub fmp4 {
     $evp->remove($sock);
     $request->{'client'} = undef;
     HTTP::BS::Server::Process->cmd_to_sock(\@command, $sock);
-
-    #$request->{'process'} = HTTP::BS::Server::Process->new(\@command, $evp, {
-    #    'STDERR' => sub {
-    #        my ($err) = @_;
-    #        my $buf;
-    #        read($err, $buf, 4096);
-    #        return 1;
-    #    },
-    #    'STDOUT' => sub {
-    #        my ($out) = @_;
-    #        if(! $sent) {
-    #            $sent = 1;
-    #            say "proc sending response";
-    #            my %fileitem = ('fh' => $out);
-    #            $fileitem{'get_current_length'} = sub { return undef };
-    #            $request->_SendDataItem(\%fileitem, {'mime' => 'video/mp4'});
-    #        }
-    #
-    #        return 1;
-    #    }
-    #});
-
 }
 
 # hls on demand
