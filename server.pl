@@ -1785,13 +1785,12 @@ package HTTP::BS::Server::Client {
         my ($client) = @_;
         my $csock = $client->{'sock'};
         my $dataitem = $client->{'request'}{'response'};
-        my $buf = $dataitem->{'buf'};
-        $dataitem->{'buf'} = undef;
+        defined($dataitem->{'buf'}) or die("dataitem must always have a buf");
         my $sentthiscall = 0;
         do {
             # Try to send the buf if set
-            if(defined $buf) {
-                my $sret = TrySendItem($csock, \$buf);
+            if(length($dataitem->{'buf'})) {
+                my $sret = TrySendItem($csock, \$dataitem->{'buf'});
                 # critical conn error
                 if(! defined($sret)) {
                     _TSRReturnPrint($sentthiscall);
@@ -1806,17 +1805,17 @@ package HTTP::BS::Server::Client {
                     }
                 }
                 # not all data sent, add timer
-                if(length($buf) > 0) {
+                if(length($dataitem->{'buf'}) > 0) {
                     $client->{'sendresponsetimerid'} //= $client->AddClientCloseTimer($client->{'server'}{'settings'}{'sendresponsetimeout'}, $client->{'CONN-ID'});
-                    $dataitem->{'buf'} = $buf;
                     _TSRReturnPrint($sentthiscall);
                     return '';
                 }
 
                 #we sent the full buf
-                $buf = undef;
             }
 
+            # read more data
+            my $newdata;
             if(defined $dataitem->{'fh'}) {
                 my $FH = $dataitem->{'fh'};
                 my $req_length = $dataitem->{'get_current_length'}->();
@@ -1839,16 +1838,16 @@ package HTTP::BS::Server::Client {
                         $readamt = $tmpsend if($tmpsend < $readamt);
                     }
                     # this is blocking, it shouldn't block for long but it could if it's a pipe especially
-                    my $bytesRead = read($FH, $buf, $readamt);
+                    my $bytesRead = read($FH, $newdata, $readamt);
                     if(! defined($bytesRead)) {
-                        $buf = undef;
+                        $newdata = undef;
                         say "READ ERROR: $!";
                     }
                     elsif($bytesRead == 0) {
                         # read EOF, better remove the error
                         if(! $req_length) {
                             say '$req_length not set and read 0 bytes, treating as EOF';
-                            $buf = undef;
+                            $newdata = undef;
                         }
                         else {
                             say 'FH EOF ' .$filepos;
@@ -1863,24 +1862,28 @@ package HTTP::BS::Server::Client {
                 }
             }
             elsif(defined $dataitem->{'cb'}) {
-                $buf = $dataitem->{'cb'}->($dataitem);
+                $newdata = $dataitem->{'cb'}->($dataitem);
             }
 
-            # chunked encoding
-            if($dataitem->{'is_chunked'}) {
-                if(! $buf) {
-                    say "chunk done";
-                    $buf = '';
-                    $dataitem->{'is_chunked'} = undef;
-                    $dataitem->{'fh'} = undef;
-                    $dataitem->{'cb'} = undef;
-                }
-
-                #say "chunk with size: " . length($buf);
-                my $sizeline = sprintf "%X\r\n", length($buf);
-                $buf = $sizeline.$buf."\r\n";
+            my $encode_chunked = $dataitem->{'is_chunked'};
+            # if we got to here and there's no data, fetching newdata is done
+            if(! $newdata) {
+                $dataitem->{'fh'} = undef;
+                $dataitem->{'cb'} = undef;
+                $dataitem->{'is_chunked'} = undef;
+                $newdata = '';
             }
-        } while(defined $buf);
+
+            # encode chunked encoding if needed
+            if($encode_chunked) {
+                my $sizeline = sprintf "%X\r\n", length($newdata);
+                $newdata = $sizeline.$newdata."\r\n";
+            }
+
+            # add the new data to the dataitem buffer
+            $dataitem->{'buf'} .= $newdata;
+
+        } while(length($dataitem->{'buf'}));
         $client->{'request'}{'response'} = undef;
 
         _TSRReturnPrint($sentthiscall);
