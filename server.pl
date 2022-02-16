@@ -1775,7 +1775,6 @@ package HTTP::BS::Server::Client {
         }
     }
 
-    # TODO not block on read
     sub TrySendResponse {
         my ($client) = @_;
         my $csock = $client->{'sock'};
@@ -1786,34 +1785,28 @@ package HTTP::BS::Server::Client {
         do {
             # Try to send the buf if set
             if(defined $buf) {
-                # there's data to send start the send timer
-                $client->{'sendresponsetimerid'} //= $client->AddClientCloseTimer($client->{'server'}{'settings'}{'sendresponsetimeout'}, $client->{'CONN-ID'});
-                my $origBufLen = length($buf);
-                my $remdata = TrySendItem($csock, $buf, $origBufLen);
-
+                my $sret = TrySendItem($csock, \$buf);
                 # critical conn error
-                if(! defined($remdata)) {
+                if(! defined($sret)) {
                     _TSRReturnPrint($sentthiscall);
                     return undef;
                 }
-
-                # update the number of bytes sent
-                $sentthiscall += ($origBufLen - length($remdata));
-
-                # if we sent data, kill the send timer
-                if($remdata ne $buf) {
+                if($sret) {
+                    $sentthiscall += $sret;
+                    # if we sent data, kill the send timer
                     if(defined $client->{'sendresponsetimerid'}) {
                         $client->KillClientCloseTimer($client->{'sendresponsetimerid'});
                         $client->{'sendresponsetimerid'} = undef;
                     }
                 }
-                # eagain or not all data sent
-                if($remdata ne '') {
+                # not all data sent, add timer
+                if(length($buf) > 0) {
                     $client->{'sendresponsetimerid'} //= $client->AddClientCloseTimer($client->{'server'}{'settings'}{'sendresponsetimeout'}, $client->{'CONN-ID'});
-                    $dataitem->{'buf'} = $remdata;
+                    $dataitem->{'buf'} = $buf;
                     _TSRReturnPrint($sentthiscall);
                     return '';
                 }
+
                 #we sent the full buf
                 $buf = undef;
             }
@@ -1883,35 +1876,28 @@ package HTTP::BS::Server::Client {
     }
 
     sub TrySendItem {
-        my ($csock, $data) = @_;
-        my $origBufLen = length($data);
-        my $sret = send($csock, $data, MSG_DONTWAIT);
+        my ($csock, $dataref) = @_;
+        my $sret = send($csock, $$dataref, MSG_DONTWAIT);
         if(! defined($sret)) {
-            if($!{ECONNRESET}) {
+            if($!{EAGAIN}) {
+                #say "SEND EAGAIN\n";
+                return 0;
+            }
+            elsif($!{ECONNRESET}) {
                 print "ECONNRESET\n";
-                return undef;
             }
             elsif($!{EPIPE}) {
                 print "EPIPE\n";
-                return undef;
-            }
-            elsif($!{EAGAIN}) {
-                #say "SEND EAGAIN\n";
-                return $data;
             }
             else {
                 print "send errno $!\n";
-                return undef;
             }
+            return undef;
         }
-        elsif($sret != $origBufLen) {
-            $data = substr($data, $sret);
-            return $data;
+        elsif($sret) {
+            substr($$dataref, 0, $sret, '');
         }
-        else {
-            # success we sent everything
-            return '';
-        }
+        return $sret;
     }
 
     sub onHangUp {
