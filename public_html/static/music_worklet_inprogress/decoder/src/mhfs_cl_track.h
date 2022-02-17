@@ -11,6 +11,8 @@ typedef struct {
     uint32_t sampleRate;
     uint8_t channels;
     uint8_t bitsPerSample;
+
+    uint8_t *pictureBlock;
 } mhfs_cl_track_metadata;
 
 #define MHFS_CL_TRACK_MAX_ALLOCS 3
@@ -76,6 +78,15 @@ LIBEXPORT uint8_t mhfs_cl_track_channels(const mhfs_cl_track *pTrack);
 LIBEXPORT uint64_t mhfs_cl_track_currentFrame(const mhfs_cl_track *pTrack);
 LIBEXPORT double mhfs_cl_track_durationInSecs(const mhfs_cl_track *pTrack);
 
+LIBEXPORT void *mhfs_cl_track_get_picture_block(const mhfs_cl_track *pTrack);
+LIBEXPORT uint32_t mhfs_cl_flac_picture_block_get_type(const void *pPictureBlock);
+LIBEXPORT uint32_t mhfs_cl_flac_picture_block_get_mime_size(const uint8_t *pPictureBlock);
+LIBEXPORT const uint8_t *mhfs_cl_flac_picture_block_get_mime(const uint8_t *pPictureBlock);
+LIBEXPORT uint32_t mhfs_cl_flac_picture_block_get_desc_size(const uint8_t *pPictureBlock);
+LIBEXPORT const uint8_t *mhfs_cl_flac_picture_block_get_desc(const uint8_t *pPictureBlock);
+LIBEXPORT uint32_t mhfs_cl_flac_picture_block_get_picture_size(const uint8_t *pPictureBlock);
+LIBEXPORT const uint8_t *mhfs_cl_flac_picture_block_get_picture(const uint8_t *pPictureBlock);
+
 #if defined(MHFSCLTRACK_IMPLEMENTATION)
 #ifndef mhfs_cl_track_c
 #define mhfs_cl_track_c
@@ -89,6 +100,56 @@ LIBEXPORT double mhfs_cl_track_durationInSecs(const mhfs_cl_track *pTrack);
 
 #define mhfs_cl_member_size(type, member) sizeof(((type *)0)->member)
 
+static inline uint32_t unaligned_beu32_to_native(const void *src)
+{
+    const uint8_t *pNum = src;
+    return (pNum[0] << 24) | (pNum[1] << 16) | (pNum[2] << 8) | (pNum[3]);
+}
+
+void *mhfs_cl_track_get_picture_block(const mhfs_cl_track *pTrack)
+{
+    return pTrack->meta.pictureBlock;
+}
+
+uint32_t mhfs_cl_flac_picture_block_get_type(const void *pPictureBlock)
+{
+    return unaligned_beu32_to_native(pPictureBlock);
+}
+
+uint32_t mhfs_cl_flac_picture_block_get_mime_size(const uint8_t *pPictureBlock)
+{
+    return unaligned_beu32_to_native(pPictureBlock+4);
+}
+
+const uint8_t *mhfs_cl_flac_picture_block_get_mime(const uint8_t *pPictureBlock)
+{
+    return &pPictureBlock[8];
+}
+
+uint32_t mhfs_cl_flac_picture_block_get_desc_size(const uint8_t *pPictureBlock)
+{
+    const uint8_t *pDescSize = mhfs_cl_flac_picture_block_get_mime(pPictureBlock) + mhfs_cl_flac_picture_block_get_mime_size(pPictureBlock);
+    return unaligned_beu32_to_native(pDescSize);
+}
+
+const uint8_t *mhfs_cl_flac_picture_block_get_desc(const uint8_t *pPictureBlock)
+{
+    const uint8_t *pDesc = mhfs_cl_flac_picture_block_get_mime(pPictureBlock) + mhfs_cl_flac_picture_block_get_mime_size(pPictureBlock) + 4;
+    return pDesc;
+}
+
+uint32_t mhfs_cl_flac_picture_block_get_picture_size(const uint8_t *pPictureBlock)
+{
+    const uint8_t *pPictureSize = mhfs_cl_flac_picture_block_get_desc(pPictureBlock) + mhfs_cl_flac_picture_block_get_desc_size(pPictureBlock) + 16;
+    return unaligned_beu32_to_native(pPictureSize);
+}
+
+const uint8_t *mhfs_cl_flac_picture_block_get_picture(const uint8_t *pPictureBlock)
+{
+    const uint8_t *pPicture = mhfs_cl_flac_picture_block_get_desc(pPictureBlock) + mhfs_cl_flac_picture_block_get_desc_size(pPictureBlock) + 20;
+    return pPicture;
+}
+
 static void mhfs_cl_track_metadata_init(mhfs_cl_track_metadata *pMetadata, const uint64_t totalPCMFrameCount, const uint32_t sampleRate, const uint8_t channels, const uint8_t bitsPerSample)
 {
     pMetadata->totalPCMFrameCount = totalPCMFrameCount;
@@ -96,6 +157,8 @@ static void mhfs_cl_track_metadata_init(mhfs_cl_track_metadata *pMetadata, const
     pMetadata->channels = channels;
     pMetadata->bitsPerSample = bitsPerSample;
     pMetadata->durationInSecs = (pMetadata->sampleRate > 0) ? ((double)totalPCMFrameCount / sampleRate) : 0;
+
+    pMetadata->pictureBlock = NULL;
 }
 
 static mhfs_cl_track_error mhfs_cl_track_error_from_blockvf_error(const blockvf_error bvferr)
@@ -632,7 +695,25 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrac
         }
         else if(blocktype == DRFLAC_METADATA_BLOCK_TYPE_PICTURE)
         {
-            MHFSCLTR_PRINT("Got Picture\n");
+            const uint32_t pictureType = mhfs_cl_flac_picture_block_get_type(blockData);
+            MHFSCLTR_PRINT("Picture type: %u\n", pictureType);
+            bool bSetPicture = (pTrack->meta.pictureBlock == NULL);
+            if(! bSetPicture)
+            {
+                // pcover top priority, disc second priority, everything else same priority
+                const uint32_t existingPictureType = mhfs_cl_flac_picture_block_get_type(pTrack->meta.pictureBlock);
+                switch(pictureType)
+                {
+                    case 6:
+                    if(existingPictureType == 6) break;
+                    case 3:
+                    bSetPicture = (existingPictureType != 3);
+                }
+            }
+            if(bSetPicture)
+            {
+                pTrack->meta.pictureBlock = ((uint8_t*)pTrack->vf.buf) + (pTrack->vf.fileoffset - blocksize);
+            }
         }
         free(blockData);
     }
