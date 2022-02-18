@@ -103,14 +103,67 @@ const TrackQueue = function(starttrack, time) {
 };
 */
 
+const ArtDB = function() {
+    const that = {};
+    that.ByHash = {};
+
+    that.addPictureIfNotExists = function(picture) {
+        const pichash = picture.hash;
+        if(! that.ByHash[pichash]) {
+            that.ByHash[pichash] = [];
+        }
+        else {
+            for(const elm of that.ByHash[pichash]) {
+                if((elm.size === picture.picsize) && (elm.mime === picture.mime)) {
+                    return elm.url;
+                }
+            }
+        }
+        const picurl = picture.toURL();
+        console.log('loaded picture at ' + picurl);
+        that.ByHash[pichash].push({
+            size : picture.picsize,
+            mime : picture.mime,
+            url  : picurl
+        });
+        return picurl;
+    };
+    return that;
+};
+
 const MHFSPlayer = async function(opt) {
     let that = {};
     that.gui = opt.gui;
 
+    that.artDB = ArtDB();
     that.artmap = {};
+    that.urlmap = {};
 
     const cdimage = new Blob ([CDIMAGE], { type: 'image/svg+xml' });
     that.cdimage = URL.createObjectURL(cdimage);
+
+    const LoadTrackArt = function(track, dectrack) {
+        if(! that.artmap[track.trackname]) {
+            const embeddedart = dectrack._openPictureIfExists();
+            if(embeddedart) {
+                that.artmap[track.trackname] = that.artDB.addPictureIfNotExists(embeddedart);
+            }
+            else {
+                const url = that.gui.getarturl(track.trackname);
+                if(that.urlmap[url]) {
+                    that.artmap[track.trackname] = that.urlmap[url];
+                    return;
+                }
+                (async function() {
+                    const fetchResponse = await fetch(url);
+                    const blobert = await fetchResponse.blob();
+                    that.urlmap[url] = URL.createObjectURL(blobert);
+                    that.artmap[track.trackname] = that.urlmap[url];
+                    that.gui.UpdateTrackImage(track);
+                })();
+            }
+        }
+    };
 
 
     that.sampleRate = opt.sampleRate;
@@ -426,10 +479,7 @@ const MHFSPlayer = async function(opt) {
             if(mysignal.aborted) break;
 
             // art
-            if(! that.artmap[track.trackname]) {
-                that.artmap[track.trackname] = decoder.track._loadPictureIfExists() || track.arturl;
-                track.arturl = that.artmap[track.trackname];
-            }
+            LoadTrackArt(track, decoder.track);
     
             // decode the track
             const todec = that.ac.sampleRate;         
@@ -500,7 +550,7 @@ const MHFSPlayer = async function(opt) {
 
     that.USERMUTEX = new Mutex(); 
     that._queuetrack = function(trackname, after) {
-        const track = {'trackname' : trackname, 'url' : that.gui.geturl(trackname), 'arturl' : that.artmap[trackname] || that.cdimage};
+        const track = {'trackname' : trackname, 'url' : that.gui.geturl(trackname)};
 
         // if not specified queue at tail
         after = after || that.Tracks_TAIL;    
@@ -724,6 +774,14 @@ const MHFSPlayer = async function(opt) {
         const unlock = await that.USERMUTEX.lock();
         await that._pborderchanged(pbstate);
         unlock();
+    };
+
+    that.getarturl = function(track) {
+        return that.artmap[track.trackname] || that.urlmap[that.gui.getarturl(track.trackname)] || that.cdimage;
+    };
+
+    that.backuparturl = function() {
+        return that.cdimage;
     };
     
     // start the audio pump

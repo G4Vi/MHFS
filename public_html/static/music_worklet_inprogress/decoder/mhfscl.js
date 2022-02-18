@@ -232,6 +232,28 @@ const DefDownloadManager = function(chunksize) {
     return that;
 };
 
+const MHFSCLTrackPicture = function(pictureBlock) {
+    const that = {};
+    const mimesize = MHFSCL.mhfs_cl_flac_picture_block_get_mime_size(pictureBlock);
+    const pMime = MHFSCL.mhfs_cl_flac_picture_block_get_mime(pictureBlock);
+    that.picsize = MHFSCL.mhfs_cl_flac_picture_block_get_picture_size(pictureBlock);
+    const pPicture = MHFSCL.mhfs_cl_flac_picture_block_get_picture(pictureBlock);
+    that.mime = MHFSCL.Module.UTF8ToString(pMime, mimesize)
+    const srcData = new Uint8Array(MHFSCL.Module.HEAPU8.buffer, pPicture, that.picsize);
+    that.hash = MHFSCL.mhfs_cl_djb2(pPicture, that.picsize);
+
+    that.toURL = function() {
+        const picData = new Uint8Array(srcData);
+        const blobert = new Blob([picData.buffer], {
+            'type' : that.mime
+        });
+        const url = URL.createObjectURL(blobert);
+        return url;
+    };
+
+    return that;
+};
+
 const MHFSCLTrack = async function(gsignal, theURL, DLMGR) {
     if(!MHFSCL.ready) {
         console.log('MHFSCLTrack, waiting for MHFSCL to be ready');
@@ -290,25 +312,13 @@ const MHFSCLTrack = async function(gsignal, theURL, DLMGR) {
         return MHFSCL.mhfs_cl_track_currentFrame(that.ptr);
     };
 
-    that._loadPictureIfExists = function() {
+    that._openPictureIfExists = function() {
         const pictureBlock = MHFSCL.mhfs_cl_track_get_picture_block(that.ptr);
         if(pictureBlock == 0)
         {
             return undefined;
         }
-        const mimesize = MHFSCL.mhfs_cl_flac_picture_block_get_mime_size(pictureBlock);
-        const pMime = MHFSCL.mhfs_cl_flac_picture_block_get_mime(pictureBlock);
-        const picsize = MHFSCL.mhfs_cl_flac_picture_block_get_picture_size(pictureBlock);
-        const pPicture = MHFSCL.mhfs_cl_flac_picture_block_get_picture(pictureBlock);
-        const mime = MHFSCL.Module.UTF8ToString(pMime, mimesize)
-        const srcData = new Uint8Array(MHFSCL.Module.HEAPU8.buffer, pPicture, picsize);
-        const picData = new Uint8Array(srcData);
-        const blobert = new Blob([picData.buffer], {
-            'type' : mime
-        });
-        const url = URL.createObjectURL(blobert);
-        console.log('loaded picture at ' + url);
-        return url;
+        return MHFSCLTrackPicture(pictureBlock);
     };
 
     // allocate memory for the mhfs_cl_track and return data
@@ -636,6 +646,8 @@ Module().then(function(MHFSCLMod){
     MHFSCL.mhfs_cl_flac_picture_block_get_desc = MHFSCLMod.cwrap('mhfs_cl_flac_picture_block_get_desc', "number", ["number"]);
     MHFSCL.mhfs_cl_flac_picture_block_get_picture_size = MHFSCLMod.cwrap('mhfs_cl_flac_picture_block_get_picture_size', "number", ["number"]);
     MHFSCL.mhfs_cl_flac_picture_block_get_picture = MHFSCLMod.cwrap('mhfs_cl_flac_picture_block_get_picture', "number", ["number"]);
+
+    MHFSCL.mhfs_cl_djb2 = MHFSCLMod.cwrap('mhfs_cl_djb2', "number", ["number", "number"]);
     
     MHFSCL.mhfs_cl_decoder_open = MHFSCLMod.cwrap('mhfs_cl_decoder_open', "number", ["number", "number", "number"]);
 

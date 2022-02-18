@@ -35,22 +35,37 @@ const SetEndtimeText = function(seconds) {
     endtimetxt.value = seconds.toHHMMSS();
 }
 
+const imgSetArt = function(artelm, arturl) {
+    if(arturl) {
+        const onArtElmError = function() {
+            artelm.removeEventListener('error', onArtElmError);
+            artelm.src = MHFSPLAYER.backuparturl();
+        };
+        artelm.addEventListener('error', onArtElmError);
+        artelm.setAttribute("src", arturl);
+    }
+    else {
+        artelm.setAttribute("src", MHFSPLAYER.backuparturl());
+    }
+}
+
 let ArtCnt = 0;
 const TrackHTML = function(track, isLoading) {
     const trackdiv = document.createElement("div");
     trackdiv.setAttribute('class', 'trackdiv');
-    if(track && track.arturl) {
+    if(track) {
+        const arturl = MHFSPLAYER.getarturl(track);
         const artelm = document.createElement("img");
         artelm.setAttribute("class", "albumart");
-        artelm.setAttribute("src", track.arturl);
         artelm.setAttribute("alt", "album art");
+        imgSetArt(artelm, arturl);
 
         // we want to show the art big when clicked
         // if the big image or any album art is clicked, hide the big image
         // if the album art is a different image, show that instead
         const fsimg = document.createElement("img");
         fsimg.setAttribute("class", "fsalbumart");
-        fsimg.setAttribute("src", track.arturl);
+        imgSetArt(fsimg, arturl);
         fsimg.setAttribute("alt", "album art");
         const fsimgid = "a"+ArtCnt;
         ArtCnt++;
@@ -89,6 +104,27 @@ let GuiNextTrack;
 let GuiCurrentTrack;
 let GuiCurrentTrackWasLoading;
 let GuiPrevTrack;
+
+const UpdateTrackImage = function(track) {
+    const guitracks = [GuiPrevTrack, GuiCurrentTrack, GuiNextTrack];
+    for( const gt of guitracks) {
+        if(!gt) continue;
+        if(gt.trackname !== track.trackname) continue;
+        let boxelm;
+        if(gt === GuiPrevTrack) {
+            boxelm = prevtxt;
+        }
+        else if(gt === GuiCurrentTrack) {
+            boxelm = playtxt;
+        }
+        else if(gt === GuiNextTrack) {
+            boxelm = nexttxt;
+        }
+        const artelm = boxelm.querySelector('.albumart');
+        artelm.src = MHFSPLAYER.getarturl(track);
+        // todo fsart?
+    }
+}
 
 const SetNextTrack = function(track, isLoading) {
     if(!GuiNextTrack || (track !== GuiNextTrack)) {
@@ -148,7 +184,12 @@ const geturl = function(trackname) {
 }
 
 const getarturl = function(trackname) {
-    let url = '../../music_art?name=' + encodeURIComponent(trackname);
+    let artpathname = trackname;
+    const lastSlash = artpathname .lastIndexOf('/');
+    if(lastSlash !== -1) {
+        artpathname = artpathname.substring(0, lastSlash);
+    }
+    const url = '../../music_art?name=' + encodeURIComponent(artpathname);
     return url;
 }
 
@@ -173,7 +214,8 @@ const MHFSPLAYER = await MHFSPlayer({'sampleRate' : DesiredSampleRate, 'channels
     'SetPlayTrack'    : SetPlayTrack,
     'SetNextTrack'    : SetNextTrack,
     'InitPPText'      : InitPPText,
-    'onTrackEnd'      : onTrackEnd   
+    'onTrackEnd'      : onTrackEnd,
+    'UpdateTrackImage' : UpdateTrackImage
 }});
 
 const prevbtn    = document.getElementById("prevbtn");

@@ -733,28 +733,33 @@ package HTTP::BS::Server::Util {
             'flac' => 'audio/flac',
             'opus' => 'audio',
             'ogg'  => 'audio/ogg',
+            'wav'  => 'audio/wav',
             # video
             'mp4' => 'video/mp4',
             'ts'   => 'video/mp2t',
             'mkv'  => 'video/x-matroska',
             'webm' => 'video/webm',
             'flv'  => 'video/x-flv',
-            # other
+            # media
+            'mpd' => 'application/dash+xml',
+            'm3u8' => 'application/x-mpegURL',
+            'm3u8_v' => 'application/x-mpegURL',
+            # text
             'html' => 'text/html; charset=utf-8',
             'json' => 'application/json',
             'js'   => 'application/javascript',
             'txt' => 'text/plain',
-            'pdf' => 'application/pdf',
+            'css' => 'text/css',
+            # images
             'jpg' => 'image/jpeg',
+            'jpeg' => 'image/jpeg',
             'png' => 'image/png',
             'gif' => 'image/gif',
             'bmp' => 'image/bmp',
+            # binary
+            'pdf' => 'application/pdf',
             'tar' => 'application/x-tar',
-            'mpd' => 'application/dash+xml',
-            'm3u8' => 'application/x-mpegURL',
-            'm3u8_v' => 'application/x-mpegURL',
             'wasm'  => 'application/wasm',
-            'css' => 'text/css',
             'bin' => 'application/octet-stream'
         );
 
@@ -3337,34 +3342,39 @@ package MusicLibrary {
         foreach my $source (@{$self->{'sources'}}) {
             my $node = FindInLibrary($source, $utf8name);
             next if ! $node;
-            my $dname = dirname($node->{'path'});
-            if(opendir(my $dh, $dname)) {
-                my @files;
-                while(my $fname = readdir($dh)) {
-                    my $last = lc(substr($fname, -4));
-                    push @files, $fname if(($last eq '.png') || ($last eq '.jpg') || ($last eq 'jpeg'));
-                }
-                closedir($dh);
-                if( ! @files) {
+
+            my $dname = $node->{'path'};
+            my $dh;
+            if(! opendir($dh, $dname)) {
+                $dname = dirname($node->{'path'});
+                if(! opendir($dh, $dname)) {
                     $request->Send404;
                     return 1;
                 }
-                my $tosend = "$dname/" . $files[0];
-                foreach my $file (@files) {
-                   foreach my $expname ('cover', 'front', 'album') {
-                        if(substr($file, 0, length($expname)) eq $expname) {
-                            $tosend = "$dname/$file";
-                            last;
-                        }
-                   }
-                }
-                $request->SendLocalFile($tosend);
-                return 1;
-            }
-            else {
-                $request->Send404;
             }
 
+            # scan dir for art
+            my @files;
+            while(my $fname = readdir($dh)) {
+                my $last = lc(substr($fname, -4));
+                push @files, $fname if(($last eq '.png') || ($last eq '.jpg') || ($last eq 'jpeg'));
+            }
+            closedir($dh);
+            if( ! @files) {
+                $request->Send404;
+                return 1;
+            }
+            my $tosend = "$dname/" . $files[0];
+            foreach my $file (@files) {
+               foreach my $expname ('cover', 'front', 'album') {
+                    if(substr($file, 0, length($expname)) eq $expname) {
+                        $tosend = "$dname/$file";
+                        last;
+                    }
+               }
+            }
+            say "tosend $tosend";
+            $request->SendLocalFile($tosend);
             return 1;
         }
     }

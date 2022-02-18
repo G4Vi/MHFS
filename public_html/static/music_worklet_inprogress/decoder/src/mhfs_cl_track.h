@@ -86,6 +86,7 @@ LIBEXPORT uint32_t mhfs_cl_flac_picture_block_get_desc_size(const uint8_t *pPict
 LIBEXPORT const uint8_t *mhfs_cl_flac_picture_block_get_desc(const uint8_t *pPictureBlock);
 LIBEXPORT uint32_t mhfs_cl_flac_picture_block_get_picture_size(const uint8_t *pPictureBlock);
 LIBEXPORT const uint8_t *mhfs_cl_flac_picture_block_get_picture(const uint8_t *pPictureBlock);
+LIBEXPORT unsigned long mhfs_cl_djb2(const uint8_t *pData, const size_t dataLen);
 
 #if defined(MHFSCLTRACK_IMPLEMENTATION)
 #ifndef mhfs_cl_track_c
@@ -104,6 +105,16 @@ static inline uint32_t unaligned_beu32_to_native(const void *src)
 {
     const uint8_t *pNum = src;
     return (pNum[0] << 24) | (pNum[1] << 16) | (pNum[2] << 8) | (pNum[3]);
+}
+
+unsigned long mhfs_cl_djb2(const uint8_t *pData, const size_t dataLen)
+{
+    unsigned long hash = 5381;
+    for(unsigned i = 0; i < dataLen; i++)
+    {
+        hash = ((hash << 5) + hash) + pData[i];
+    }
+    return hash;
 }
 
 void *mhfs_cl_track_get_picture_block(const mhfs_cl_track *pTrack)
