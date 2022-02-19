@@ -35,20 +35,6 @@ const SetEndtimeText = function(seconds) {
     endtimetxt.value = seconds.toHHMMSS();
 }
 
-const imgSetArt = function(artelm, arturl) {
-    if(arturl) {
-        const onArtElmError = function() {
-            artelm.removeEventListener('error', onArtElmError);
-            artelm.src = MHFSPLAYER.backuparturl();
-        };
-        artelm.addEventListener('error', onArtElmError);
-        artelm.setAttribute("src", arturl);
-    }
-    else {
-        artelm.setAttribute("src", MHFSPLAYER.backuparturl());
-    }
-}
-
 let ArtCnt = 0;
 const TrackHTML = function(track, isLoading) {
     const trackdiv = document.createElement("div");
@@ -58,21 +44,13 @@ const TrackHTML = function(track, isLoading) {
         const artelm = document.createElement("img");
         artelm.setAttribute("class", "albumart");
         artelm.setAttribute("alt", "album art");
-        imgSetArt(artelm, arturl);
+        artelm.setAttribute('src', arturl);
 
         // we want to show the art big when clicked
         // if the big image or any album art is clicked, hide the big image
         // if the album art is a different image, show that instead
-        const fsimg = document.createElement("img");
-        fsimg.setAttribute("class", "fsalbumart");
-        imgSetArt(fsimg, arturl);
-        fsimg.setAttribute("alt", "album art");
         const fsimgid = "a"+ArtCnt;
         ArtCnt++;
-        fsimg.setAttribute("id", fsimgid);
-        fsimg.addEventListener('click', function(ev) {
-            this.remove();
-        });
         artelm.addEventListener('click', function(ev) {
             const fsimages = document.getElementsByClassName("fsalbumart");
             if(fsimages[0]) {
@@ -82,9 +60,22 @@ const TrackHTML = function(track, isLoading) {
                     return;
                 }
             }
+            //const fsimg = document.createElement("div");
+            const fsimg = document.createElement("img");
+            fsimg.setAttribute("class", "fsalbumart");
+            fsimg.setAttribute('src', artelm.src);
+            fsimg.setAttribute("alt", "album art");
+            fsimg.setAttribute("id", fsimgid);
+            fsimg.addEventListener('click', function(ev) {
+                this.remove();
+            });
+            //const fsartart = document.createElement("img");
+            //fsartart.setAttribute("class", "fsartart");
+            //fsartart.setAttribute('src', artelm.src);
+            //fsartart.setAttribute("alt", "album art");
+            //fsimg.appendChild(fsartart);
             document.getElementsByTagName('body')[0].appendChild(fsimg);
         });
-
         trackdiv.appendChild(artelm);
     }
     let trackname = track ? track.trackname : '';
@@ -109,7 +100,6 @@ const UpdateTrackImage = function(track) {
     const guitracks = [GuiPrevTrack, GuiCurrentTrack, GuiNextTrack];
     for( const gt of guitracks) {
         if(!gt) continue;
-        if(gt.trackname !== track.trackname) continue;
         let boxelm;
         if(gt === GuiPrevTrack) {
             boxelm = prevtxt;
@@ -121,8 +111,11 @@ const UpdateTrackImage = function(track) {
             boxelm = nexttxt;
         }
         const artelm = boxelm.querySelector('.albumart');
-        artelm.src = MHFSPLAYER.getarturl(track);
-        // todo fsart?
+        const newurl = MHFSPLAYER.getarturl(gt);
+        if(artelm.src !== newurl) {
+            console.log('update url from ' + artelm.src + ' to ' + newurl);
+            artelm.src = newurl;
+        }
     }
 }
 

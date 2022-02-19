@@ -43,6 +43,7 @@ body {
     z-index: 201;
     max-width: 100%;
     max-height: calc(100% - max(20%, 250px) - max(10%, 90px)); /*the whole page minus the header and footer*/
+    min-height: calc(100% - max(20%, 250px) - max(10%, 90px)); /*the whole page minus the header and footer*/
 }
 
 /* music player is always shown at the bottom */

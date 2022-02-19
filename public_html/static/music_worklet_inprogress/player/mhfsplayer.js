@@ -131,37 +131,76 @@ const ArtDB = function() {
     return that;
 };
 
+const FolderMap = function() {
+    const that = {};
+    that.ByFolder = {};
+
+    const LookupFolder = function(trackname) {
+        const lastSlash = trackname.lastIndexOf('/');
+        return (lastSlash !== -1) ? trackname.substring(0, lastSlash) : '';
+    };
+
+    that.AddArtIfNotExists = function(trackname, url) {
+        const foldername = LookupFolder(trackname);
+        if(!foldername || that.ByFolder[foldername]) return;
+
+        that.ByFolder[foldername] = url;
+    };
+
+    that.GetArt = function(trackname) {
+        const foldername = LookupFolder(trackname);
+        if(! foldername) return undefined;
+        return that.ByFolder[foldername];
+    };
+
+    return that;
+};
+
 const MHFSPlayer = async function(opt) {
     let that = {};
     that.gui = opt.gui;
 
     that.artDB = ArtDB();
     that.artmap = {};
-    that.urlmap = {};
+    that.guiarturl = {};
+    that.foldermap = FolderMap();
 
     const cdimage = new Blob ([CDIMAGE], { type: 'image/svg+xml' });
     that.cdimage = URL.createObjectURL(cdimage);
 
+    const SetTrackArt = function(track, url) {
+        // update the foldermap so we can guess the art for other tracks in the folder / album
+        that.foldermap.AddArtIfNotExists(track.trackname, url);
+        // set this as definite art for track.trackname
+        that.artmap[track.trackname] = url;
+        // gui needs to reload track art urls
+        that.gui.UpdateTrackImage(track);
+    };
+
     const LoadTrackArt = function(track, dectrack) {
         if(! that.artmap[track.trackname]) {
+            let urlToSet;
+            // first try loading the art directly from the file
             const embeddedart = dectrack._openPictureIfExists();
             if(embeddedart) {
-                that.artmap[track.trackname] = that.artDB.addPictureIfNotExists(embeddedart);
+                urlToSet = that.artDB.addPictureIfNotExists(embeddedart);
             }
             else {
+                // try using the gui's art locater. We cache it all as blobs to avoid lookups
                 const url = that.gui.getarturl(track.trackname);
-                if(that.urlmap[url]) {
-                    that.artmap[track.trackname] = that.urlmap[url];
+                if(!that.guiarturl[url]) {
+                    (async function() {
+                        const fetchResponse = await fetch(url);
+                        if(!fetchResponse.ok) return;
+                        const blobert = await fetchResponse.blob();
+                        that.guiarturl[url] = URL.createObjectURL(blobert);
+                        SetTrackArt(track, that.guiarturl[url]);
+                    })();
                     return;
                 }
-                (async function() {
-                    const fetchResponse = await fetch(url);
-                    const blobert = await fetchResponse.blob();
-                    that.urlmap[url] = URL.createObjectURL(blobert);
-                    that.artmap[track.trackname] = that.urlmap[url];
-                    that.gui.UpdateTrackImage(track);
-                })();
+                urlToSet = that.guiarturl[url];
             }
+            SetTrackArt(track, urlToSet);
         }
     };
 
@@ -777,11 +816,8 @@ const MHFSPlayer = async function(opt) {
     };
 
     that.getarturl = function(track) {
-        return that.artmap[track.trackname] || that.urlmap[that.gui.getarturl(track.trackname)] || that.cdimage;
-    };
-
-    that.backuparturl = function() {
-        return that.cdimage;
+        // already determined art > already download art from the gui mapped to the same url > art mapped to the same folder path > the default CD image (embedded below)
+        return that.artmap[track.trackname] || that.guiarturl[that.gui.getarturl(track.trackname)] || that.foldermap.GetArt(track.trackname) || that.cdimage;
     };
     
     // start the audio pump
