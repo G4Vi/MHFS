@@ -35,6 +35,10 @@ const SetEndtimeText = function(seconds) {
     endtimetxt.value = seconds.toHHMMSS();
 }
 
+document.getElementById("artview").addEventListener('click', function(ev) {
+    document.getElementById("artview").style.display = 'none';
+});
+
 let ArtCnt = 0;
 const TrackHTML = function(track, isLoading) {
     const trackdiv = document.createElement("div");
@@ -52,29 +56,37 @@ const TrackHTML = function(track, isLoading) {
         const fsimgid = "a"+ArtCnt;
         ArtCnt++;
         artelm.addEventListener('click', function(ev) {
-            const fsimages = document.getElementsByClassName("fsalbumart");
-            if(fsimages[0]) {
-                const isSameImage = fsimages[0].id === fsimgid;
-                fsimages[0].remove();
-                if(isSameImage) {
-                    return;
-                }
+            //const fsimages = document.getElementsByClassName("artviewimg");
+            //if(fsimages[0]) {
+            //    const isSameImage = fsimages[0].id === fsimgid;
+            //    document.getElementById("artview").remove();
+            //    if(isSameImage) {
+            //        return;
+            //    }
+            //}
+            //const artview = document.createElement("div");
+            //artview.setAttribute('class', 'mainview');
+            //artview.setAttribute('id', 'artview')
+            //artview.addEventListener('click', function(ev) {
+            //    this.remove();
+            //});
+            //const fsimg = document.createElement("img");
+            //fsimg.setAttribute("class", "artviewimg");
+            //fsimg.setAttribute('src', artelm.src);
+            //fsimg.setAttribute("alt", "album art");
+            //fsimg.setAttribute("id", fsimgid);
+            //artview.appendChild(fsimg);
+            //document.getElementsByTagName('body')[0].appendChild(artview);
+            const artview = document.getElementById("artview");
+            const artviewimg = document.getElementsByClassName("artviewimg")[0];
+            if(artviewimg.id === fsimgid) {
+                artview.style.display = (artview.style.display === 'block') ? 'none' : 'block';
             }
-            //const fsimg = document.createElement("div");
-            const fsimg = document.createElement("img");
-            fsimg.setAttribute("class", "fsalbumart");
-            fsimg.setAttribute('src', artelm.src);
-            fsimg.setAttribute("alt", "album art");
-            fsimg.setAttribute("id", fsimgid);
-            fsimg.addEventListener('click', function(ev) {
-                this.remove();
-            });
-            //const fsartart = document.createElement("img");
-            //fsartart.setAttribute("class", "fsartart");
-            //fsartart.setAttribute('src', artelm.src);
-            //fsartart.setAttribute("alt", "album art");
-            //fsimg.appendChild(fsartart);
-            document.getElementsByTagName('body')[0].appendChild(fsimg);
+            else {
+                artviewimg.id = fsimgid;
+                artviewimg.src = arturl;
+                artview.style.display = 'block';
+            }
         });
         trackdiv.appendChild(artelm);
     }

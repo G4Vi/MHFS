@@ -20,30 +20,31 @@ body {
     display: block;
 }
 
-/* music library shown in .body */
-.body {
+/* The main views, music library, art view, etc*/
+.mainview {
     position: fixed;
     top: max(10%, 90px);
     overflow: auto;
     box-sizing: border-box;
     padding-left: 2%;
     width: 100%;
-    max-height: calc(100% - max(20%, 250px) - max(10%, 90px)); /*the whole page minus the header and footer*/
+    height: calc(100% - max(20%, 250px) - max(10%, 90px)); /*the whole page minus the header and footer*/
+    background-color: #000;
 }
 
 .track:hover {
     background-color: #00796b;
 }
 
-/* full-screen album art can be shown ontop of .body */
-.fsalbumart {
-    position: fixed;
-    top: max(10%, 90px);
-    padding-left: 2%;
-    z-index: 201;
-    max-width: 100%;
-    max-height: calc(100% - max(20%, 250px) - max(10%, 90px)); /*the whole page minus the header and footer*/
-    min-height: calc(100% - max(20%, 250px) - max(10%, 90px)); /*the whole page minus the header and footer*/
+#artview {
+    display: none;
+}
+
+.artviewimg {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    object-position: left;
 }
 
 /* music player is always shown at the bottom */

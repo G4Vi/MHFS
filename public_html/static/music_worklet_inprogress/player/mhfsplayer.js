@@ -621,6 +621,7 @@ const MHFSPlayer = async function(opt) {
         }
         else {
             that.redraw = 1;
+            UpdateTrack();
         }
     
         return track;
