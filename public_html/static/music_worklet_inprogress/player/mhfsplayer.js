@@ -587,53 +587,51 @@ const MHFSPlayer = async function(opt) {
     
     // Main playlist queuing. must be done when holding the USERMUTEX
 
-    that.USERMUTEX = new Mutex(); 
+    that.USERMUTEX = new Mutex();
+
+    const Track = function(trackname) {
+        return {'trackname' : trackname, 'url' : that.gui.geturl(trackname)};
+    };
+
     that._queuetracks = function(tracknames, after) {
-
-        // if not specified queue at tail
-        after = after || that.Tracks_TAIL;
-        let queuestarted;
-
-        // add the tracks to the linked list of tracks
-        for(const trackname of tracknames) {
-            const track = {'trackname' : trackname, 'url' : that.gui.geturl(trackname)};
-            //set the next track
-            if(after && after.next) {
-                const before = after.next;
-                before.prev = track;
-                track.next = before;
-            }
-            else {
-                // if there isn't a next track we are the tail
-                that.Tracks_TAIL = track;
-            }
-
-            // set the previous track
-            if(after) {
-                after.next = track;
-                track.prev = after;
-            }
-            else {
-                // if were' not queued after anything we are the head
-                that.Tracks_HEAD = track;
-            }
-
-            // if nothing is being queued, start the queue
-            if(that.QState === that.STATES.NEED_FAQ){
-                queuestarted = 1;
-                that.StartQueue(track);
-            }
-
-            after = track;
+        // build a linked list of tracks to append
+        const HEAD = Track(tracknames[0]);
+        let TAIL = HEAD;
+        for(let i = 1; i < tracknames.length; i++) {
+            const track = Track(tracknames[i]);
+            TAIL.next = track;
+            track.prev = TAIL;
+            TAIL = track;
         }
 
-        // Update GUI
-        if(!queuestarted){
+        // add the linked list to the queue linked list
+        after = after || that.Tracks_TAIL;
+        if(after) {
+            if(after.next) {
+                TAIL.next = after.next;
+                after.next.prev = TAIL;
+            }
+            else {
+                that.Tracks_TAIL = TAIL;
+            }
+            after.next = HEAD;
+            HEAD.prev = after;
+        }
+        else {
+            that.Tracks_HEAD = HEAD;
+            that.Tracks_TAIL = TAIL;
+        }
+
+        // start queue or update the gui
+        if(that.QState === that.STATES.NEED_FAQ){
+            that.StartQueue(HEAD);
+        }
+        else {
             that.redraw = 1;
             UpdateTrack();
         }
-    
-        return after;
+
+        return TAIL;
     };
 
     that._playtracks = async function(tracknames) {
