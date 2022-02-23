@@ -588,46 +588,55 @@ const MHFSPlayer = async function(opt) {
     // Main playlist queuing. must be done when holding the USERMUTEX
 
     that.USERMUTEX = new Mutex(); 
-    that._queuetrack = function(trackname, after) {
-        const track = {'trackname' : trackname, 'url' : that.gui.geturl(trackname)};
+    that._queuetracks = function(tracknames, after) {
 
         // if not specified queue at tail
-        after = after || that.Tracks_TAIL;    
-        
-        //set the next track
-        if(after && after.next) {
-            const before = after.next;
-            before.prev = track;
-            track.next = before;              
+        after = after || that.Tracks_TAIL;
+        let queuestarted;
+
+        // add the tracks to the linked list of tracks
+        for(const trackname of tracknames) {
+            const track = {'trackname' : trackname, 'url' : that.gui.geturl(trackname)};
+            //set the next track
+            if(after && after.next) {
+                const before = after.next;
+                before.prev = track;
+                track.next = before;
+            }
+            else {
+                // if there isn't a next track we are the tail
+                that.Tracks_TAIL = track;
+            }
+
+            // set the previous track
+            if(after) {
+                after.next = track;
+                track.prev = after;
+            }
+            else {
+                // if were' not queued after anything we are the head
+                that.Tracks_HEAD = track;
+            }
+
+            // if nothing is being queued, start the queue
+            if(that.QState === that.STATES.NEED_FAQ){
+                queuestarted = 1;
+                that.StartQueue(track);
+            }
+
+            after = track;
         }
-        else {
-            // if there isn't a next track we are the tail
-            that.Tracks_TAIL = track;
-        }
-        
-        // set the previous track
-        if(after) {
-            after.next = track;
-            track.prev = after;       
-        }
-        else {
-            // if were' not queued after anything we are the head
-            that.Tracks_HEAD = track;
-        }
-       
-        // if nothing is being queued, start the queue
-        if(that.QState === that.STATES.NEED_FAQ){
-            that.StartQueue(track); 
-        }
-        else {
+
+        // Update GUI
+        if(!queuestarted){
             that.redraw = 1;
             UpdateTrack();
         }
     
-        return track;
+        return after;
     };
 
-    that._playtrack = async function(trackname) {
+    that._playtracks = async function(tracknames) {
         let queuePos;
         if(that.AudioQueue[0]) {
             queuePos = that.AudioQueue[0].track;
@@ -638,15 +647,11 @@ const MHFSPlayer = async function(opt) {
     
         // stop all audio
         await that.StopQueue();
-        that.StopAudio();    
-        return that._queuetrack(trackname, queuePos);
-    };
+        that.StopAudio();
 
-    that._queuetracks = function(tracks, after) {
-        tracks.forEach(function(track) {
-            after = that._queuetrack(track, after);
-        });
-    }; 
+        // queue
+        return that._queuetracks(tracknames, queuePos);
+    };
     
     that._prev = async function() {        
         let prevtrack;
@@ -768,13 +773,13 @@ const MHFSPlayer = async function(opt) {
 
     that.queuetrack = async function(trackname) {
         const unlock = await that.USERMUTEX.lock();
-        that._queuetrack(trackname);
+        that._queuetracks([trackname]);
         unlock();
     };
 
     that.playtrack = async function(trackname) {
         const unlock = await that.USERMUTEX.lock();
-        await that._playtrack(trackname);
+        await that._playtracks([trackname]);
         unlock();
     };
 
@@ -786,9 +791,7 @@ const MHFSPlayer = async function(opt) {
 
     that.playtracks = async function(tracknames) {
         const unlock = await that.USERMUTEX.lock();
-        const firsttrack = tracknames.shift();
-        const after = await that._playtrack(firsttrack);
-        that._queuetracks(tracknames, after);        
+        await that._playtracks(tracknames);
         unlock();
     };    
 
