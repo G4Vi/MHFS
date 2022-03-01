@@ -39,6 +39,92 @@ document.getElementById("artview").addEventListener('click', function(ev) {
     document.getElementById("artview").style.display = 'none';
 });
 
+
+
+const CreateMovableWindow = function(titleText, contentElm) {
+    const header = document.getElementsByClassName("header")[0];
+    const footer = document.getElementsByClassName("footer")[0];
+    let pos3 = 0, pos4 = 0;
+    const MovableWindowOnMouseDown = function(e) {
+        e = e || window.event;
+        e.preventDefault();
+        pos3 = e.clientX;
+        pos4 = e.clientY;
+        document.onmouseup = MovableWindowRelease;
+        document.onmousemove = MovableWindowMove;
+    };
+
+    const MovableWindowMove = function(e) {
+        e = e || window.event;
+        e.preventDefault();
+
+        let x = e.clientX;
+        let y = e.clientY;
+
+
+        //if(x < pos3) {
+        //    if(x < 0) {
+        //        x = 0;
+        //    }
+        //}
+        // TODO restrict horizonal dimension;
+        if(y < pos4) {
+            const headerBottom = header.offsetHeight;
+            if(y < headerBottom) {
+                y = headerBottom;
+            }
+        }
+        if( y > pos4) {
+            const footerTop = footer.offsetTop;
+            if ((y + movableWindow.offsetHeight) > footerTop) {
+                y = footerTop - movableWindow.offsetHeight;
+            }
+        }
+
+
+        // calculate the new cursor position:
+        const pos1 = pos3 - x;
+        const pos2 = pos4 - y;
+        pos3 = x;
+        pos4 = y;
+
+        let newtop = (movableWindow.offsetTop - pos2);
+        let newleft = (movableWindow.offsetLeft - pos1);
+
+        // set the element's new position:
+        movableWindow.style.top = newtop+"px";
+        movableWindow.style.left = newleft+"px";
+    };
+
+    const MovableWindowRelease = function(e) {
+        document.onmouseup = null;
+        document.onmousemove = null;
+    };
+
+    const movableWindowTitleBar = document.createElement("div");
+    movableWindowTitleBar.setAttribute("class", "movableWindowTitleBar");
+    movableWindowTitleBar.onmousedown = MovableWindowOnMouseDown;
+    movableWindowTitleBar.textContent = titleText;
+
+    const movableWindow = document.createElement("div");
+    movableWindow.setAttribute("class", "movableWindow");
+    movableWindow.appendChild(movableWindowTitleBar);
+    movableWindow.appendChild(contentElm);
+
+    const headerBottom = header.offsetHeight;
+    movableWindow.style.top = headerBottom;
+
+    document.getElementsByTagName("body")[0].appendChild(movableWindow);
+};
+
+const CreateImageViewer = function(imageURL) {
+    const imgelm = document.createElement("img");
+    imgelm.setAttribute("class", "artviewimg");
+    imgelm.setAttribute("alt", "imageviewimage");
+    imgelm.setAttribute('src', imageURL);
+    CreateMovableWindow("Image View", imgelm);
+};
+
 let ArtCnt = 0;
 const TrackHTML = function(track, isLoading) {
     const trackdiv = document.createElement("div");
@@ -55,6 +141,7 @@ const TrackHTML = function(track, isLoading) {
         const fsimgid = "a"+ArtCnt;
         ArtCnt++;
         artelm.addEventListener('click', function(ev) {
+            //CreateImageViewer(MHFSPLAYER.getarturl(track));
             const artview = document.getElementById("artview");
             const artviewimg = document.getElementsByClassName("artviewimg")[0];
             if(artviewimg.id === fsimgid) {
