@@ -44,11 +44,10 @@ const TrackHTML = function(track, isLoading) {
     const trackdiv = document.createElement("div");
     trackdiv.setAttribute('class', 'trackdiv');
     if(track) {
-        const arturl = MHFSPLAYER.getarturl(track);
         const artelm = document.createElement("img");
         artelm.setAttribute("class", "albumart");
         artelm.setAttribute("alt", "album art");
-        artelm.setAttribute('src', arturl);
+        artelm.setAttribute('src', MHFSPLAYER.getarturl(track));
 
         // we want to show the art big when clicked
         // if the big image or any album art is clicked, hide the big image
@@ -59,13 +58,16 @@ const TrackHTML = function(track, isLoading) {
             const artview = document.getElementById("artview");
             const artviewimg = document.getElementsByClassName("artviewimg")[0];
             if(artviewimg.id === fsimgid) {
-                artview.style.display = (artview.style.display === 'block') ? 'none' : 'block';
+                if(artview.style.display === 'block') {
+                    artview.style.display = 'none';
+                    return;
+                }
             }
             else {
                 artviewimg.id = fsimgid;
-                artviewimg.src = arturl;
-                artview.style.display = 'block';
             }
+            artviewimg.src = MHFSPLAYER.getarturl(track);
+            artview.style.display = 'block';
         });
         trackdiv.appendChild(artelm);
     }
