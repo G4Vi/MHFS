@@ -39,17 +39,18 @@ document.getElementById("artview").addEventListener('click', function(ev) {
     document.getElementById("artview").style.display = 'none';
 });
 
-
+const clamp = (num, min, max) => Math.min(Math.max(num, min), max);
 
 const CreateMovableWindow = function(titleText, contentElm) {
     const header = document.getElementsByClassName("header")[0];
     const footer = document.getElementsByClassName("footer")[0];
-    let pos3 = 0, pos4 = 0;
+    let pointerX;
+    let pointerY;
     const MovableWindowOnMouseDown = function(e) {
         e = e || window.event;
         e.preventDefault();
-        pos3 = e.clientX;
-        pos4 = e.clientY;
+        pointerX = e.clientX;
+        pointerY = e.clientY;
         document.onmouseup = MovableWindowRelease;
         document.onmousemove = MovableWindowMove;
     };
@@ -58,42 +59,31 @@ const CreateMovableWindow = function(titleText, contentElm) {
         e = e || window.event;
         e.preventDefault();
 
-        let x = e.clientX;
-        let y = e.clientY;
+        const realPointerX = e.clientX;
+        const realPointerY = e.clientY;
 
-
-        //if(x < pos3) {
-        //    if(x < 0) {
-        //        x = 0;
-        //    }
-        //}
-        // TODO restrict horizonal dimension;
-        if(y < pos4) {
-            const headerBottom = header.offsetHeight;
-            if(y < headerBottom) {
-                y = headerBottom;
-            }
-        }
-        if( y > pos4) {
-            const footerTop = footer.offsetTop;
-            if ((y + movableWindow.offsetHeight) > footerTop) {
-                y = footerTop - movableWindow.offsetHeight;
-            }
-        }
-
-
-        // calculate the new cursor position:
-        const pos1 = pos3 - x;
-        const pos2 = pos4 - y;
-        pos3 = x;
-        pos4 = y;
-
-        let newtop = (movableWindow.offsetTop - pos2);
-        let newleft = (movableWindow.offsetLeft - pos1);
+        let xDelta = realPointerX - pointerX;
+        let yDelta = realPointerY - pointerY;
 
         // set the element's new position:
-        movableWindow.style.top = newtop+"px";
-        movableWindow.style.left = newleft+"px";
+        // pointerX and pointerY can only be valid positions for targeted window
+        // clamp the delta to avoid moving the window offscreen
+        if(xDelta !== 0) {
+            const minXDelta = 0-movableWindow.offsetLeft;
+            const maxXDelta = (document.getElementsByTagName("body")[0].offsetWidth - movableWindow.offsetWidth) - movableWindow.offsetLeft;
+            xDelta = clamp(xDelta, minXDelta, maxXDelta);
+            const newleft = movableWindow.offsetLeft + xDelta;
+            movableWindow.style.left = newleft+"px";
+            pointerX += xDelta;
+        }
+        if(yDelta !== 0) {
+            const minYDelta = header.offsetHeight - movableWindow.offsetTop;
+            const maxYDelta = footer.offsetTop - (movableWindow.offsetTop+movableWindow.offsetHeight);
+            yDelta = clamp(yDelta, minYDelta, maxYDelta);
+            const newtop = movableWindow.offsetTop + yDelta;
+            movableWindow.style.top = newtop+"px";
+            pointerY += yDelta;
+        }
     };
 
     const MovableWindowRelease = function(e) {
