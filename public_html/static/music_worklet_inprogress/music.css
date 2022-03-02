@@ -53,14 +53,39 @@ body {
     background-color: #f1f1f1;
     border: 1px solid #d3d3d3;
     text-align: center;
+    box-sizing: border-box;
+    resize: both;
+    overflow: hidden;
+}
+
+.movableWindowCloseButton {
+    color: #aaaaaa;
+    float: right;
+    font-size: 28px;
+    font-weight: bold;
+    line-height: 23px;
+}
+
+.movableWindowCloseButton:hover,
+.movableWindowCloseButton:focus {
+    color: #000;
+    text-decoration: none;
+    cursor: pointer;
+    background-color: #e81123
 }
 
 .movableWindowTitleBar {
-    padding: 10px;
+    /*padding: 10px;*/
+    height: 20px;
     cursor: move;
     z-index: 10;
-    background-color: #2196F3;
-    color: #fff;
+    background-color: blue;/*#2196F3;*/
+    color: #f1f1f1;
+    overflow: hidden;
+}
+
+.movableWindowContent {
+    height: calc(100% - 20px);
 }
 
 /* music player is always shown at the bottom */

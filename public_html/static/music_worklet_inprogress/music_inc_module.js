@@ -69,19 +69,41 @@ const CreateMovableWindow = function(titleText, contentElm) {
         // pointerX and pointerY can only be valid positions for targeted window
         // clamp the delta to avoid moving the window offscreen
         if(xDelta !== 0) {
+            // If the image was resized out of bounds, fix it
+            const csswidthstr = movableWindow.style.width;
+            if(csswidthstr) {
+                const csswidth = parseInt(csswidthstr);
+                const maxwidth = document.getElementsByTagName("body")[0].offsetWidth - movableWindow.offsetLeft;
+                if(csswidth > maxwidth) {
+                    movableWindow.style.width = maxwidth;
+                }
+            }
+
             const minXDelta = 0-movableWindow.offsetLeft;
             const maxXDelta = (document.getElementsByTagName("body")[0].offsetWidth - movableWindow.offsetWidth) - movableWindow.offsetLeft;
             xDelta = clamp(xDelta, minXDelta, maxXDelta);
             const newleft = movableWindow.offsetLeft + xDelta;
-            movableWindow.style.left = newleft+"px";
+            movableWindow.style.maxWidth  = document.getElementsByTagName("body")[0].offsetWidth - newleft;
+            movableWindow.style.left = newleft;
             pointerX += xDelta;
         }
         if(yDelta !== 0) {
+            // If the image was resized out of bounds, fix it
+            const cssheightstr = movableWindow.style.height;
+            if(cssheightstr) {
+                const cssheight = parseInt(cssheightstr);
+                const maxheight = (footer.offsetTop - movableWindow.offsetTop);
+                if(cssheight > maxheight) {
+                    movableWindow.style.height = maxheight;
+                }
+            }
+
             const minYDelta = header.offsetHeight - movableWindow.offsetTop;
             const maxYDelta = footer.offsetTop - (movableWindow.offsetTop+movableWindow.offsetHeight);
             yDelta = clamp(yDelta, minYDelta, maxYDelta);
             const newtop = movableWindow.offsetTop + yDelta;
-            movableWindow.style.top = newtop+"px";
+            movableWindow.style.top = newtop;
+            movableWindow.style.maxHeight = (footer.offsetTop - newtop);
             pointerY += yDelta;
         }
     };
@@ -91,31 +113,91 @@ const CreateMovableWindow = function(titleText, contentElm) {
         document.onmousemove = null;
     };
 
+    const closeButton = document.createElement("span");
+    closeButton.setAttribute("class", "movableWindowCloseButton");
+    closeButton.textContent = "×";
+    closeButton.addEventListener('click', function() {
+        movableWindow.remove();
+
+        // focus the window with the highest zindex
+        if(document.getElementsByClassName("movableWindow").length) {
+            let topMostElem;
+            let topMostZIndex;
+            Array.prototype.forEach.call(document.getElementsByClassName("movableWindow"), function(elem) {
+                if(!topMostElem || (parseInt(elem.style.zIndex) > topMostZIndex)) {
+                    topMostElem = elem;
+                    topMostZIndex = parseInt(elem.style.zIndex);
+                }
+            });
+            topMostElem.getElementsByClassName("movableWindowTitleBar")[0].style.backgroundColor = "#0000FF";
+        }
+    });
+
     const movableWindowTitleBar = document.createElement("div");
     movableWindowTitleBar.setAttribute("class", "movableWindowTitleBar");
     movableWindowTitleBar.onmousedown = MovableWindowOnMouseDown;
     movableWindowTitleBar.textContent = titleText;
+    movableWindowTitleBar.appendChild(closeButton);
+
+
+    const movableWindowContent = document.createElement("div");
+    movableWindowContent.setAttribute("class", "movableWindowContent");
+    movableWindowContent.appendChild(contentElm);
 
     const movableWindow = document.createElement("div");
     movableWindow.setAttribute("class", "movableWindow");
     movableWindow.appendChild(movableWindowTitleBar);
-    movableWindow.appendChild(contentElm);
+    movableWindow.appendChild(movableWindowContent);
 
     const headerBottom = header.offsetHeight;
     movableWindow.style.top = headerBottom;
+    movableWindow.style.maxHeight = (footer.offsetTop - headerBottom);
+    movableWindow.style.maxWidth  = document.getElementsByTagName("body")[0].offsetWidth;
+
+    // show topmost
+    const zindex = document.getElementsByClassName("movableWindow").length + 2;
+    if(zindex > 2) {
+        Array.prototype.forEach.call(document.getElementsByClassName("movableWindow"), function(elem) {
+            if(parseInt(elem.style.zIndex) === (zindex-1)) {
+                elem.getElementsByClassName("movableWindowTitleBar")[0].style.backgroundColor = "#0095FF";
+            }
+        });
+    }
+    movableWindow.style.zIndex = zindex;
+
+
+    // on mouse down move window to topmost
+    const makeTopMost = function() {
+        const prevZindex = movableWindow.style.zIndex;
+        const items = document.getElementsByClassName("movableWindow");
+        const topZIndex = document.getElementsByClassName("movableWindow").length +1;
+        Array.prototype.forEach.call(items, function(elem) {
+            if(parseInt(elem.style.zIndex) === topZIndex) {
+                elem.getElementsByClassName("movableWindowTitleBar")[0].style.backgroundColor = "#0095FF";
+            }
+            if(elem.style.zIndex > prevZindex) {
+                elem.style.zIndex--;
+            }
+        });
+        movableWindow.style.zIndex = topZIndex;
+        movableWindowTitleBar.style.backgroundColor = "#0000FF";
+    };
+    movableWindow.onmousedown = makeTopMost;
 
     document.getElementsByTagName("body")[0].appendChild(movableWindow);
 };
 
-const CreateImageViewer = function(imageURL) {
+const CreateImageViewer = function(title, imageURL) {
     const imgelm = document.createElement("img");
     imgelm.setAttribute("class", "artviewimg");
     imgelm.setAttribute("alt", "imageviewimage");
     imgelm.setAttribute('src', imageURL);
-    CreateMovableWindow("Image View", imgelm);
+    if(title.length > 25) {
+        title = title.slice(0, 25) + '...';
+    }
+    CreateMovableWindow("Image View - " + title, imgelm);
 };
 
-let ArtCnt = 0;
 const TrackHTML = function(track, isLoading) {
     const trackdiv = document.createElement("div");
     trackdiv.setAttribute('class', 'trackdiv');
@@ -124,27 +206,9 @@ const TrackHTML = function(track, isLoading) {
         artelm.setAttribute("class", "albumart");
         artelm.setAttribute("alt", "album art");
         artelm.setAttribute('src', MHFSPLAYER.getarturl(track));
-
-        // we want to show the art big when clicked
-        // if the big image or any album art is clicked, hide the big image
-        // if the album art is a different image, show that instead
-        const fsimgid = "a"+ArtCnt;
-        ArtCnt++;
+        // Open the image viewer if the art is clicked
         artelm.addEventListener('click', function(ev) {
-            //CreateImageViewer(MHFSPLAYER.getarturl(track));
-            const artview = document.getElementById("artview");
-            const artviewimg = document.getElementsByClassName("artviewimg")[0];
-            if(artviewimg.id === fsimgid) {
-                if(artview.style.display === 'block') {
-                    artview.style.display = 'none';
-                    return;
-                }
-            }
-            else {
-                artviewimg.id = fsimgid;
-            }
-            artviewimg.src = MHFSPLAYER.getarturl(track);
-            artview.style.display = 'block';
+            CreateImageViewer(track.trackname, MHFSPLAYER.getarturl(track));
         });
         trackdiv.appendChild(artelm);
     }
@@ -160,6 +224,11 @@ const TrackHTML = function(track, isLoading) {
     return trackdiv;
 }
 
+// artview
+//const artview = document.getElementById("artview");
+//const artviewimg = document.getElementsByClassName("artviewimg")[0];
+//artviewimg.src = MHFSPLAYER.getarturl(track);
+//artview.style.display = 'block';
 
 let GuiNextTrack;
 let GuiCurrentTrack;
