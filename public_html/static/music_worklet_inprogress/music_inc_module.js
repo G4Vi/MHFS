@@ -41,164 +41,195 @@ document.getElementById("artview").addEventListener('click', function(ev) {
 
 const clamp = (num, min, max) => Math.min(Math.max(num, min), max);
 
-const CreateMovableWindow = function(titleText, contentElm) {
-    const header = document.getElementsByClassName("header")[0];
-    const footer = document.getElementsByClassName("footer")[0];
-    let pointerX;
-    let pointerY;
-    const MovableWindowOnMouseDown = function(e) {
-        e = e || window.event;
-        e.preventDefault();
-        pointerX = e.clientX;
-        pointerY = e.clientY;
-        document.onmouseup = MovableWindowRelease;
-        document.onmousemove = MovableWindowMove;
+const WindowManager = function() {
+    const that = {};
+
+    // adds a window to the window stack and updates Z
+    const AddWindow = function(awindow) {
+        let zindexToUse = 2;
+        if(that.windowstack) {
+            that.windowstack.domwindow.getElementsByClassName("movableWindowTitleBar")[0].style.backgroundColor = "#0095FF";
+            zindexToUse = parseInt(that.windowstack.domwindow.style.zIndex)+1;
+            awindow.prev = that.windowstack;
+            that.windowstack.next = awindow;
+        }
+        that.windowstack = awindow;
+        awindow.domwindow.getElementsByClassName("movableWindowTitleBar")[0].style.backgroundColor = "#0000FF";
+        awindow.domwindow.style.zIndex = zindexToUse;
     };
 
-    const MovableWindowMove = function(e) {
-        e = e || window.event;
-        e.preventDefault();
+     // removes a window to the window stack and updates Z
+    const RemoveWindow = function(awindow) {
+        let nextwindow = awindow.next;
+        const prevwindow = awindow.prev;
+        // remove awindow from the list
+        if(prevwindow) {
+            awindow.prev = undefined;
+            prevwindow.next = nextwindow;
+        }
+        if(nextwindow) {
+            awindow.next = undefined;
+            nextwindow.prev = prevwindow;
+        }
+        else {
+            that.windowstack = prevwindow;
+        }
+        // move the next windows down
+        for(; nextwindow; nextwindow = nextwindow.next) {
+            nextwindow.domwindow.style.zIndex--;
+        }
+    };
 
-        const realPointerX = e.clientX;
-        const realPointerY = e.clientY;
+    // Creates Window, Adds to window stack, and shows
+    that.CreateMovableWindow = function(titleText, contentElm) {
+        const header = document.getElementsByClassName("header")[0];
+        const footer = document.getElementsByClassName("footer")[0];
+        let pointerX;
+        let pointerY;
+        const MovableWindowOnMouseDown = function(e) {
+            e = e || window.event;
+            e.preventDefault();
+            pointerX = e.clientX;
+            pointerY = e.clientY;
+            document.onmouseup = MovableWindowRelease;
+            document.onmousemove = MovableWindowMove;
+        };
 
-        let xDelta = realPointerX - pointerX;
-        let yDelta = realPointerY - pointerY;
+        const MovableWindowMove = function(e) {
+            e = e || window.event;
+            e.preventDefault();
 
-        // set the element's new position:
-        // pointerX and pointerY can only be valid positions for targeted window
-        // clamp the delta to avoid moving the window offscreen
-        if(xDelta !== 0) {
-            // If the image was resized out of bounds, fix it
-            const csswidthstr = movableWindow.style.width;
-            if(csswidthstr) {
-                const csswidth = parseInt(csswidthstr);
-                const maxwidth = document.getElementsByTagName("body")[0].offsetWidth - movableWindow.offsetLeft;
-                if(csswidth > maxwidth) {
-                    movableWindow.style.width = maxwidth;
+            const realPointerX = e.clientX;
+            const realPointerY = e.clientY;
+
+            let xDelta = realPointerX - pointerX;
+            let yDelta = realPointerY - pointerY;
+
+            // set the element's new position:
+            // pointerX and pointerY can only be valid positions for targeted window
+            // clamp the delta to avoid moving the window offscreen
+            if(xDelta !== 0) {
+                // If the image was resized out of bounds, fix it
+                const csswidthstr = movableWindow.style.width;
+                if(csswidthstr) {
+                    const csswidth = parseInt(csswidthstr);
+                    const maxwidth = document.getElementsByTagName("body")[0].offsetWidth - movableWindow.offsetLeft;
+                    if(csswidth > maxwidth) {
+                        movableWindow.style.width = maxwidth;
+                    }
                 }
+
+                const minXDelta = 0-movableWindow.offsetLeft;
+                const maxXDelta = (document.getElementsByTagName("body")[0].offsetWidth - movableWindow.offsetWidth) - movableWindow.offsetLeft;
+                xDelta = clamp(xDelta, minXDelta, maxXDelta);
+                const newleft = movableWindow.offsetLeft + xDelta;
+                movableWindow.style.maxWidth  = document.getElementsByTagName("body")[0].offsetWidth - newleft;
+                movableWindow.style.left = newleft;
+                pointerX += xDelta;
             }
-
-            const minXDelta = 0-movableWindow.offsetLeft;
-            const maxXDelta = (document.getElementsByTagName("body")[0].offsetWidth - movableWindow.offsetWidth) - movableWindow.offsetLeft;
-            xDelta = clamp(xDelta, minXDelta, maxXDelta);
-            const newleft = movableWindow.offsetLeft + xDelta;
-            movableWindow.style.maxWidth  = document.getElementsByTagName("body")[0].offsetWidth - newleft;
-            movableWindow.style.left = newleft;
-            pointerX += xDelta;
-        }
-        if(yDelta !== 0) {
-            // If the image was resized out of bounds, fix it
-            const cssheightstr = movableWindow.style.height;
-            if(cssheightstr) {
-                const cssheight = parseInt(cssheightstr);
-                const maxheight = (footer.offsetTop - movableWindow.offsetTop);
-                if(cssheight > maxheight) {
-                    movableWindow.style.height = maxheight;
+            if(yDelta !== 0) {
+                // If the image was resized out of bounds, fix it
+                const cssheightstr = movableWindow.style.height;
+                if(cssheightstr) {
+                    const cssheight = parseInt(cssheightstr);
+                    const maxheight = (footer.offsetTop - movableWindow.offsetTop);
+                    if(cssheight > maxheight) {
+                        movableWindow.style.height = maxheight;
+                    }
                 }
+
+                const minYDelta = header.offsetHeight - movableWindow.offsetTop;
+                const maxYDelta = footer.offsetTop - (movableWindow.offsetTop+movableWindow.offsetHeight);
+                yDelta = clamp(yDelta, minYDelta, maxYDelta);
+                const newtop = movableWindow.offsetTop + yDelta;
+                movableWindow.style.top = newtop;
+                movableWindow.style.maxHeight = (footer.offsetTop - newtop);
+                movableWindowContent.style.maxHeight = (footer.offsetTop - newtop) - 20;
+                pointerY += yDelta;
             }
+        };
 
-            const minYDelta = header.offsetHeight - movableWindow.offsetTop;
-            const maxYDelta = footer.offsetTop - (movableWindow.offsetTop+movableWindow.offsetHeight);
-            yDelta = clamp(yDelta, minYDelta, maxYDelta);
-            const newtop = movableWindow.offsetTop + yDelta;
-            movableWindow.style.top = newtop;
-            movableWindow.style.maxHeight = (footer.offsetTop - newtop);
-            movableWindowContent.style.maxHeight = (footer.offsetTop - newtop) - 20;
-            pointerY += yDelta;
-        }
-    };
+        const MovableWindowRelease = function(e) {
+            document.onmouseup = null;
+            document.onmousemove = null;
+        };
 
-    const MovableWindowRelease = function(e) {
-        document.onmouseup = null;
-        document.onmousemove = null;
-    };
+        const closeButton = document.createElement("span");
+        closeButton.setAttribute("class", "movableWindowCloseButton");
+        closeButton.textContent = "×";
 
-    const closeButton = document.createElement("span");
-    closeButton.setAttribute("class", "movableWindowCloseButton");
-    closeButton.textContent = "×";
-    closeButton.addEventListener('click', function() {
-        movableWindow.remove();
+        const movableWindowTitleBar = document.createElement("div");
+        movableWindowTitleBar.setAttribute("class", "movableWindowTitleBar");
+        movableWindowTitleBar.onmousedown = MovableWindowOnMouseDown;
+        const movableWindowTitleText = document.createElement("div");
+        movableWindowTitleText.setAttribute("class", "movableWindowTitleText");
+        movableWindowTitleText.textContent = titleText;
 
-        // focus the window with the highest zindex
-        if(document.getElementsByClassName("movableWindow").length) {
-            let topMostElem;
-            let topMostZIndex;
-            Array.prototype.forEach.call(document.getElementsByClassName("movableWindow"), function(elem) {
-                if(!topMostElem || (parseInt(elem.style.zIndex) > topMostZIndex)) {
-                    topMostElem = elem;
-                    topMostZIndex = parseInt(elem.style.zIndex);
-                }
-            });
-            topMostElem.getElementsByClassName("movableWindowTitleBar")[0].style.backgroundColor = "#0000FF";
-        }
-    });
-
-    const movableWindowTitleBar = document.createElement("div");
-    movableWindowTitleBar.setAttribute("class", "movableWindowTitleBar");
-    movableWindowTitleBar.onmousedown = MovableWindowOnMouseDown;
-    const movableWindowTitleText = document.createElement("div");
-    movableWindowTitleText.setAttribute("class", "movableWindowTitleText");
-    movableWindowTitleText.textContent = titleText;
-
-    movableWindowTitleBar.appendChild(movableWindowTitleText);
-    movableWindowTitleBar.appendChild(closeButton);
+        movableWindowTitleBar.appendChild(movableWindowTitleText);
+        movableWindowTitleBar.appendChild(closeButton);
 
 
-    const movableWindowContent = document.createElement("div");
-    movableWindowContent.setAttribute("class", "movableWindowContent");
-    movableWindowContent.appendChild(contentElm);
+        const movableWindowContent = document.createElement("div");
+        movableWindowContent.setAttribute("class", "movableWindowContent");
+        movableWindowContent.appendChild(contentElm);
 
-    const movableWindow = document.createElement("div");
-    movableWindow.setAttribute("class", "movableWindow");
-    movableWindow.appendChild(movableWindowTitleBar);
-    movableWindow.appendChild(movableWindowContent);
+        const movableWindow = document.createElement("div");
+        movableWindow.setAttribute("class", "movableWindow");
+        movableWindow.appendChild(movableWindowTitleBar);
+        movableWindow.appendChild(movableWindowContent);
 
-    const headerBottom = header.offsetHeight;
-    movableWindow.style.top = headerBottom;
-    movableWindow.style.maxHeight = (footer.offsetTop - headerBottom);
-    movableWindow.style.maxWidth  = document.getElementsByTagName("body")[0].offsetWidth;
-    movableWindowContent.style.maxHeight = (footer.offsetTop - headerBottom) - 20;
+        const headerBottom = header.offsetHeight;
+        movableWindow.style.top = headerBottom;
+        movableWindow.style.maxHeight = (footer.offsetTop - headerBottom);
+        movableWindow.style.maxWidth  = document.getElementsByTagName("body")[0].offsetWidth;
+        movableWindowContent.style.maxHeight = (footer.offsetTop - headerBottom) - 20;
 
-    // show topmost
-    const zindex = document.getElementsByClassName("movableWindow").length + 2;
-    if(zindex > 2) {
-        Array.prototype.forEach.call(document.getElementsByClassName("movableWindow"), function(elem) {
-            if(parseInt(elem.style.zIndex) === (zindex-1)) {
-                elem.getElementsByClassName("movableWindowTitleBar")[0].style.backgroundColor = "#0095FF";
+        const fullwindow = { 'domwindow' : movableWindow};
+
+        // remove from dom and the window stack
+        closeButton.addEventListener('click', function() {
+            movableWindow.remove();
+            RemoveWindow(fullwindow);
+            if(that.windowstack) {
+                that.windowstack.domwindow.getElementsByClassName("movableWindowTitleBar")[0].style.backgroundColor = "#0000FF";
             }
         });
-    }
-    movableWindow.style.zIndex = zindex;
 
+        // on mouse down move window to topmost
+        const makeTopMost = function() {
+            const nextwindow = fullwindow.next;
+            // already topmost if no next window
+            if(!nextwindow) {
+                return;
+            }
 
-    // on mouse down move window to topmost
-    const makeTopMost = function() {
-        const prevZindex = movableWindow.style.zIndex;
-        const items = document.getElementsByClassName("movableWindow");
-        const topZIndex = document.getElementsByClassName("movableWindow").length +1;
-        Array.prototype.forEach.call(items, function(elem) {
-            if(parseInt(elem.style.zIndex) === topZIndex) {
-                elem.getElementsByClassName("movableWindowTitleBar")[0].style.backgroundColor = "#0095FF";
-            }
-            if(elem.style.zIndex > prevZindex) {
-                elem.style.zIndex--;
-            }
-        });
-        movableWindow.style.zIndex = topZIndex;
-        movableWindowTitleBar.style.backgroundColor = "#0000FF";
+            // remove from stack
+            RemoveWindow(fullwindow);
+
+            // place topmost
+            AddWindow(fullwindow);
+        };
+        movableWindow.onmousedown = makeTopMost;
+
+        // add to the window stack as topmost
+        AddWindow(fullwindow);
+
+        // finally show the window
+        document.getElementsByTagName("body")[0].appendChild(movableWindow);
     };
-    movableWindow.onmousedown = makeTopMost;
 
-    document.getElementsByTagName("body")[0].appendChild(movableWindow);
+    return that;
 };
+const WM = WindowManager();
+
+
 
 const CreateImageViewer = function(title, imageURL) {
     const imgelm = document.createElement("img");
     imgelm.setAttribute("class", "artviewimg");
     imgelm.setAttribute("alt", "imageviewimage");
     imgelm.setAttribute('src', imageURL);
-    CreateMovableWindow("Image View - " + title, imgelm);
+    WM.CreateMovableWindow("Image View - " + title, imgelm);
 };
 
 const TrackHTML = function(track, isLoading) {
