@@ -45,6 +45,7 @@ body {
     height: 100%;
     object-fit: contain;
     object-position: left;
+    max-height: inherit;
 }
 
 .movableWindow {
@@ -59,11 +60,11 @@ body {
 }
 
 .movableWindowCloseButton {
-    color: #aaaaaa;
+    color: #f1f1f1;
     float: right;
     font-size: 28px;
     font-weight: bold;
-    line-height: 23px;
+    line-height: 16px;
 }
 
 .movableWindowCloseButton:hover,
@@ -75,13 +76,20 @@ body {
 }
 
 .movableWindowTitleBar {
-    /*padding: 10px;*/
     height: 20px;
     cursor: move;
     z-index: 10;
     background-color: blue;/*#2196F3;*/
     color: #f1f1f1;
     overflow: hidden;
+    display: flex;
+    justify-content: space-between;
+}
+
+.movableWindowTitleText {
+    text-overflow: ellipsis;
+    overflow: hidden;
+    white-space: nowrap;
 }
 
 .movableWindowContent {

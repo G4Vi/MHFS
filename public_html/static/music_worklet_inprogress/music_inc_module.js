@@ -104,6 +104,7 @@ const CreateMovableWindow = function(titleText, contentElm) {
             const newtop = movableWindow.offsetTop + yDelta;
             movableWindow.style.top = newtop;
             movableWindow.style.maxHeight = (footer.offsetTop - newtop);
+            movableWindowContent.style.maxHeight = (footer.offsetTop - newtop) - 20;
             pointerY += yDelta;
         }
     };
@@ -136,7 +137,11 @@ const CreateMovableWindow = function(titleText, contentElm) {
     const movableWindowTitleBar = document.createElement("div");
     movableWindowTitleBar.setAttribute("class", "movableWindowTitleBar");
     movableWindowTitleBar.onmousedown = MovableWindowOnMouseDown;
-    movableWindowTitleBar.textContent = titleText;
+    const movableWindowTitleText = document.createElement("div");
+    movableWindowTitleText.setAttribute("class", "movableWindowTitleText");
+    movableWindowTitleText.textContent = titleText;
+
+    movableWindowTitleBar.appendChild(movableWindowTitleText);
     movableWindowTitleBar.appendChild(closeButton);
 
 
@@ -153,6 +158,7 @@ const CreateMovableWindow = function(titleText, contentElm) {
     movableWindow.style.top = headerBottom;
     movableWindow.style.maxHeight = (footer.offsetTop - headerBottom);
     movableWindow.style.maxWidth  = document.getElementsByTagName("body")[0].offsetWidth;
+    movableWindowContent.style.maxHeight = (footer.offsetTop - headerBottom) - 20;
 
     // show topmost
     const zindex = document.getElementsByClassName("movableWindow").length + 2;
@@ -192,9 +198,6 @@ const CreateImageViewer = function(title, imageURL) {
     imgelm.setAttribute("class", "artviewimg");
     imgelm.setAttribute("alt", "imageviewimage");
     imgelm.setAttribute('src', imageURL);
-    if(title.length > 25) {
-        title = title.slice(0, 25) + '...';
-    }
     CreateMovableWindow("Image View - " + title, imgelm);
 };
 
