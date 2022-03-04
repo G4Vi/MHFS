@@ -286,16 +286,15 @@ const MHFSPlayer = async function(opt) {
     }
 
     // runs gui updates
-    const UpdateTrack = function() {    
-        // determine if a queue update needs to happen
-        let needsStart = 0;
+    const UpdateTrack = function(bDraw) {
+        // determine if a queue update or draw needs to happen
         let toDelete = 0;
         for(let i = 0; i < that.AudioQueue.length; i++) {
             const aqitem = that.AudioQueue[i];
             // mark track as started 
             if(aqitem.needsstart && (aqitem._starttime <= that.ac.currentTime)) {
                 aqitem.needsstart = 0;
-                needsStart = 1;            
+                bDraw = 1;
             }
 
             // nothing more to do if track hasn't ended
@@ -304,46 +303,49 @@ const MHFSPlayer = async function(opt) {
             }
 
             // mark ended track
-            needsStart = 0; //invalidate previous starts as something later ended
             toDelete++;
         }
 
+        // draw if we started loading
         let startedLoading = that.AudioQueue[0] && that.AudioQueue[0].startedLoading;
-        
-        // perform the queue update
-        if(needsStart || toDelete || startedLoading || that.redraw) {
-            that.redraw = 0;
-            if(startedLoading) {
-                that.AudioQueue[0].startedLoading = undefined;
-                const time = that.AudioQueue[0].skiptime;
-                that.gui.SetCurtimeText(time || 0);
-                if(!time) that.gui.SetSeekbarValue(time || 0);
-            }
-
-            // determine the current track;
-            let track;
-            if(toDelete) {
-                const lastTrack = that.AudioQueue[that.AudioQueue.length-1].track;
-                that.AudioQueue.splice(0, toDelete);
-                that.gui.onTrackEnd(that.AudioQueue.length === 0);
-                if(that.AudioQueue.length === 0) {
-                    track = lastTrack;
-                    that.playlistCursor = track;
-                    startedLoading = 0;
-                    that.ac.suspend();
-                }
-            }
-            track ||= that.AudioQueue[0].track;
-
-            // show the track
-            seekbar.min = 0;
-            const duration =  track.duration || 0;
-            seekbar.max = duration;
-            that.gui.SetEndtimeText(duration);
-            that.gui.SetPrevTrack(track.prev);
-            that.gui.SetPlayTrack(track, startedLoading);
-            that.gui.SetNextTrack(track.next);
+        if(startedLoading) {
+            bDraw = 1;
+            that.AudioQueue[0].startedLoading = undefined;
+            const time = that.AudioQueue[0].skiptime;
+            that.gui.SetCurtimeText(time || 0);
+            if(!time) that.gui.SetSeekbarValue(time || 0);
         }
+
+        // perform queue update
+        let track;
+        if(toDelete) {
+            bDraw = 1;
+            const lastTrack = that.AudioQueue[that.AudioQueue.length-1].track;
+            that.AudioQueue.splice(0, toDelete);
+            that.gui.onTrackEnd(that.AudioQueue.length === 0);
+            if(that.AudioQueue.length === 0) {
+                track = lastTrack;
+                that.playlistCursor = track;
+                startedLoading = 0;
+                that.ac.suspend();
+            }
+        }
+
+        // no update occured, no need to draw
+        if(!bDraw) {
+            return;
+        }
+
+        // determine the current track if still unknown
+        track ||= that.AudioQueue[0].track;
+
+        // show the track
+        const duration =  track.duration || 0;
+        seekbar.max = duration;
+        that.gui.SetEndtimeText(duration);
+        that.gui.SetPrevTrack(track.prev);
+        that.gui.SetPlayTrack(track, startedLoading);
+        that.gui.SetNextTrack(track.next);
     }
 
     // passes in the dest array, the maximum frames to read and when they will be played
@@ -622,8 +624,7 @@ const MHFSPlayer = async function(opt) {
             that.StartQueue(HEAD);
         }
         else {
-            that.redraw = 1;
-            UpdateTrack();
+            UpdateTrack(1);
         }
 
         return TAIL;
