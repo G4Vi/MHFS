@@ -216,15 +216,12 @@ const MHFSPlayer = async function(opt) {
     };
     // create AC
     that.ac = that._createaudiocontext({'sampleRate' : opt.sampleRate, 'latencyHint' : 0.1});
+    that.ac.suspend(); // save power start suspended
     that.lastACState = that.ac.state;
     that.ac.onstatechange = function() {
         console.log('changing acstate was ' + that.lastACState + ' now ' + that.ac.state);
         that.lastACState = that.ac.state;
-        if(! that.Tracks_HEAD) {
-            console.log('Not updating ppbtn, there are no tracks');
-            return;
-        }
-        that.gui.InitPPText(that.lastACState);
+        that.gui.onACStateUpdate(that.lastACState);
     };
 
     // connect GainNode  
@@ -333,6 +330,7 @@ const MHFSPlayer = async function(opt) {
                     track = lastTrack;
                     that.playlistCursor = track;
                     startedLoading = 0;
+                    that.ac.suspend();
                 }
             }
             track ||= that.AudioQueue[0].track;
@@ -463,9 +461,6 @@ const MHFSPlayer = async function(opt) {
             return;        
         }
         that.QState = that.STATES.FAQ_RUNNING;
-        if(that.ac.state === "running") {
-            that.gui.InitPPText('running');
-        }
         that.ac.resume();
         
         that.FACAbortController = new AbortController();  
@@ -749,10 +744,12 @@ const MHFSPlayer = async function(opt) {
     };
 
     that.play = function() {
-        that.ac.resume();
-
+        // resume audio
+        if(that.AudioQueue.length) {
+            that.ac.resume();
+        }
         // start playback again
-        if((that.AudioQueue.length === 0) && that.playlistCursor) {
+        else if(that.playlistCursor) {
             that.StartQueue(that.playlistCursor);
         }
     };

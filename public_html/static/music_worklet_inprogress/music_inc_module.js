@@ -325,7 +325,7 @@ const SetSeekbarValue = function(seconds) {
     seekbar.value = seconds;           
 }
 
-const InitPPText = function(playerstate) {
+const onACStateUpdate = function(playerstate) {
     if(playerstate === "suspended") {
         ppbtn.textContent = "PLAY";
     }
@@ -359,30 +359,13 @@ const getarturl = function(trackname) {
     return url;
 }
 
-const onTrackEnd = function(nostart) {
+const onTrackEnd = function(isLast) {
     SBAR_UPDATING = 0;
-    if(nostart) {
+    if(isLast) {
         SetCurtimeText(0);
         SetSeekbarValue(0);
-        InitPPText('suspended');
     }
 };
-
-
-const MHFSPLAYER = await MHFSPlayer({'sampleRate' : DesiredSampleRate, 'channels' : DesiredChannels, 'maxdecodetime' : AQMaxDecodedTime, 'gui' : {
-    'OnQueueUpdate'   : onQueueUpdate,
-    'geturl'          : geturl,
-    'getarturl'       : getarturl,
-    'SetCurtimeText'  : SetCurtimeText,
-    'SetEndtimeText'  : SetEndtimeText,
-    'SetSeekbarValue' : SetSeekbarValue,
-    'SetPrevTrack'    : SetPrevTrack,
-    'SetPlayTrack'    : SetPlayTrack,
-    'SetNextTrack'    : SetNextTrack,
-    'InitPPText'      : InitPPText,
-    'onTrackEnd'      : onTrackEnd,
-    'UpdateTrackImage' : UpdateTrackImage
-}});
 
 const prevbtn    = document.getElementById("prevbtn");
 const seekbar    = document.getElementById("seekbar");
@@ -394,6 +377,22 @@ const prevtxt    = document.getElementById('prev_text');
 const playtxt    = document.getElementById('play_text');
 const dbarea     = document.getElementById('musicdb');
 
+const MHFSPLAYER = await MHFSPlayer({'sampleRate' : DesiredSampleRate, 'channels' : DesiredChannels, 'maxdecodetime' : AQMaxDecodedTime, 'gui' : {
+    'OnQueueUpdate'   : onQueueUpdate,
+    'geturl'          : geturl,
+    'getarturl'       : getarturl,
+    'SetCurtimeText'  : SetCurtimeText,
+    'SetEndtimeText'  : SetEndtimeText,
+    'SetSeekbarValue' : SetSeekbarValue,
+    'SetPrevTrack'    : SetPrevTrack,
+    'SetPlayTrack'    : SetPlayTrack,
+    'SetNextTrack'    : SetNextTrack,
+    'onACStateUpdate' : onACStateUpdate,
+    'onTrackEnd'      : onTrackEnd,
+    'UpdateTrackImage' : UpdateTrackImage
+}});
+
+
 // BEGIN UI handlers
 document.getElementById('playback_order').addEventListener('change', function(e){
     MHFSPLAYER.pborderchange(e.target.value);
@@ -401,12 +400,10 @@ document.getElementById('playback_order').addEventListener('change', function(e)
  
  ppbtn.addEventListener('click', function (e) {
     if ((ppbtn.textContent == 'PAUSE')) {
-        MHFSPLAYER.pause();         
-        ppbtn.textContent = 'PLAY';                        
+        MHFSPLAYER.pause();
     }
     else if ((ppbtn.textContent == 'PLAY')) {
         MHFSPLAYER.play();
-        ppbtn.textContent = 'PAUSE';
     }
  });
  
