@@ -334,11 +334,12 @@ const onACStateUpdate = function(playerstate) {
     }
 }
 
-const onQueueUpdate = function(track) {
-    if(track) {
-        SetPrevTrack(track.prev);
-        SetPlayTrack(track);
-        SetNextTrack(track.next);
+let DRAWUPDATE;
+const onQueueUpdate = function(update) {
+    DRAWUPDATE = update;
+    // if a track ended, the manual seekbar movement is invalid
+    if(update.trackended) {
+        SBAR_UPDATING = 0;
     }
 };
 
@@ -557,6 +558,24 @@ dbarea.addEventListener('click', function (e) {
 
 
 const GraphicsLoop = function() {
+    if(DRAWUPDATE) {
+        const track = DRAWUPDATE.track;
+        const duration =  track.duration || 0;
+        seekbar.max = duration;
+        SetEndtimeText(duration);
+        SetPrevTrack(track.prev);
+        SetPlayTrack(track, DRAWUPDATE.trackstate === 'loading');
+        SetNextTrack(track.next);
+        if(DRAWUPDATE.trackstate === 'loading') {
+            SetCurtimeText(DRAWUPDATE.curtime || 0);
+            if(!DRAWUPDATE.curtime) SetSeekbarValue(0);
+        }
+        else if(DRAWUPDATE.trackstate === 'ended') {
+            SetCurtimeText(0);
+            SetSeekbarValue(0);
+        }
+        DRAWUPDATE = undefined;
+    }
     if(SBAR_UPDATING) {        
         
     }

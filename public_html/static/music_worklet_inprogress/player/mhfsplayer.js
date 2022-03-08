@@ -306,14 +306,13 @@ const MHFSPlayer = async function(opt) {
             toDelete++;
         }
 
+        let QueueUpdate = {};
         // draw if we started loading
-        let startedLoading = that.AudioQueue[0] && that.AudioQueue[0].startedLoading;
-        if(startedLoading) {
+        if(that.AudioQueue[0] && that.AudioQueue[0].startedLoading) {
             bDraw = 1;
             that.AudioQueue[0].startedLoading = undefined;
-            const time = that.AudioQueue[0].skiptime;
-            that.gui.SetCurtimeText(time || 0);
-            if(!time) that.gui.SetSeekbarValue(time || 0);
+            QueueUpdate.trackstate = 'loading';
+            QueueUpdate.curtime = that.AudioQueue[0].skiptime;
         }
 
         // perform queue update
@@ -322,11 +321,10 @@ const MHFSPlayer = async function(opt) {
             bDraw = 1;
             const lastTrack = that.AudioQueue[that.AudioQueue.length-1].track;
             that.AudioQueue.splice(0, toDelete);
-            that.gui.onTrackEnd(that.AudioQueue.length === 0);
+            QueueUpdate.trackended = 1;
             if(that.AudioQueue.length === 0) {
                 track = lastTrack;
-                that.playlistCursor = track;
-                startedLoading = 0;
+                QueueUpdate.trackstate = 'ended';
                 that.ac.suspend();
             }
         }
@@ -338,14 +336,11 @@ const MHFSPlayer = async function(opt) {
 
         // determine the current track if still unknown
         track ||= that.AudioQueue[0].track;
+        that.playlistCursor = track;
+        QueueUpdate.track = track;
 
         // show the track
-        const duration =  track.duration || 0;
-        seekbar.max = duration;
-        that.gui.SetEndtimeText(duration);
-        that.gui.SetPrevTrack(track.prev);
-        that.gui.SetPlayTrack(track, startedLoading);
-        that.gui.SetNextTrack(track.next);
+        that.gui.OnQueueUpdate(QueueUpdate);
     }
 
     // passes in the dest array, the maximum frames to read and when they will be played
