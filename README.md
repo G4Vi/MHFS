@@ -145,6 +145,11 @@ RewriteEngine On
 RewriteRule ^/mhfs$ mhfs/ [R,L]
 <Location "/mhfs/">
   AddOutputFilterByType DEFLATE application/json
+  AddOutputFilterByType DEFLATE text/html
+  AddOutputFilterByType DEFLATE application/javascript
+  AddOutputFilterByType DEFLATE text/plain
+  AddOutputFilterByType DEFLATE text/css
+  AddOutputFilterByType DEFLATE application/wasm
   ProxyPass "http://127.0.0.1:8000/"
 </Location>
 ```
