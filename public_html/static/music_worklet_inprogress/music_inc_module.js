@@ -543,7 +543,8 @@ dbarea.addEventListener('click', function (e) {
             operation([path]);
         }
         else if(e.target.parentNode.tagName === 'TH')  {
-            const tracks = GetChildTracks(path, e.target.parentNode.parentNode.parentNode.childNodes);
+            let tracks = GetChildTracks(path, e.target.parentNode.parentNode.parentNode.childNodes);
+            if(tracks.length === 0) tracks = [path];
             operation(tracks);
         }
         else {

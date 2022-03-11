@@ -92,16 +92,7 @@
         return text;
     }
 
-   
-    urlParams.append('fmt', 'musicdbjson');
-    const apiroot = '../..';
-    let myRequest = new Request(apiroot + '/music?'+urlParams.toString());
-    fetch(myRequest).then(function(response) {
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        return response.json();      
-    }).then((json) => {
+    const OldDB2HTML = function(json) {
         let text = '';
         let namestack = [];
         let files = json.files;        
@@ -141,6 +132,137 @@
             }
         }
         document.getElementById("musicdb").innerHTML = text;
+    };
+
+    const DB2HTMLURL = function(filepath) {
+        return '../../music_dl?action=dl&name=' + encodeURIComponent(filepath);
+    };
+
+    const DB2HTML = function(node, currentPath) {
+        let text = '';
+        let tiopen = '<td>';
+        let ticlose = '</td>';
+        if(!currentPath || node.files) {
+            text += '<table border="1" class="tbl_track"><tbody>';
+            tiopen = '<th>';
+            ticlose = '</th>';
+        }
+        text += '<tr class="track">';
+        text += tiopen +escapeHTML(node.name) + ticlose + tiopen + '<a href="#">Play</a>' + ticlose + tiopen + '<a href="#">Queue</a>' + ticlose + tiopen + '<a href="';
+        text += DB2HTMLURL(currentPath+node.name) + '">DL</a>' + ticlose + '</tr>';
+        if(node.files) {
+            for(const file of node.files) {
+                text += DB2HTML(file, currentPath+node.name);
+            }
+        }
+        if(!currentPath || node.files) {
+            text += '</tbody></table>';
+        }
+        return text;
+    };
+
+    const DB2HTMLRunner = function(json) {
+        let text = '';
+        for( const file of json.files) {
+            text += DB2HTML(file, '') + '<br>';
+        }
+        document.getElementById("musicdb").innerHTML = text;
+    };
+
+    const DB2HTMLDom = function(node, currentPath) {
+        let ti = 'td';
+        if(!currentPath || node.files) {
+            ti= 'th';
+        }
+
+        const namecell = document.createElement(ti);
+        namecell.textContent = node.name;
+
+        const playcell = document.createElement(ti);
+        const playlink = playcell.appendChild(document.createElement('a'));
+        playlink.href = "#";
+        playlink.textContent = 'Play';
+
+        const queuecell = document.createElement(ti);
+        const queuelink = queuecell.appendChild(document.createElement('a'));
+        queuelink.href = "#";
+        queuelink.textContent = 'Queue';
+
+        const dlcell = document.createElement(ti);
+        const dllink = queuecell.appendChild(document.createElement('a'));
+        dllink.href = DB2HTMLURL(currentPath+node.name);
+        dllink.textContent = 'DL';
+
+        let tablerow = document.createElement("tr");
+        tablerow.setAttribute("class", "track");
+        tablerow.appendChild(namecell);
+        tablerow.appendChild(playcell);
+        tablerow.appendChild(queuecell);
+        tablerow.appendChild(dlcell);
+
+        if(currentPath && !node.files) {
+            return tablerow;
+        }
+
+        const tbody = document.createElement("tbody");
+        tbody.appendChild(tablerow);
+        if(node.files) {
+            for(const file of node.files) {
+                tbody.appendChild(DB2HTMLDom(file, currentPath+node.name));
+            }
+        }
+
+        const table = document.createElement("table");
+        table.setAttribute("border", "1");
+        table.setAttribute("class", "tbl_track");
+        table.appendChild(tbody);
+        return table;
+    };
+
+    const DB2HTMLDomRunner = function(json) {
+        const newmdb = document.createElement("div");
+        newmdb.setAttribute("id", 'musicdb');
+        for( const file of json.files) {
+            newmdb.appendChild(DB2HTMLDom(file, ''));
+            newmdb.appendChild(document.createElement("br"));
+        }
+        const oldmdb = document.getElementById("musicdb");
+        oldmdb.parentNode.replaceChild(newmdb, oldmdb);
+    };
+
+    urlParams.append('fmt', 'musicdbjson');
+    const apiroot = '../..';
+    let myRequest = new Request(apiroot + '/music?'+urlParams.toString());
+    fetch(myRequest).then(function(response) {
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        return response.json();
+    //}).then(DB2HTMLRunner);
+    //}).then(OldDB2HTML);
+    //}).then(DB2HTMLDomRunner);
+    }).then((json) => {
+        const funcs = [
+            ['old', OldDB2HTML],
+            ['recurse', DB2HTMLRunner],
+            ['dom', DB2HTMLDomRunner]
+        ];
+
+        const times = [0, 0, 0];
+
+        const iterations = 10000;
+        for(let i = 0; i < iterations; i++) {
+            for(let i = 1; i < 3; i++) {
+                document.getElementById("musicdb").innerHTML = "";
+                const t0 = performance.now();
+                funcs[i][1](json);
+                const t1 = performance.now();
+                times[i] += (t1 - t0);
+            }
+        }
+        for(let i = 1; i < 3; i++) {
+            console.log(funcs[i][0] + ' avgtime ' + (times[i] / iterations));
+        }
     });
 </script>
 </body>
