@@ -189,7 +189,7 @@
         queuelink.textContent = 'Queue';
 
         const dlcell = document.createElement(ti);
-        const dllink = queuecell.appendChild(document.createElement('a'));
+        const dllink = dlcell.appendChild(document.createElement('a'));
         dllink.href = DB2HTMLURL(currentPath+node.name);
         dllink.textContent = 'DL';
 
@@ -240,30 +240,30 @@
         return response.json();
     //}).then(DB2HTMLRunner);
     //}).then(OldDB2HTML);
-    //}).then(DB2HTMLDomRunner);
-    }).then((json) => {
-        const funcs = [
-            ['old', OldDB2HTML],
-            ['recurse', DB2HTMLRunner],
-            ['dom', DB2HTMLDomRunner]
-        ];
-
-        const times = [0, 0, 0];
-
-        const iterations = 10000;
-        for(let i = 0; i < iterations; i++) {
-            for(let i = 1; i < 3; i++) {
-                document.getElementById("musicdb").innerHTML = "";
-                const t0 = performance.now();
-                funcs[i][1](json);
-                const t1 = performance.now();
-                times[i] += (t1 - t0);
-            }
-        }
-        for(let i = 1; i < 3; i++) {
-            console.log(funcs[i][0] + ' avgtime ' + (times[i] / iterations));
-        }
-    });
+    }).then(DB2HTMLDomRunner);
+    //}).then((json) => {
+    //    const funcs = [
+    //        ['old', OldDB2HTML],
+    //        ['recurse', DB2HTMLRunner],
+    //        ['dom', DB2HTMLDomRunner]
+    //    ];
+//
+    //    const times = [0, 0, 0];
+//
+    //    const iterations = 1;
+    //    for(let i = 0; i < iterations; i++) {
+    //        for(let i = 0; i < 1; i++) {
+    //            document.getElementById("musicdb").innerHTML = "";
+    //            const t0 = performance.now();
+    //            funcs[1][1](json);
+    //            const t1 = performance.now();
+    //            times[1] += (t1 - t0);
+    //        }
+    //    }
+    //    for(let i = 0; i < 3; i++) {
+    //        console.log(funcs[i][0] + ' avgtime ' + (times[i] / iterations));
+    //    }
+    //});
 </script>
 </body>
 </html>
