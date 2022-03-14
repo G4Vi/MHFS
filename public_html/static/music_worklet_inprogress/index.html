@@ -230,40 +230,82 @@
         oldmdb.parentNode.replaceChild(newmdb, oldmdb);
     };
 
+    async function* JSONStreamer(url, startSkip, endChop) {
+        const dbRes = await fetch(url);
+        const reader = dbRes.body.getReader();
+        const decoder = new TextDecoder('utf-8', {'fatal' : true});
+
+        let skippedStart;
+        let existingData = '';
+        while(1) {
+            const { value: chunk, done: readerDone } = await reader.read();
+            if(chunk) {
+                existingData += decoder.decode(chunk, {'stream' : true});
+                if(!skippedStart) {
+                    if(!existingData.startsWith(startSkip)) {
+                        console.log('existingData does not start with ' + startSkip);
+                        continue;
+                    }
+                    existingData = existingData.slice(startSkip.length);
+                    skippedStart = 1;
+                }
+                let toSearch = existingData;
+                while(1) {
+                    const seperatorIndex = toSearch.lastIndexOf(',');
+                    if(seperatorIndex === -1) break;
+                    toSearch = toSearch.slice(0, seperatorIndex);
+                    try {
+                        const records = JSON.parse('['+toSearch+']');
+                        yield records;
+                        existingData = existingData.slice(toSearch.length+1);
+                        break;
+                    }
+                    catch {
+                        console.log('json error');
+                    }
+                }
+            }
+            if(readerDone) {
+                if(existingData.endsWith(endChop)) {
+                    existingData = existingData.slice(0, existingData.length-2);
+                    const records = JSON.parse('['+existingData + ']');
+                    yield records;
+                    break;
+                }
+                else {
+                    throw("Failed to find json end!");
+                }
+            }
+        }
+    };
+
     urlParams.append('fmt', 'musicdbjson');
     const apiroot = '../..';
-    let myRequest = new Request(apiroot + '/music?'+urlParams.toString());
-    fetch(myRequest).then(function(response) {
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+    const jsonurl = apiroot + '/music?'+urlParams.toString();
+    //fetch(jsonurl).then(function(response) {
+    //    if (!response.ok) {
+    //        throw new Error(`HTTP error! status: ${response.status}`);
+    //    }
+    //    return response.json();
+    ////}).then(DB2HTMLRunner);
+    ////}).then(OldDB2HTML);
+    //}).then(DB2HTMLDomRunner);
+
+    //const newmdb = document.createElement("div");
+    ///newmdb.setAttribute("id", 'musicdb');
+    const oldmdb = document.getElementById("musicdb");
+    const jsonReader = JSONStreamer(jsonurl, '{"files":[', ']}');
+    (async function(){
+        for await (const json of jsonReader) {
+            for( const file of json) {
+                //newmdb.appendChild(DB2HTMLDom(file, ''));
+                //newmdb.appendChild(document.createElement("br"));
+                oldmdb.appendChild(DB2HTMLDom(file, ''));
+                oldmdb.appendChild(document.createElement("br"));
+            }
         }
-        return response.json();
-    //}).then(DB2HTMLRunner);
-    //}).then(OldDB2HTML);
-    }).then(DB2HTMLDomRunner);
-    //}).then((json) => {
-    //    const funcs = [
-    //        ['old', OldDB2HTML],
-    //        ['recurse', DB2HTMLRunner],
-    //        ['dom', DB2HTMLDomRunner]
-    //    ];
-//
-    //    const times = [0, 0, 0];
-//
-    //    const iterations = 1;
-    //    for(let i = 0; i < iterations; i++) {
-    //        for(let i = 0; i < 1; i++) {
-    //            document.getElementById("musicdb").innerHTML = "";
-    //            const t0 = performance.now();
-    //            funcs[1][1](json);
-    //            const t1 = performance.now();
-    //            times[1] += (t1 - t0);
-    //        }
-    //    }
-    //    for(let i = 0; i < 3; i++) {
-    //        console.log(funcs[i][0] + ' avgtime ' + (times[i] / iterations));
-    //    }
-    //});
+        //oldmdb.parentNode.replaceChild(newmdb, oldmdb);
+    })();
 </script>
 </body>
 </html>
