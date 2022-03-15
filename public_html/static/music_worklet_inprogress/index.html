@@ -6,8 +6,9 @@
 <body>
 <div class="header">
     <h1>MHFS/Music</h1>
+    <ul class="navbar"><li id="navlibrary" class="navbarleft navbaractive"><a href="#">Library View</a></li><li id="navart" class="navbarright"><a href="#">Playback View</a></li></ul>
 </div>
-<div class="mainview">
+<div class="mainview" id="libraryview">
     <div id="musicdb"></div>
 </div>
 <div class="mainview" id="artview">
@@ -317,6 +318,26 @@
         }
         //oldmdb.parentNode.replaceChild(newmdb, oldmdb);
     })();
+
+    // views
+    const libraryview = document.getElementById("libraryview");
+    const artview = document.getElementById("artview");
+
+    const navlibrary = document.getElementById("navlibrary");
+    const navart = document.getElementById("navart");
+
+    const navbaractiveclass = "navbaractive";
+    navlibrary.addEventListener('click', function(){
+        navart.classList.remove(navbaractiveclass);
+        navlibrary.classList.add(navbaractiveclass);
+        artview.style.display = "none";
+    });
+
+    navart.addEventListener('click', function(){
+        navlibrary.classList.remove(navbaractiveclass);
+        navart.classList.add(navbaractiveclass);
+        artview.style.display = "block";
+    });
 </script>
 </body>
 </html>

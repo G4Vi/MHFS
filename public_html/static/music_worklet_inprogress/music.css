@@ -12,23 +12,68 @@ body {
 .header {
     position: fixed;
     top: 0;
-    padding-left: 25px;
+    padding-left: 2%;
     background-color: #000;
     height: 10%;
     width: 100%;
-    min-height: 90px;
+    min-height: 110px;
     display: block;
+}
+
+.navbar {
+    list-style-type: none;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+}
+
+.navbar li {
+    float: left;
+    background-color: blue;
+    border-style: solid solid solid solid;
+    border-color: blue;
+    border-bottom-color: #ababab;
+}
+
+.navbar li a {
+    display: block;
+    text-align: center;
+    text-decoration: none;
+    padding-right: 16px;
+    color: #ababab;
+}
+
+.navbar li:hover {
+    background-color: #666666;
+    border-top-color: #666666;
+}
+
+.navbaractive {
+    background-color: #000 !important;
+    border-color: #ababab !important;
+    border-style: solid hidden hidden hidden !important;
+    font-weight: bold;
+}
+
+.navbarright {
+    border-left-color: #ababab !important;
+    border-right-style: hidden !important;
+}
+
+.navbarleft {
+    border-right-color: #ababab !important;
+    border-left-style: hidden !important;
 }
 
 /* The main views, music library, art view, etc*/
 .mainview {
     position: fixed;
-    top: max(10%, 90px);
+    top: max(10%, 110px);
     overflow: auto;
     box-sizing: border-box;
     padding-left: 2%;
     width: 100%;
-    height: calc(100% - max(20%, 250px) - max(10%, 90px)); /*the whole page minus the header and footer*/
+    height: calc(100% - max(20%, 250px) - max(10%, 110px)); /*the whole page minus the header and footer*/
     background-color: #000;
 }
 

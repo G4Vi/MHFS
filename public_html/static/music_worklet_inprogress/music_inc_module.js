@@ -35,10 +35,6 @@ const SetEndtimeText = function(seconds) {
     endtimetxt.value = seconds.toHHMMSS();
 }
 
-document.getElementById("artview").addEventListener('click', function(ev) {
-    document.getElementById("artview").style.display = 'none';
-});
-
 const clamp = (num, min, max) => Math.min(Math.max(num, min), max);
 
 const WindowManager = function() {
@@ -259,10 +255,8 @@ const TrackHTML = function(track, isLoading) {
 }
 
 // artview
-//const artview = document.getElementById("artview");
-//const artviewimg = document.getElementsByClassName("artviewimg")[0];
-//artviewimg.src = MHFSPLAYER.getarturl(track);
-//artview.style.display = 'block';
+const artview = document.getElementById("artview");
+const artviewimg = document.getElementsByClassName("artviewimg")[0];
 
 let GuiNextTrack;
 let GuiCurrentTrack;
@@ -273,18 +267,22 @@ const UpdateTrackImage = function(track) {
     const guitracks = [GuiPrevTrack, GuiCurrentTrack, GuiNextTrack];
     for( const gt of guitracks) {
         if(!gt) continue;
+        const newurl = MHFSPLAYER.getarturl(gt);
         let boxelm;
         if(gt === GuiPrevTrack) {
             boxelm = prevtxt;
         }
         else if(gt === GuiCurrentTrack) {
             boxelm = playtxt;
+            if(artviewimg.src !== newurl) {
+                console.log('UpdateTrackImage set artview');
+                artviewimg.src = newurl;
+            }
         }
         else if(gt === GuiNextTrack) {
             boxelm = nexttxt;
         }
         const artelm = boxelm.querySelector('.albumart');
-        const newurl = MHFSPLAYER.getarturl(gt);
         if(artelm.src !== newurl) {
             console.log('update url from ' + artelm.src + ' to ' + newurl);
             artelm.src = newurl;
@@ -310,6 +308,10 @@ const SetPlayTrack = function(track, isLoading) {
     if(!GuiCurrentTrack || (track !== GuiCurrentTrack)) {
         GuiCurrentTrack = track;
         playtxt.replaceChildren(TrackHTML(track, isLoading));
+        const newurl = MHFSPLAYER.getarturl(track);
+        if(artviewimg.src !== newurl) {
+            artviewimg.src = newurl;
+        }
     }
     else if(isLoading !== GuiCurrentTrackWasLoading) {
         let trackname = track ? track.trackname : '';
