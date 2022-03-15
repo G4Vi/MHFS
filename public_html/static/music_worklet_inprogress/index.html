@@ -230,27 +230,33 @@
         oldmdb.parentNode.replaceChild(newmdb, oldmdb);
     };
 
-    async function* JSONStreamer(url, startSkip, endChop) {
-        const dbRes = await fetch(url);
+    async function* JSONArrayStreamer(fetchResource, options) {
+        const startStr = options?.startStr ?? '[';
+        const endStr = options?.endStr ?? ']';
+        const dbRes = await fetch(fetchResource);
         const reader = dbRes.body.getReader();
         const decoder = new TextDecoder('utf-8', {'fatal' : true});
 
-        let skippedStart;
+        let foundStart;
         let existingData = '';
-        while(1) {
+        do {
             const { value: chunk, done: readerDone } = await reader.read();
             if(chunk) {
                 existingData += decoder.decode(chunk, {'stream' : true});
-                if(!skippedStart) {
-                    if(!existingData.startsWith(startSkip)) {
-                        console.log('existingData does not start with ' + startSkip);
+                // find the start token and exclude it and before from the string
+                if(!foundStart) {
+                    const startStrIndex = existingData.indexOf(startStr);
+                    if(startStrIndex === -1) {
+                        console.log('existingData does not start with ' + startStr);
                         continue;
                     }
-                    existingData = existingData.slice(startSkip.length);
-                    skippedStart = 1;
+                    existingData = existingData.slice(startStrIndex + startStr.length);
+                    foundStart = 1;
                 }
+                // array items are seperated by ','.
+                // attempt parse the input as an array each time it's found
                 let toSearch = existingData;
-                while(1) {
+                do {
                     const seperatorIndex = toSearch.lastIndexOf(',');
                     if(seperatorIndex === -1) break;
                     toSearch = toSearch.slice(0, seperatorIndex);
@@ -261,22 +267,27 @@
                         break;
                     }
                     catch {
-                        console.log('json error');
                     }
-                }
+                } while(1);
             }
-            if(readerDone) {
-                if(existingData.endsWith(endChop)) {
-                    existingData = existingData.slice(0, existingData.length-2);
-                    const records = JSON.parse('['+existingData + ']');
-                    yield records;
-                    break;
-                }
-                else {
-                    throw("Failed to find json end!");
-                }
+            if(readerDone) break;
+        } while(1);
+        // search backwards for the end token
+        // attempting to parse the input as an array each time it's found
+        do {
+            const endIndex = existingData.lastIndexOf(endStr);
+            if(endIndex === -1) {
+                throw("Failed to find json end!");
             }
-        }
+            existingData = existingData.slice(0, endIndex);
+            try {
+                const records = JSON.parse('['+existingData + ']');
+                yield records;
+                return;
+            }
+            catch {
+            }
+        } while(1);
     };
 
     urlParams.append('fmt', 'musicdbjson');
@@ -294,7 +305,7 @@
     //const newmdb = document.createElement("div");
     ///newmdb.setAttribute("id", 'musicdb');
     const oldmdb = document.getElementById("musicdb");
-    const jsonReader = JSONStreamer(jsonurl, '{"files":[', ']}');
+    const jsonReader = JSONArrayStreamer(jsonurl);
     (async function(){
         for await (const json of jsonReader) {
             for( const file of json) {
