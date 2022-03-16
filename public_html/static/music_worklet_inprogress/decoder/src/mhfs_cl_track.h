@@ -618,30 +618,12 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrac
         return MHFS_CL_TRACK_GENERIC_ERROR;
     }
 
-    // parse streaminfo
-    uint8_t streaminfo[38];
-    size_t bytesRead = 0;
-    if((MA_SUCCESS != blockvf_read(&pTrack->vf, streaminfo, sizeof(streaminfo), &bytesRead)) || (bytesRead != sizeof(streaminfo)))
-    {
-        goto mhfs_cl_track_load_metadata_flac_io_error;
-    }
-    bool isLast = streaminfo[0] & 0x80;
-    if((streaminfo[0] & 0x7F) != 0)
-    {
-        return MHFS_CL_TRACK_GENERIC_ERROR;
-    }
-    const uint32_t sampleRate = (streaminfo[14] << 12) | (streaminfo[15] << 4) | ((streaminfo[16] & 0xF0) >> 4);
-    const uint8_t channels = ((streaminfo[16] & 0xE) >> 1)+1;
-    const uint8_t bitsPerSample = (((streaminfo[16] & 0x1) << 4) | ((streaminfo[17] & 0xF0) >> 4))+1;
-    const uint64_t top4 = (streaminfo[17] & 0xF);
-    const uint64_t totalPCMFrameCount = (top4 << 32) | (streaminfo[18] << 24) | (streaminfo[19] << 16) | (streaminfo[20] << 8) | (streaminfo[21]);
-    mhfs_cl_track_metadata_init(&pTrack->meta, totalPCMFrameCount, sampleRate, channels, bitsPerSample);
-
-    // parse other metadata blocks
+    // parse metadata blocks
+    bool hasStreamInfo = false;
     bool hasSeekTable = false;
-    while(!isLast)
-    {
-        bytesRead = 0;
+    bool isLast;
+    do {
+        size_t bytesRead = 0;
 
         // load the block header
         uint8_t metablock_header[4];
@@ -658,7 +640,7 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrac
         const size_t blocksize = (metablock_header[1] << 16) | (metablock_header[2] << 8) | (metablock_header[3]);
 
         // skip or read the block
-        if( (blocktype != DRFLAC_METADATA_BLOCK_TYPE_VORBIS_COMMENT) && (blocktype != DRFLAC_METADATA_BLOCK_TYPE_PICTURE))
+        if( (blocktype != DRFLAC_METADATA_BLOCK_TYPE_STREAMINFO) && (blocktype != DRFLAC_METADATA_BLOCK_TYPE_VORBIS_COMMENT) && (blocktype != DRFLAC_METADATA_BLOCK_TYPE_PICTURE))
         {
             if(blocktype == DRFLAC_METADATA_BLOCK_TYPE_SEEKTABLE)
             {
@@ -689,7 +671,17 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrac
         }
 
         // parse the block
-        if(blocktype == DRFLAC_METADATA_BLOCK_TYPE_VORBIS_COMMENT)
+        if(blocktype == DRFLAC_METADATA_BLOCK_TYPE_STREAMINFO)
+        {
+            hasStreamInfo = true;
+            const uint32_t sampleRate = (blockData[10] << 12) | (blockData[11] << 4) | ((blockData[12] & 0xF0) >> 4);
+            const uint8_t channels = ((blockData[12] & 0xE) >> 1)+1;
+            const uint8_t bitsPerSample = (((blockData[12] & 0x1) << 4) | ((blockData[13] & 0xF0) >> 4))+1;
+            const uint64_t top4 = (blockData[13] & 0xF);
+            const uint64_t totalPCMFrameCount = (top4 << 32) | (blockData[14] << 24) | (blockData[15] << 16) | (blockData[16] << 8) | (blockData[17]);
+            mhfs_cl_track_metadata_init(&pTrack->meta, totalPCMFrameCount, sampleRate, channels, bitsPerSample);
+        }
+        else if(blocktype == DRFLAC_METADATA_BLOCK_TYPE_VORBIS_COMMENT)
         {
             const uint32_t vendorLength = blockData[0] | (blockData[1] << 8) | (blockData[2] << 16) | (blockData[3] << 24);
             MHFSCLTR_PRINT("vendor_string: %.*s\n", vendorLength, &blockData[4]);
@@ -727,8 +719,12 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrac
             }
         }
         free(blockData);
+    } while(!isLast);
+    if(!hasStreamInfo)
+    {
+        return MHFS_CL_TRACK_GENERIC_ERROR;
     }
-    if(!hasSeekTable)
+    else if(!hasSeekTable)
     {
         MHFSCLTR_PRINT("warning: track does NOT have seektable!\n");
     }
