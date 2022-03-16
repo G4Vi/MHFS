@@ -585,18 +585,17 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrac
     pTrack->vf.fileoffset = 0;
 
     // Skip over ID3 tags
-    uint8_t id[4];
+    const uint8_t *id; //[4];
     for(;;)
     {
-        size_t bytesRead = 0;
-        if((MA_SUCCESS != blockvf_read(&pTrack->vf, id, 4, &bytesRead)) || (bytesRead != 4))
+        id = blockvf_read_view(&pTrack->vf, 4);
+        if(id == NULL)
         {
             goto mhfs_cl_track_load_metadata_flac_io_error;
         }
         if(memcmp(id, "ID3", 3) !=  0) break;
-        uint8_t header[6];
-        bytesRead = 0;
-        if((MA_SUCCESS != blockvf_read(&pTrack->vf, header, 6, &bytesRead)) || (bytesRead != 6))
+        const uint8_t *header =  blockvf_read_view(&pTrack->vf, 6); //[6]
+        if(header == NULL)
         {
             goto mhfs_cl_track_load_metadata_flac_io_error;
         }
@@ -623,11 +622,9 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrac
     bool hasSeekTable = false;
     bool isLast;
     do {
-        size_t bytesRead = 0;
-
         // load the block header
-        uint8_t metablock_header[4];
-        if((MA_SUCCESS != blockvf_read(&pTrack->vf, metablock_header, sizeof(metablock_header), &bytesRead)) || (bytesRead != sizeof(metablock_header)))
+        const uint8_t *metablock_header  = blockvf_read_view(&pTrack->vf, 4);//[4];
+        if(metablock_header == NULL)
         {
             if(!BLOCKVF_OK(&pTrack->vf))
             {
@@ -656,12 +653,8 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrac
             }
             continue;
         }
-        uint8_t *blockData = malloc(blocksize);
+        const uint8_t *blockData = blockvf_read_view(&pTrack->vf, blocksize);
         if(blockData == NULL)
-        {
-            break;
-        }
-        if((MA_SUCCESS != blockvf_read(&pTrack->vf, blockData, blocksize, &bytesRead)) || (bytesRead != blocksize))
         {
             if(!BLOCKVF_OK(&pTrack->vf))
             {
@@ -718,7 +711,6 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrac
                 pTrack->meta.pictureBlock = ((uint8_t*)pTrack->vf.buf) + (pTrack->vf.fileoffset - blocksize);
             }
         }
-        free(blockData);
     } while(!isLast);
     if(!hasStreamInfo)
     {
@@ -746,6 +738,7 @@ mhfs_cl_track_load_metadata_flac_io_error:
 // pTrack must have an opened ma_decoder
 static mhfs_cl_track_error mhfs_cl_track_load_metadata_ma_decoder(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData)
 {
+    (void)pReturnData;
     mhfs_cl_track_error retval = MHFS_CL_TRACK_SUCCESS;
     const unsigned savefileoffset = pTrack->vf.fileoffset;
     pTrack->vf.fileoffset = 0;

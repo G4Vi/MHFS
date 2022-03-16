@@ -35,6 +35,7 @@ void blockvf_init(blockvf *pBlockvf, const unsigned blocksize);
 void *blockvf_add_block(blockvf *pBlockvf, const uint32_t block_start, const unsigned filesize);
 ma_result blockvf_seek(blockvf *pBlockvf, int64_t offset, ma_seek_origin origin);
 ma_result blockvf_read(blockvf *pBlockvf, void* bufferOut, size_t bytesToRead, size_t *bytesRead);
+const uint8_t *blockvf_read_view(blockvf *pBlockvf, const size_t bytesToRead);
 void blockvf_deinit(blockvf *pBlockvf);
 
 #if defined(BLOCKVF_IMPLEMENTATION)
