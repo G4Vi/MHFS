@@ -138,6 +138,12 @@ void *blockvf_add_block(blockvf *pBlockvf, const uint32_t block_start, const uns
         else
         {
             BLOCKVF_PRINT("warning, file shrunk\n");
+            // fileoffset cannot exceed filesize
+            if(pBlockvf->fileoffset > filesize)
+            {
+                BLOCKVF_PRINT("fileoffset > filesize, setting fileoffset to filesize\n");
+                pBlockvf->fileoffset = filesize;
+            }
         }
         pBlockvf->filesize = filesize;
 
@@ -193,24 +199,15 @@ ma_result blockvf_read(blockvf *pBlockvf, void* bufferOut, size_t bytesToRead, s
         return MA_ERROR;
     }
 
-    unsigned endoffset = pBlockvf->fileoffset+bytesToRead-1;
-
-    // adjust params based on file size 
     if(pBlockvf->filesize > 0)
     {
-        if(pBlockvf->fileoffset >= pBlockvf->filesize)
+        // don't allow us to read past EOF
+        const unsigned endoffset = pBlockvf->fileoffset+bytesToRead;
+        if(endoffset > pBlockvf->filesize)
         {
-            BLOCKVF_PRINT("blockvf_read: fileoffset >= filesize %u %u\n", pBlockvf->fileoffset, pBlockvf->filesize);
-            *bytesRead = 0;        
-            return MA_SUCCESS;
-        }       
-        if(endoffset >= pBlockvf->filesize)
-        {
-            unsigned newendoffset = pBlockvf->filesize - 1;
-            BLOCKVF_PRINT("blockvf_read: truncating endoffset from %u to %u\n", endoffset, newendoffset);
-            endoffset = newendoffset;
-            bytesToRead = endoffset - pBlockvf->fileoffset + 1;            
-        }     
+            BLOCKVF_PRINT("blockvf_read: truncating endoffset from %u to %u\n", endoffset, pBlockvf->filesize);
+            bytesToRead = pBlockvf->filesize - pBlockvf->fileoffset;
+        }
     }
 
     // nothing to read, do nothing
@@ -233,13 +230,45 @@ ma_result blockvf_read(blockvf *pBlockvf, void* bufferOut, size_t bytesToRead, s
     
     // finally copy the data
     const unsigned src_offset = pBlockvf->fileoffset;
-    uint8_t  *src = (uint8_t*)(pBlockvf->buf);
+    const uint8_t  *src = (uint8_t*)(pBlockvf->buf);
     src += src_offset;
     //BLOCKVF_PRINT("memcpy 0x%p 0x%p %zu srcoffset %u filesize %u\n", bufferOut, src, bytesToRead, src_offset, pBlockvf->filesize);
     memcpy(bufferOut, src, bytesToRead);
     pBlockvf->fileoffset += bytesToRead;
     *bytesRead = bytesToRead;
     return MA_SUCCESS;
+}
+
+// Zero copy blockvf access
+const uint8_t *blockvf_read_view(blockvf *pBlockvf, const size_t bytesToRead)
+{
+    if(pBlockvf->filesize > 0)
+    {
+        // don't allow us to read past EOF
+        const unsigned endoffset = pBlockvf->fileoffset+bytesToRead;
+        if(endoffset > pBlockvf->filesize)
+        {
+            BLOCKVF_PRINT("blockvf_read_view: file is too small\n");
+            return NULL;
+        }
+    }
+
+    unsigned needed;
+    // NOP if bytesToRead == 0
+    if(bytesToRead == 0)
+    {
+    }
+    //  HARD fail, we don't have the needed data
+    else if(!blockvf_has_bytes(pBlockvf, bytesToRead, &needed))
+    {
+        pBlockvf->lastdata.code = BLOCKVF_MEM_NEED_MORE;
+        pBlockvf->lastdata.extradata = needed;
+        return NULL;
+    }
+
+    const unsigned before_offset = pBlockvf->fileoffset;
+    pBlockvf->fileoffset += bytesToRead;
+    return ((uint8_t*)(pBlockvf->buf)) + before_offset;
 }
 
 void blockvf_deinit(blockvf *pBlockvf)
