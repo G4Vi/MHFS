@@ -4,6 +4,38 @@
 
 typedef float float32_t;
 
+typedef enum {
+    MHFS_CL_TRACK_M_AUDIOINFO = 0,
+    MHFS_CL_TRACK_M_TAGS = 1,
+    MHFS_CL_TRACK_M_PICTURE = 2
+} mhfs_cl_track_meta;
+
+typedef struct {
+    uint64_t totalPCMFrameCount;
+    uint32_t sampleRate;
+    uint8_t channels;
+    uint8_t bitsPerSample;
+} mhfs_cl_track_meta_audioinfo;
+
+typedef struct {
+    uint32_t vendorLength;
+    const char *vendorString;
+    const uint32_t commentCount;
+    drflac_vorbis_comment_iterator comment_iterator;
+    uint32_t last_tag_length;
+} mhfs_cl_track_meta_tags;
+
+typedef struct {
+    uint32_t pictureType;
+    uint32_t mimeSize;
+    const uint8_t *mime;
+    uint32_t descSize;
+    const uint8_t *desc;
+    uint32_t pictureDataSize;
+    const void *pictureData;
+} mhfs_cl_track_meta_picture;
+
+typedef void (*mhfs_cl_track_on_metablock)(const mhfs_cl_track_meta, void *);
 
 typedef struct {
     uint64_t totalPCMFrameCount;
@@ -11,8 +43,6 @@ typedef struct {
     uint32_t sampleRate;
     uint8_t channels;
     uint8_t bitsPerSample;
-
-    uint8_t *pictureBlock;
 } mhfs_cl_track_metadata;
 
 #define MHFS_CL_TRACK_MAX_ALLOCS 3
@@ -59,7 +89,7 @@ typedef union {
 LIBEXPORT void mhfs_cl_track_init(mhfs_cl_track *pTrack, const unsigned blocksize, const char *mime, const char *fullfilename, const uint64_t totalPCMFrameCount);
 LIBEXPORT void mhfs_cl_track_deinit(mhfs_cl_track *pTrack);
 LIBEXPORT void *mhfs_cl_track_add_block(mhfs_cl_track *pTrack, const uint32_t block_start, const unsigned filesize);
-LIBEXPORT mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData);
+LIBEXPORT mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock);
 LIBEXPORT int mhfs_cl_track_seek_to_pcm_frame(mhfs_cl_track *pTrack, const uint32_t pcmFrameIndex);
 LIBEXPORT mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *outFloat, mhfs_cl_track_return_data *pReturnData);
 
@@ -78,7 +108,6 @@ LIBEXPORT uint8_t mhfs_cl_track_channels(const mhfs_cl_track *pTrack);
 LIBEXPORT uint64_t mhfs_cl_track_currentFrame(const mhfs_cl_track *pTrack);
 LIBEXPORT double mhfs_cl_track_durationInSecs(const mhfs_cl_track *pTrack);
 
-LIBEXPORT void *mhfs_cl_track_get_picture_block(const mhfs_cl_track *pTrack);
 LIBEXPORT uint32_t mhfs_cl_flac_picture_block_get_type(const void *pPictureBlock);
 LIBEXPORT uint32_t mhfs_cl_flac_picture_block_get_mime_size(const uint8_t *pPictureBlock);
 LIBEXPORT const uint8_t *mhfs_cl_flac_picture_block_get_mime(const uint8_t *pPictureBlock);
@@ -87,6 +116,14 @@ LIBEXPORT const uint8_t *mhfs_cl_flac_picture_block_get_desc(const uint8_t *pPic
 LIBEXPORT uint32_t mhfs_cl_flac_picture_block_get_picture_size(const uint8_t *pPictureBlock);
 LIBEXPORT const uint8_t *mhfs_cl_flac_picture_block_get_picture(const uint8_t *pPictureBlock);
 LIBEXPORT unsigned long mhfs_cl_djb2(const uint8_t *pData, const size_t dataLen);
+
+LIBEXPORT uint32_t mhfs_cl_track_meta_picture_get_type(const mhfs_cl_track_meta_picture *);
+LIBEXPORT uint32_t mhfs_cl_track_meta_picture_get_mime_size(const mhfs_cl_track_meta_picture *);
+LIBEXPORT const uint8_t *mhfs_cl_track_meta_picture_get_mime(const mhfs_cl_track_meta_picture *);
+LIBEXPORT uint32_t mhfs_cl_track_meta_picture_get_desc_size(const mhfs_cl_track_meta_picture *);
+LIBEXPORT const uint8_t *mhfs_cl_track_meta_picture_get_desc(const mhfs_cl_track_meta_picture *);
+LIBEXPORT uint32_t mhfs_cl_track_meta_picture_get_picture_size(const mhfs_cl_track_meta_picture *);
+LIBEXPORT const uint8_t *mhfs_cl_track_meta_picture_get_picture(const mhfs_cl_track_meta_picture *);
 
 #if defined(MHFSCLTRACK_IMPLEMENTATION)
 #ifndef mhfs_cl_track_c
@@ -115,11 +152,6 @@ unsigned long mhfs_cl_djb2(const uint8_t *pData, const size_t dataLen)
         hash = ((hash << 5) + hash) + pData[i];
     }
     return hash;
-}
-
-void *mhfs_cl_track_get_picture_block(const mhfs_cl_track *pTrack)
-{
-    return pTrack->meta.pictureBlock;
 }
 
 uint32_t mhfs_cl_flac_picture_block_get_type(const void *pPictureBlock)
@@ -161,6 +193,35 @@ const uint8_t *mhfs_cl_flac_picture_block_get_picture(const uint8_t *pPictureBlo
     return pPicture;
 }
 
+uint32_t mhfs_cl_track_meta_picture_get_type(const mhfs_cl_track_meta_picture *pMetaPicture)
+{
+    return pMetaPicture->pictureType;
+}
+uint32_t mhfs_cl_track_meta_picture_get_mime_size(const mhfs_cl_track_meta_picture *pMetaPicture)
+{
+    return pMetaPicture->mimeSize;
+}
+const uint8_t *mhfs_cl_track_meta_picture_get_mime(const mhfs_cl_track_meta_picture *pMetaPicture)
+{
+    return pMetaPicture->mime;
+}
+uint32_t mhfs_cl_track_meta_picture_get_desc_size(const mhfs_cl_track_meta_picture *pMetaPicture)
+{
+    return pMetaPicture->descSize;
+}
+const uint8_t *mhfs_cl_track_meta_picture_get_desc(const mhfs_cl_track_meta_picture *pMetaPicture)
+{
+    return pMetaPicture->desc;
+}
+uint32_t mhfs_cl_track_meta_picture_get_picture_size(const mhfs_cl_track_meta_picture *pMetaPicture)
+{
+    return pMetaPicture->pictureDataSize;
+}
+const uint8_t *mhfs_cl_track_meta_picture_get_picture(const mhfs_cl_track_meta_picture *pMetaPicture)
+{
+    return pMetaPicture->pictureData;
+}
+
 static void mhfs_cl_track_metadata_init(mhfs_cl_track_metadata *pMetadata, const uint64_t totalPCMFrameCount, const uint32_t sampleRate, const uint8_t channels, const uint8_t bitsPerSample)
 {
     pMetadata->totalPCMFrameCount = totalPCMFrameCount;
@@ -168,8 +229,6 @@ static void mhfs_cl_track_metadata_init(mhfs_cl_track_metadata *pMetadata, const
     pMetadata->channels = channels;
     pMetadata->bitsPerSample = bitsPerSample;
     pMetadata->durationInSecs = (pMetadata->sampleRate > 0) ? ((double)totalPCMFrameCount / sampleRate) : 0;
-
-    pMetadata->pictureBlock = NULL;
 }
 
 static mhfs_cl_track_error mhfs_cl_track_error_from_blockvf_error(const blockvf_error bvferr)
@@ -580,7 +639,7 @@ static inline uint32_t unsynchsafe_32(const uint32_t n)
     return result;
 }
 
-static mhfs_cl_track_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData)
+static mhfs_cl_track_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock)
 {
     pTrack->vf.fileoffset = 0;
 
@@ -691,24 +750,18 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrac
         }
         else if(blocktype == DRFLAC_METADATA_BLOCK_TYPE_PICTURE)
         {
-            const uint32_t pictureType = mhfs_cl_flac_picture_block_get_type(blockData);
-            MHFSCLTR_PRINT("Picture type: %u\n", pictureType);
-            bool bSetPicture = (pTrack->meta.pictureBlock == NULL);
-            if(! bSetPicture)
+            if(on_metablock != NULL)
             {
-                // pcover top priority, disc second priority, everything else same priority
-                const uint32_t existingPictureType = mhfs_cl_flac_picture_block_get_type(pTrack->meta.pictureBlock);
-                switch(pictureType)
-                {
-                    case 6:
-                    if(existingPictureType == 6) break;
-                    case 3:
-                    bSetPicture = (existingPictureType != 3);
-                }
-            }
-            if(bSetPicture)
-            {
-                pTrack->meta.pictureBlock = ((uint8_t*)pTrack->vf.buf) + (pTrack->vf.fileoffset - blocksize);
+                // pictureBlock = ((uint8_t*)pTrack->vf.buf) + (pTrack->vf.fileoffset - blocksize);
+                mhfs_cl_track_meta_picture picture;
+                picture.pictureType = mhfs_cl_flac_picture_block_get_type(blockData);
+                picture.mimeSize = mhfs_cl_flac_picture_block_get_mime_size(blockData);
+                picture.mime = mhfs_cl_flac_picture_block_get_mime(blockData);
+                picture.descSize = mhfs_cl_flac_picture_block_get_desc_size(blockData);
+                picture.desc = mhfs_cl_flac_picture_block_get_desc(blockData);
+                picture.pictureDataSize = mhfs_cl_flac_picture_block_get_picture_size(blockData);
+                picture.pictureData = mhfs_cl_flac_picture_block_get_picture(blockData);
+                on_metablock(MHFS_CL_TRACK_M_PICTURE, &picture);
             }
         }
     } while(!isLast);
@@ -759,7 +812,7 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_ma_decoder(mhfs_cl_track 
     return retval;
 }
 
-mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData)
+mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock)
 {
     mhfs_cl_track_return_data rd;
     if(pReturnData == NULL) pReturnData = &rd;
@@ -768,7 +821,7 @@ mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_t
     // try loading using our parser(s)
     if(pTrack->decoderConfig.encodingFormat == ma_encoding_format_flac)
     {
-        const mhfs_cl_track_error retval = mhfs_cl_track_load_metadata_flac(pTrack, pReturnData);
+        const mhfs_cl_track_error retval = mhfs_cl_track_load_metadata_flac(pTrack, pReturnData, on_metablock);
         if((retval == MHFS_CL_TRACK_SUCCESS) || (retval == MHFS_CL_TRACK_NEED_MORE_DATA))
         {
             return retval;

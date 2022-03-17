@@ -232,28 +232,6 @@ const DefDownloadManager = function(chunksize) {
     return that;
 };
 
-const MHFSCLTrackPicture = function(pictureBlock) {
-    const that = {};
-    const mimesize = MHFSCL.mhfs_cl_flac_picture_block_get_mime_size(pictureBlock);
-    const pMime = MHFSCL.mhfs_cl_flac_picture_block_get_mime(pictureBlock);
-    that.picsize = MHFSCL.mhfs_cl_flac_picture_block_get_picture_size(pictureBlock);
-    const pPicture = MHFSCL.mhfs_cl_flac_picture_block_get_picture(pictureBlock);
-    that.mime = MHFSCL.Module.UTF8ToString(pMime, mimesize)
-    const srcData = new Uint8Array(MHFSCL.Module.HEAPU8.buffer, pPicture, that.picsize);
-    that.hash = MHFSCL.mhfs_cl_djb2(pPicture, that.picsize);
-
-    that.toURL = function() {
-        const picData = new Uint8Array(srcData);
-        const blobert = new Blob([picData.buffer], {
-            'type' : that.mime
-        });
-        const url = URL.createObjectURL(blobert);
-        return url;
-    };
-
-    return that;
-};
-
 const MHFSCLTrack = async function(gsignal, theURL, DLMGR) {
     if(!MHFSCL.ready) {
         console.log('MHFSCLTrack, waiting for MHFSCL to be ready');
@@ -313,13 +291,49 @@ const MHFSCLTrack = async function(gsignal, theURL, DLMGR) {
     };
 
     that._openPictureIfExists = function() {
-        const pictureBlock = MHFSCL.mhfs_cl_track_get_picture_block(that.ptr);
-        if(pictureBlock == 0)
-        {
+        if(!that.picture) {
             return undefined;
         }
-        return MHFSCLTrackPicture(pictureBlock);
+        that.picture.hash = MHFSCL.mhfs_cl_djb2(that.picture.pPicture, that.picture.pictureSize);
+        that.picture.toURL = function() {
+            const srcData = new Uint8Array(MHFSCL.Module.HEAPU8.buffer, that.picture.pPicture, that.picture.pictureSize);
+            const picData = new Uint8Array(srcData);
+            const blobert = new Blob([picData.buffer], {
+                'type' : that.picture.mime
+            });
+            const url = URL.createObjectURL(blobert);
+            return url;
+        };
+        return that.picture;
     };
+
+    let existingPicture;
+    const onMetaPtr = MHFSCL.Module.addFunction(function(blockType, pBlock) {
+        console.log('onMetaPtr called');
+        if(blockType === 2) {
+            const pictureType = MHFSCL.mhfs_cl_track_meta_picture_get_type(pBlock);
+            console.log('pictureType ' + pictureType);
+            let setPicture = !existingPicture;
+            if(!setPicture) {
+                // pcover top priority, disc second priority, everything else same priority
+                switch(pictureType)
+                {
+                    case 6:
+                    if(existingPictureType === 6) break;
+                    case 3:
+                    setPicture = (existingPicture.type !== 3);
+                }
+            }
+            if(setPicture) {
+                existingPicture = {
+                    type : pictureType,
+                    mime : MHFSCL.Module.UTF8ToString(MHFSCL.mhfs_cl_track_meta_picture_get_mime(pBlock), MHFSCL.mhfs_cl_track_meta_picture_get_mime_size(pBlock)),
+                    pictureSize : MHFSCL.mhfs_cl_track_meta_picture_get_picture_size(pBlock),
+                    pPicture : MHFSCL.mhfs_cl_track_meta_picture_get_picture(pBlock)
+                };
+            }
+        }
+    }, 'vii');
 
     // allocate memory for the mhfs_cl_track and return data
     const alignedTrackSize = MHFSCL.AlignedSize(MHFSCL.mhfs_cl_track_sizeof);
@@ -338,8 +352,12 @@ const MHFSCLTrack = async function(gsignal, theURL, DLMGR) {
 
         // load enough of the track that the metadata loads
         for(;;) {
-            const code = MHFSCL.mhfs_cl_track_load_metadata(that.ptr, rd);
-            if(code === MHFSCL.MHFS_CL_TRACK_SUCCESS) break;
+            existingPicture = null;
+            const code = MHFSCL.mhfs_cl_track_load_metadata(that.ptr, rd, onMetaPtr);
+            if(code === MHFSCL.MHFS_CL_TRACK_SUCCESS) {
+                that.picture = existingPicture;
+                break;
+            }
             if(code !== MHFSCL.MHFS_CL_TRACK_NEED_MORE_DATA){
                 that.close();
                 throw("Failed opening MHFSCLTrack");
@@ -351,6 +369,9 @@ const MHFSCLTrack = async function(gsignal, theURL, DLMGR) {
     catch(error) {
         that.close();
         throw(error);
+    }
+    finally {
+        MHFSCL.Module.removeFunction(onMetaPtr);
     }
 
     that.totalPCMFrameCount = MHFSCL.mhfs_cl_track_totalPCMFrameCount(that.ptr);
@@ -620,7 +641,7 @@ Module().then(function(MHFSCLMod){
 
     MHFSCL.mhfs_cl_track_add_block = MHFSCLMod.cwrap('mhfs_cl_track_add_block', "number", ["number", "number", "number"]);
 
-    MHFSCL.mhfs_cl_track_load_metadata = MHFSCLMod.cwrap('mhfs_cl_track_load_metadata', "number", ["number", "number"]);
+    MHFSCL.mhfs_cl_track_load_metadata = MHFSCLMod.cwrap('mhfs_cl_track_load_metadata', "number", ["number", "number", "number"]);
     
     MHFSCL.mhfs_cl_track_seek_to_pcm_frame = MHFSCLMod.cwrap('mhfs_cl_track_seek_to_pcm_frame', "number", ["number", "number"]);
 
@@ -638,7 +659,6 @@ Module().then(function(MHFSCLMod){
 
     MHFSCL.mhfs_cl_track_durationInSecs = MHFSCLMod.cwrap('mhfs_cl_track_durationInSecs', "number", ["number"]);
 
-    MHFSCL.mhfs_cl_track_get_picture_block = MHFSCLMod.cwrap('mhfs_cl_track_get_picture_block', "number", ["number"]);
     MHFSCL.mhfs_cl_flac_picture_block_get_type = MHFSCLMod.cwrap('mhfs_cl_flac_picture_block_get_type', "number", ["number"]);
     MHFSCL.mhfs_cl_flac_picture_block_get_mime_size = MHFSCLMod.cwrap('mhfs_cl_flac_picture_block_get_mime_size', "number", ["number"]);
     MHFSCL.mhfs_cl_flac_picture_block_get_mime = MHFSCLMod.cwrap('mhfs_cl_flac_picture_block_get_mime', "number", ["number"]);
@@ -646,6 +666,14 @@ Module().then(function(MHFSCLMod){
     MHFSCL.mhfs_cl_flac_picture_block_get_desc = MHFSCLMod.cwrap('mhfs_cl_flac_picture_block_get_desc', "number", ["number"]);
     MHFSCL.mhfs_cl_flac_picture_block_get_picture_size = MHFSCLMod.cwrap('mhfs_cl_flac_picture_block_get_picture_size', "number", ["number"]);
     MHFSCL.mhfs_cl_flac_picture_block_get_picture = MHFSCLMod.cwrap('mhfs_cl_flac_picture_block_get_picture', "number", ["number"]);
+
+    MHFSCL.mhfs_cl_track_meta_picture_get_type = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_get_type', "number", ["number"]);
+    MHFSCL.mhfs_cl_track_meta_picture_get_mime_size = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_get_mime_size', "number", ["number"]);
+    MHFSCL.mhfs_cl_track_meta_picture_get_mime = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_get_mime', "number", ["number"]);
+    MHFSCL.mhfs_cl_track_meta_picture_get_desc_size = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_get_desc_size', "number", ["number"]);
+    MHFSCL.mhfs_cl_track_meta_picture_get_desc = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_get_desc', "number", ["number"]);
+    MHFSCL.mhfs_cl_track_meta_picture_get_picture_size = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_get_picture_size', "number", ["number"]);
+    MHFSCL.mhfs_cl_track_meta_picture_get_picture = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_get_picture', "number", ["number"]);
 
     MHFSCL.mhfs_cl_djb2 = MHFSCLMod.cwrap('mhfs_cl_djb2', "number", ["number", "number"]);
     
