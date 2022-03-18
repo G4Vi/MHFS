@@ -18,11 +18,16 @@ typedef struct {
 } mhfs_cl_track_meta_audioinfo;
 
 typedef struct {
+    uint32_t commentSize;
+    const uint8_t *comment;
+} mhfs_cl_track_meta_tags_comment;
+
+typedef struct {
     uint32_t vendorLength;
     const char *vendorString;
     const uint32_t commentCount;
     drflac_vorbis_comment_iterator comment_iterator;
-    uint32_t last_tag_length;
+    mhfs_cl_track_meta_tags_comment currentComment;
 } mhfs_cl_track_meta_tags;
 
 typedef struct {
@@ -86,6 +91,7 @@ LIBEXPORT int mhfs_cl_track_seek_to_pcm_frame(mhfs_cl_track *pTrack, const uint3
 LIBEXPORT mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *outFloat, mhfs_cl_track_return_data *pReturnData);
 
 LIBEXPORT double mhfs_cl_track_meta_audioinfo_durationInSecs(const mhfs_cl_track_meta_audioinfo *pInfo);
+LIBEXPORT const mhfs_cl_track_meta_tags_comment *mhfs_cl_track_meta_tags_next_comment(mhfs_cl_track_meta_tags *pTags);
 
 // util
 LIBEXPORT unsigned long mhfs_cl_djb2(const uint8_t *pData, const size_t dataLen);
@@ -108,6 +114,9 @@ LIBEXPORT uint64_t mhfs_cl_track_meta_audioinfo_totalPCMFrameCount(const mhfs_cl
 LIBEXPORT uint32_t mhfs_cl_track_meta_audioinfo_sampleRate(const mhfs_cl_track_meta_audioinfo *pInfo);
 LIBEXPORT uint8_t mhfs_cl_track_meta_audioinfo_bitsPerSample(const mhfs_cl_track_meta_audioinfo *pInfo);
 LIBEXPORT uint8_t mhfs_cl_track_meta_audioinfo_channels(const mhfs_cl_track_meta_audioinfo *pInfo);
+
+LIBEXPORT uint32_t mhfs_cl_track_meta_tags_comment_size(const mhfs_cl_track_meta_tags_comment*);
+LIBEXPORT const uint8_t *mhfs_cl_track_meta_tags_comment_data(const mhfs_cl_track_meta_tags_comment*);
 
 LIBEXPORT uint32_t mhfs_cl_track_meta_picture_type(const mhfs_cl_track_meta_picture *);
 LIBEXPORT uint32_t mhfs_cl_track_meta_picture_mime_size(const mhfs_cl_track_meta_picture *);
@@ -157,6 +166,15 @@ uint32_t MHFS_CL_TRACK_M_TAGS_func(void)
 uint32_t MHFS_CL_TRACK_M_PICTURE_func(void)
 {
     return MHFS_CL_TRACK_M_PICTURE;
+}
+
+uint32_t mhfs_cl_track_meta_tags_comment_size(const mhfs_cl_track_meta_tags_comment *pComment)
+{
+    return pComment->commentSize;
+}
+const uint8_t *mhfs_cl_track_meta_tags_comment_data(const mhfs_cl_track_meta_tags_comment *pComment)
+{
+    return pComment->comment;
 }
 
 uint32_t mhfs_cl_flac_picture_block_get_type(const void *pPictureBlock)
@@ -636,6 +654,16 @@ static inline uint32_t unsynchsafe_32(const uint32_t n)
     return result;
 }
 
+const mhfs_cl_track_meta_tags_comment *mhfs_cl_track_meta_tags_next_comment(mhfs_cl_track_meta_tags *pTags)
+{
+    pTags->currentComment.comment = (uint8_t*)drflac_next_vorbis_comment(&pTags->comment_iterator, &pTags->currentComment.commentSize);
+    if(pTags->currentComment.comment == NULL)
+    {
+        return NULL;
+    }
+    return &pTags->currentComment;
+}
+
 static mhfs_cl_track_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock, void *context)
 {
     pTrack->vf.fileoffset = 0;
@@ -740,13 +768,16 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrac
             MHFSCLTR_PRINT("vendor_string: %.*s\n", vendorLength, &blockData[4]);
             const unsigned ccStart = sizeof(uint32_t) + vendorLength;
             const uint32_t commentCount = blockData[ccStart] | (blockData[ccStart+1] << 8) | (blockData[ccStart+2] << 16) | (blockData[ccStart+3] << 24);
-            drflac_vorbis_comment_iterator comment_iterator;
-            drflac_init_vorbis_comment_iterator(&comment_iterator, commentCount, &blockData[ccStart+4]);
-            const char *comment;
-            uint32_t commentLength;
-            while((comment = drflac_next_vorbis_comment(&comment_iterator, &commentLength)) != NULL)
+
+            if(on_metablock != NULL)
             {
-                MHFSCLTR_PRINT("%.*s\n", commentLength, comment);
+                mhfs_cl_track_meta_tags tags = {
+                    .vendorLength = vendorLength,
+                    .vendorString = (char*)&blockData[4],
+                    .commentCount = commentCount
+                };
+                drflac_init_vorbis_comment_iterator(&tags.comment_iterator, commentCount, &blockData[ccStart+4]);
+                on_metablock(context, MHFS_CL_TRACK_M_TAGS, &tags);
             }
         }
         else if(blocktype == DRFLAC_METADATA_BLOCK_TYPE_PICTURE)

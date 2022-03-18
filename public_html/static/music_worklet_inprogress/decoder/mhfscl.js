@@ -210,7 +210,7 @@ const DefDownloadManager = function(chunksize) {
     that.curOffset;
     that.GetChunk = async function(url, startOffset, signal) {
         const sd = (that.curOffset === startOffset) ? ' SAME' : ' DIFF DFDFDFDFDFFSDFSFS';
-        console.log('curOffset '+ that.curOffset + 'startOffset ' + startOffset + sd);
+        //console.log('curOffset '+ that.curOffset + 'startOffset ' + startOffset + sd);
         const def_end = startOffset+that.CHUNKSIZE-1;
         const end = that.filesize ? Math.min(def_end, that.filesize-1) : def_end;
         const xhr = await makeRequest('GET', url, startOffset, end, signal);
@@ -263,7 +263,6 @@ const ObjectMap = function() {
 const MHFSCLObjectMap = ObjectMap();
 
 const MHFSCLTrackOnMeta = function(mhfscltrackid, blockType, pBlock) {
-    console.log('MHFSCLTrackOnMeta called');
     const mhfscltrack = MHFSCLObjectMap.getData(mhfscltrackid);
     if(blockType === MHFSCL.TRACK_M_AUDIOINFO) {
         mhfscltrack.totalPCMFrameCount = MHFSCL.mhfs_cl_track_meta_audioinfo_totalPCMFrameCount(pBlock);
@@ -271,6 +270,17 @@ const MHFSCLTrackOnMeta = function(mhfscltrackid, blockType, pBlock) {
         mhfscltrack.bitsPerSample = MHFSCL.mhfs_cl_track_meta_audioinfo_bitsPerSample(pBlock);
         mhfscltrack.channels = MHFSCL.mhfs_cl_track_meta_audioinfo_channels(pBlock);
         mhfscltrack.duration = MHFSCL.mhfs_cl_track_meta_audioinfo_durationInSecs(pBlock);
+    }
+    else if(blockType == MHFSCL.TRACK_M_TAGS) {
+        mhfscltrack.tags = {};
+        do {
+            const comment = MHFSCL.mhfs_cl_track_meta_tags_next_comment(pBlock);
+            if(comment === 0) break;
+            const strcomment = MHFSCL.Module.UTF8ToString(MHFSCL.mhfs_cl_track_meta_tags_comment_data(comment), MHFSCL.mhfs_cl_track_meta_tags_comment_size(comment));
+            console.log('comment: ' + strcomment);
+            const [key, value] = strcomment.split('=', 2);
+            mhfscltrack.tags[key] = value;
+        } while(1);
     }
     else if(blockType === MHFSCL.TRACK_M_PICTURE) {
         const pictureType = MHFSCL.mhfs_cl_track_meta_picture_type(pBlock);
@@ -655,6 +665,7 @@ Module().then(function(MHFSCLMod){
     MHFSCL.mhfs_cl_track_read_pcm_frames_f32 = MHFSCLMod.cwrap('mhfs_cl_track_read_pcm_frames_f32', "number", ["number", "number", "number", "number"]);
 
     MHFSCL.mhfs_cl_track_meta_audioinfo_durationInSecs = MHFSCLMod.cwrap('mhfs_cl_track_meta_audioinfo_durationInSecs', "number", ["number"]);
+    MHFSCL.mhfs_cl_track_meta_tags_next_comment = MHFSCLMod.cwrap('mhfs_cl_track_meta_tags_next_comment', "number", ["number"]);
 
     // mhfs_cl_track util functions
     MHFSCL.mhfs_cl_djb2 = MHFSCLMod.cwrap('mhfs_cl_djb2', "number", ["number", "number"]);
@@ -680,6 +691,9 @@ Module().then(function(MHFSCLMod){
     MHFSCL.mhfs_cl_track_meta_audioinfo_sampleRate = MHFSCLMod.cwrap('mhfs_cl_track_meta_audioinfo_sampleRate', "number", ["number"]);
     MHFSCL.mhfs_cl_track_meta_audioinfo_bitsPerSample = MHFSCLMod.cwrap('mhfs_cl_track_meta_audioinfo_bitsPerSample', "number", ["number"]);
     MHFSCL.mhfs_cl_track_meta_audioinfo_channels = MHFSCLMod.cwrap('mhfs_cl_track_meta_audioinfo_channels', "number", ["number"]);
+
+    MHFSCL.mhfs_cl_track_meta_tags_comment_size = MHFSCLMod.cwrap('mhfs_cl_track_meta_tags_comment_size', "number", ["number"]);
+    MHFSCL.mhfs_cl_track_meta_tags_comment_data = MHFSCLMod.cwrap('mhfs_cl_track_meta_tags_comment_data', "number", ["number"]);
 
     MHFSCL.mhfs_cl_track_meta_picture_type = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_type', "number", ["number"]);
     MHFSCL.mhfs_cl_track_meta_picture_mime_size = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_mime_size', "number", ["number"]);
