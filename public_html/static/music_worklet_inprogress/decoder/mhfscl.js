@@ -265,8 +265,15 @@ const MHFSCLObjectMap = ObjectMap();
 const MHFSCLTrackOnMeta = function(mhfscltrackid, blockType, pBlock) {
     console.log('MHFSCLTrackOnMeta called');
     const mhfscltrack = MHFSCLObjectMap.getData(mhfscltrackid);
-    if(blockType === 2) {
-        const pictureType = MHFSCL.mhfs_cl_track_meta_picture_get_type(pBlock);
+    if(blockType === MHFSCL.TRACK_M_AUDIOINFO) {
+        mhfscltrack.totalPCMFrameCount = MHFSCL.mhfs_cl_track_meta_audioinfo_totalPCMFrameCount(pBlock);
+        mhfscltrack.sampleRate = MHFSCL.mhfs_cl_track_meta_audioinfo_sampleRate(pBlock);
+        mhfscltrack.bitsPerSample = MHFSCL.mhfs_cl_track_meta_audioinfo_bitsPerSample(pBlock);
+        mhfscltrack.channels = MHFSCL.mhfs_cl_track_meta_audioinfo_channels(pBlock);
+        mhfscltrack.duration = MHFSCL.mhfs_cl_track_meta_audioinfo_durationInSecs(pBlock);
+    }
+    else if(blockType === MHFSCL.TRACK_M_PICTURE) {
+        const pictureType = MHFSCL.mhfs_cl_track_meta_picture_type(pBlock);
         console.log('pictureType ' + pictureType);
         let setPicture = !mhfscltrack.picture;
         if(!setPicture) {
@@ -282,9 +289,9 @@ const MHFSCLTrackOnMeta = function(mhfscltrackid, blockType, pBlock) {
         if(setPicture) {
             mhfscltrack.picture = {
                 type : pictureType,
-                mime : MHFSCL.Module.UTF8ToString(MHFSCL.mhfs_cl_track_meta_picture_get_mime(pBlock), MHFSCL.mhfs_cl_track_meta_picture_get_mime_size(pBlock)),
-                pictureSize : MHFSCL.mhfs_cl_track_meta_picture_get_picture_size(pBlock),
-                pPicture : MHFSCL.mhfs_cl_track_meta_picture_get_picture(pBlock)
+                mime : MHFSCL.Module.UTF8ToString(MHFSCL.mhfs_cl_track_meta_picture_mime(pBlock), MHFSCL.mhfs_cl_track_meta_picture_mime_size(pBlock)),
+                pictureSize : MHFSCL.mhfs_cl_track_meta_picture_data_size(pBlock),
+                pPicture : MHFSCL.mhfs_cl_track_meta_picture_data(pBlock)
             };
         }
     }
@@ -295,11 +302,9 @@ const MHFSCLTrack = async function(gsignal, theURL, DLMGR) {
         console.log('MHFSCLTrack, waiting for MHFSCL to be ready');
         await waitForEvent(MHFSCL, 'ready');
     }
-    if(!MHFSCL.pMHFSCLTrackOnMeta) {
-        MHFSCL.pMHFSCLTrackOnMeta = MHFSCL.Module.addFunction(MHFSCLTrackOnMeta, 'viii');
-    }
-    let that = {};
+    const that = {};
     that.CHUNKSIZE = 262144;
+    that.url = theURL;
 
     DLMGR ||= DefDownloadManager(that.CHUNKSIZE);
 
@@ -406,13 +411,6 @@ const MHFSCLTrack = async function(gsignal, theURL, DLMGR) {
     finally {
         MHFSCLObjectMap.removeData(thatid);
     }
-
-    that.totalPCMFrameCount = MHFSCL.mhfs_cl_track_totalPCMFrameCount(that.ptr);
-    that.sampleRate = MHFSCL.mhfs_cl_track_sampleRate(that.ptr);
-    that.bitsPerSample = MHFSCL.mhfs_cl_track_bitsPerSample(that.ptr);
-    that.channels = MHFSCL.mhfs_cl_track_channels(that.ptr);
-    that.url = theURL;
-    that.duration = MHFSCL.mhfs_cl_track_durationInSecs(that.ptr);
 
     return that;
 };
@@ -648,6 +646,60 @@ export { MHFSCLDecoder };
 Module().then(function(MHFSCLMod){
     MHFSCL.Module = MHFSCLMod;
 
+    // mhfs_cl_track* functions
+    MHFSCL.mhfs_cl_track_init = MHFSCLMod.cwrap('mhfs_cl_track_init', null, ["number", "number", "string", "string", "number"]);
+    MHFSCL.mhfs_cl_track_deinit = MHFSCLMod.cwrap('mhfs_cl_track_deinit', null, ["number"]);
+    MHFSCL.mhfs_cl_track_add_block = MHFSCLMod.cwrap('mhfs_cl_track_add_block', "number", ["number", "number", "number"]);
+    MHFSCL.mhfs_cl_track_load_metadata = MHFSCLMod.cwrap('mhfs_cl_track_load_metadata', "number", ["number", "number", "number", "number"]);
+    MHFSCL.mhfs_cl_track_seek_to_pcm_frame = MHFSCLMod.cwrap('mhfs_cl_track_seek_to_pcm_frame', "number", ["number", "number"]);
+    MHFSCL.mhfs_cl_track_read_pcm_frames_f32 = MHFSCLMod.cwrap('mhfs_cl_track_read_pcm_frames_f32', "number", ["number", "number", "number", "number"]);
+
+    MHFSCL.mhfs_cl_track_meta_audioinfo_durationInSecs = MHFSCLMod.cwrap('mhfs_cl_track_meta_audioinfo_durationInSecs', "number", ["number"]);
+
+    // mhfs_cl_track util functions
+    MHFSCL.mhfs_cl_djb2 = MHFSCLMod.cwrap('mhfs_cl_djb2', "number", ["number", "number"]);
+
+    // mhfs_cl_track* constants
+    MHFSCL.mhfs_cl_track_return_data_sizeof = MHFSCLMod.ccall('mhfs_cl_track_return_data_sizeof', "number");
+    if(MHFSCL.mhfs_cl_track_return_data_sizeof !== 4) {
+        throw("Must update usage of MHFSCL.UINT32Value, unexpected MHFSCL.mhfs_cl_track_return_data_sizeof value");
+    }
+    MHFSCL.mhfs_cl_track_sizeof =  MHFSCLMod.ccall('mhfs_cl_track_sizeof', "number");
+    MHFSCL.MHFS_CL_TRACK_SUCCESS = MHFSCLMod.ccall('MHFS_CL_TRACK_SUCCESS_func', "number");
+    MHFSCL.MHFS_CL_TRACK_GENERIC_ERROR = MHFSCLMod.ccall('MHFS_CL_TRACK_GENERIC_ERROR_func', "number");
+    MHFSCL.MHFS_CL_TRACK_NEED_MORE_DATA = MHFSCLMod.ccall('MHFS_CL_TRACK_NEED_MORE_DATA_func', "number");
+
+    MHFSCL.TRACK_M_AUDIOINFO = MHFSCLMod.ccall('MHFS_CL_TRACK_M_AUDIOINFO_func', "number");
+    MHFSCL.TRACK_M_TAGS  = MHFSCLMod.ccall('MHFS_CL_TRACK_M_TAGS_func', "number");
+    MHFSCL.TRACK_M_PICTURE = MHFSCLMod.ccall('MHFS_CL_TRACK_M_PICTURE_func', "number");
+
+    // mhfs_cl_track* access struct members
+    MHFSCL.mhfs_cl_track_currentFrame =  MHFSCLMod.cwrap('mhfs_cl_track_currentFrame', "number", ["number"]);
+
+    MHFSCL.mhfs_cl_track_meta_audioinfo_totalPCMFrameCount = MHFSCLMod.cwrap('mhfs_cl_track_meta_audioinfo_totalPCMFrameCount', "number", ["number"]);
+    MHFSCL.mhfs_cl_track_meta_audioinfo_sampleRate = MHFSCLMod.cwrap('mhfs_cl_track_meta_audioinfo_sampleRate', "number", ["number"]);
+    MHFSCL.mhfs_cl_track_meta_audioinfo_bitsPerSample = MHFSCLMod.cwrap('mhfs_cl_track_meta_audioinfo_bitsPerSample', "number", ["number"]);
+    MHFSCL.mhfs_cl_track_meta_audioinfo_channels = MHFSCLMod.cwrap('mhfs_cl_track_meta_audioinfo_channels', "number", ["number"]);
+
+    MHFSCL.mhfs_cl_track_meta_picture_type = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_type', "number", ["number"]);
+    MHFSCL.mhfs_cl_track_meta_picture_mime_size = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_mime_size', "number", ["number"]);
+    MHFSCL.mhfs_cl_track_meta_picture_mime = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_mime', "number", ["number"]);
+    MHFSCL.mhfs_cl_track_meta_picture_desc_size = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_desc_size', "number", ["number"]);
+    MHFSCL.mhfs_cl_track_meta_picture_desc = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_desc', "number", ["number"]);
+    MHFSCL.mhfs_cl_track_meta_picture_data_size = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_data_size', "number", ["number"]);
+    MHFSCL.mhfs_cl_track_meta_picture_data = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_data', "number", ["number"]);
+
+    // mhfs_cl_decoder functions
+    MHFSCL.mhfs_cl_decoder_open = MHFSCLMod.cwrap('mhfs_cl_decoder_open', "number", ["number", "number", "number"]);
+    MHFSCL.mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved = MHFSCLMod.cwrap('mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved', "number", ["number", "number", "number", "number", "number"]);
+    MHFSCL.mhfs_cl_decoder_close = MHFSCLMod.cwrap('mhfs_cl_decoder_close', null, ["number"]);
+    MHFSCL.mhfs_cl_decoder_flush = MHFSCLMod.cwrap('mhfs_cl_decoder_flush', null, ["number"]);
+
+
+    // link callbacks in
+    MHFSCL.pMHFSCLTrackOnMeta = MHFSCL.Module.addFunction(MHFSCLTrackOnMeta, 'viii');
+
+    // finish setup
     MHFSCL.PTRSIZE = 4;
 
     MHFSCL.UINT32Value = function(ptr) {
@@ -657,66 +709,6 @@ Module().then(function(MHFSCLMod){
     MHFSCL.AlignedSize = function(size) {
         return Math.ceil(size/4) * 4;
     };
-
-    MHFSCL.mhfs_cl_track_return_data_sizeof = MHFSCLMod.ccall('mhfs_cl_track_return_data_sizeof', "number");
-    if(MHFSCL.mhfs_cl_track_return_data_sizeof !== 4) {
-        throw("Must update usage of MHFSCL.UINT32Value, unexpected MHFSCL.mhfs_cl_track_return_data_sizeof value");
-    }
-    MHFSCL.mhfs_cl_track_sizeof =  MHFSCLMod.ccall('mhfs_cl_track_sizeof', "number");
-
-    MHFSCL.MHFS_CL_TRACK_SUCCESS = MHFSCLMod.ccall('MHFS_CL_TRACK_SUCCESS_func', "number");
-    MHFSCL.MHFS_CL_TRACK_GENERIC_ERROR = MHFSCLMod.ccall('MHFS_CL_TRACK_GENERIC_ERROR_func', "number");
-    MHFSCL.MHFS_CL_TRACK_NEED_MORE_DATA = MHFSCLMod.ccall('MHFS_CL_TRACK_NEED_MORE_DATA_func', "number");
-
-    MHFSCL.mhfs_cl_track_init = MHFSCLMod.cwrap('mhfs_cl_track_init', null, ["number", "number", "string", "string", "number"]);
-
-    MHFSCL.mhfs_cl_track_deinit = MHFSCLMod.cwrap('mhfs_cl_track_deinit', null, ["number"]);
-
-    MHFSCL.mhfs_cl_track_add_block = MHFSCLMod.cwrap('mhfs_cl_track_add_block', "number", ["number", "number", "number"]);
-
-    MHFSCL.mhfs_cl_track_load_metadata = MHFSCLMod.cwrap('mhfs_cl_track_load_metadata', "number", ["number", "number", "number", "number"]);
-    
-    MHFSCL.mhfs_cl_track_seek_to_pcm_frame = MHFSCLMod.cwrap('mhfs_cl_track_seek_to_pcm_frame', "number", ["number", "number"]);
-
-    MHFSCL.mhfs_cl_track_read_pcm_frames_f32 = MHFSCLMod.cwrap('mhfs_cl_track_read_pcm_frames_f32', "number", ["number", "number", "number", "number"]);
-
-    MHFSCL.mhfs_cl_track_totalPCMFrameCount = MHFSCLMod.cwrap('mhfs_cl_track_totalPCMFrameCount', "number", ["number"]);
-
-    MHFSCL.mhfs_cl_track_sampleRate = MHFSCLMod.cwrap('mhfs_cl_track_sampleRate', "number", ["number"]);
-
-    MHFSCL.mhfs_cl_track_bitsPerSample = MHFSCLMod.cwrap('mhfs_cl_track_bitsPerSample', "number", ["number"]);
-    
-    MHFSCL.mhfs_cl_track_channels = MHFSCLMod.cwrap('mhfs_cl_track_channels', "number", ["number"]);
-
-    MHFSCL.mhfs_cl_track_currentFrame =  MHFSCLMod.cwrap('mhfs_cl_track_currentFrame', "number", ["number"]);
-
-    MHFSCL.mhfs_cl_track_durationInSecs = MHFSCLMod.cwrap('mhfs_cl_track_durationInSecs', "number", ["number"]);
-
-    MHFSCL.mhfs_cl_flac_picture_block_get_type = MHFSCLMod.cwrap('mhfs_cl_flac_picture_block_get_type', "number", ["number"]);
-    MHFSCL.mhfs_cl_flac_picture_block_get_mime_size = MHFSCLMod.cwrap('mhfs_cl_flac_picture_block_get_mime_size', "number", ["number"]);
-    MHFSCL.mhfs_cl_flac_picture_block_get_mime = MHFSCLMod.cwrap('mhfs_cl_flac_picture_block_get_mime', "number", ["number"]);
-    MHFSCL.mhfs_cl_flac_picture_block_get_desc_size = MHFSCLMod.cwrap('mhfs_cl_flac_picture_block_get_desc_size', "number", ["number"]);
-    MHFSCL.mhfs_cl_flac_picture_block_get_desc = MHFSCLMod.cwrap('mhfs_cl_flac_picture_block_get_desc', "number", ["number"]);
-    MHFSCL.mhfs_cl_flac_picture_block_get_picture_size = MHFSCLMod.cwrap('mhfs_cl_flac_picture_block_get_picture_size', "number", ["number"]);
-    MHFSCL.mhfs_cl_flac_picture_block_get_picture = MHFSCLMod.cwrap('mhfs_cl_flac_picture_block_get_picture', "number", ["number"]);
-
-    MHFSCL.mhfs_cl_track_meta_picture_get_type = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_get_type', "number", ["number"]);
-    MHFSCL.mhfs_cl_track_meta_picture_get_mime_size = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_get_mime_size', "number", ["number"]);
-    MHFSCL.mhfs_cl_track_meta_picture_get_mime = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_get_mime', "number", ["number"]);
-    MHFSCL.mhfs_cl_track_meta_picture_get_desc_size = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_get_desc_size', "number", ["number"]);
-    MHFSCL.mhfs_cl_track_meta_picture_get_desc = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_get_desc', "number", ["number"]);
-    MHFSCL.mhfs_cl_track_meta_picture_get_picture_size = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_get_picture_size', "number", ["number"]);
-    MHFSCL.mhfs_cl_track_meta_picture_get_picture = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_get_picture', "number", ["number"]);
-
-    MHFSCL.mhfs_cl_djb2 = MHFSCLMod.cwrap('mhfs_cl_djb2', "number", ["number", "number"]);
-    
-    MHFSCL.mhfs_cl_decoder_open = MHFSCLMod.cwrap('mhfs_cl_decoder_open', "number", ["number", "number", "number"]);
-
-    MHFSCL.mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved = MHFSCLMod.cwrap('mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved', "number", ["number", "number", "number", "number", "number"]);
-
-    MHFSCL.mhfs_cl_decoder_close = MHFSCLMod.cwrap('mhfs_cl_decoder_close', null, ["number"]);
-
-    MHFSCL.mhfs_cl_decoder_flush = MHFSCLMod.cwrap('mhfs_cl_decoder_flush', null, ["number"]);
 
     console.log('MHFSCL is ready!');
     MHFSCL.ready = true;
