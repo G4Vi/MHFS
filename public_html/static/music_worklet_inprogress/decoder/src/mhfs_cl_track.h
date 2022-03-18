@@ -35,7 +35,7 @@ typedef struct {
     const void *pictureData;
 } mhfs_cl_track_meta_picture;
 
-typedef void (*mhfs_cl_track_on_metablock)(const mhfs_cl_track_meta, void *);
+typedef void (*mhfs_cl_track_on_metablock)(void*, const mhfs_cl_track_meta, void *);
 
 typedef struct {
     uint64_t totalPCMFrameCount;
@@ -89,7 +89,7 @@ typedef union {
 LIBEXPORT void mhfs_cl_track_init(mhfs_cl_track *pTrack, const unsigned blocksize, const char *mime, const char *fullfilename, const uint64_t totalPCMFrameCount);
 LIBEXPORT void mhfs_cl_track_deinit(mhfs_cl_track *pTrack);
 LIBEXPORT void *mhfs_cl_track_add_block(mhfs_cl_track *pTrack, const uint32_t block_start, const unsigned filesize);
-LIBEXPORT mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock);
+LIBEXPORT mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock, void *context);
 LIBEXPORT int mhfs_cl_track_seek_to_pcm_frame(mhfs_cl_track *pTrack, const uint32_t pcmFrameIndex);
 LIBEXPORT mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *outFloat, mhfs_cl_track_return_data *pReturnData);
 
@@ -639,7 +639,7 @@ static inline uint32_t unsynchsafe_32(const uint32_t n)
     return result;
 }
 
-static mhfs_cl_track_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock)
+static mhfs_cl_track_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock, void *context)
 {
     pTrack->vf.fileoffset = 0;
 
@@ -761,7 +761,7 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrac
                 picture.desc = mhfs_cl_flac_picture_block_get_desc(blockData);
                 picture.pictureDataSize = mhfs_cl_flac_picture_block_get_picture_size(blockData);
                 picture.pictureData = mhfs_cl_flac_picture_block_get_picture(blockData);
-                on_metablock(MHFS_CL_TRACK_M_PICTURE, &picture);
+                on_metablock(context, MHFS_CL_TRACK_M_PICTURE, &picture);
             }
         }
     } while(!isLast);
@@ -812,7 +812,7 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_ma_decoder(mhfs_cl_track 
     return retval;
 }
 
-mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock)
+mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock, void *context)
 {
     mhfs_cl_track_return_data rd;
     if(pReturnData == NULL) pReturnData = &rd;
@@ -821,7 +821,7 @@ mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_t
     // try loading using our parser(s)
     if(pTrack->decoderConfig.encodingFormat == ma_encoding_format_flac)
     {
-        const mhfs_cl_track_error retval = mhfs_cl_track_load_metadata_flac(pTrack, pReturnData, on_metablock);
+        const mhfs_cl_track_error retval = mhfs_cl_track_load_metadata_flac(pTrack, pReturnData, on_metablock, context);
         if((retval == MHFS_CL_TRACK_SUCCESS) || (retval == MHFS_CL_TRACK_NEED_MORE_DATA))
         {
             return retval;
