@@ -59,6 +59,7 @@ typedef struct {
     bool dec_initialized;
     blockvf vf;
     mhfs_cl_track_meta_audioinfo meta;
+    unsigned afterID3Offset;
     bool meta_initialized;
     uint32_t currentFrame;
     char mime[16];
@@ -459,7 +460,7 @@ void mhfs_cl_track_init(mhfs_cl_track *pTrack, const unsigned blocksize, const c
     cbs.onRealloc = &mhfs_cl_track_realloc;
     cbs.onFree = &mhfs_cl_track_free;
     pTrack->decoderConfig.allocationCallbacks = cbs;
-    pTrack->decoderConfig.encodingFormat = ma_encoding_format_flac; // assume for now
+    pTrack->decoderConfig.encodingFormat = ma_encoding_format_unknown;
 
     pTrack->dec_initialized = false;
     blockvf_init(&pTrack->vf, blocksize);
@@ -546,104 +547,6 @@ static inline void mhfs_cl_track_swap_tryorder(ma_encoding_format *first,  ma_en
     *second = temp;
 }
 
-static mhfs_cl_track_error mhfs_cl_track_open_ma_decoder(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData)
-{
-    // determine the order to try codecs
-    ma_encoding_format tryorder[] = { ma_encoding_format_flac, ma_encoding_format_mp3, ma_encoding_format_wav};
-    unsigned max_try_count = sizeof(tryorder) / sizeof(tryorder[0]);
-
-    const size_t namelen = strlen(pTrack->fullfilename);
-    const char *lastFourChars = (namelen >= 4) ? (pTrack->fullfilename + namelen - 4) : "";
-
-    if(pTrack->decoderConfig.encodingFormat != ma_format_unknown)
-    {
-        // fast path we already opened the decoder before
-        tryorder[0] = pTrack->decoderConfig.encodingFormat;
-        max_try_count = 1;
-    }
-    // attempt to speed up guesses checking magic numbers
-    else if((pTrack->vf.buf != NULL) && (memcmp(pTrack->vf.buf, "fLaC", 4) == 0))
-    {
-        mhfs_cl_track_swap_tryorder(&tryorder[DAF_FLAC], &tryorder[0]);
-    }
-    else if((pTrack->vf.buf != NULL) && (memcmp(pTrack->vf.buf, "RIFF", 4) == 0))
-    {
-        mhfs_cl_track_swap_tryorder(&tryorder[DAF_WAV], &tryorder[0]);
-    }
-    // fallback, attempt to speed up guesses by mime
-    else if(strcmp(pTrack->mime, "audio/flac") == 0)
-    {
-        mhfs_cl_track_swap_tryorder(&tryorder[DAF_FLAC], &tryorder[0]);
-    }
-    else if((strcmp(pTrack->mime, "audio/wave") == 0) || (strcmp(pTrack->mime, "audio/wav") == 0))
-    {
-        mhfs_cl_track_swap_tryorder(&tryorder[DAF_WAV], &tryorder[0]);
-    }
-    else if(strcmp(pTrack->mime, "audio/mpeg") == 0)
-    {
-        mhfs_cl_track_swap_tryorder(&tryorder[DAF_MP3], &tryorder[0]);
-    }
-    // fallback, fallback attempt to speed up guesses with file extension
-    else if(strcmp(lastFourChars, "flac") == 0)
-    {
-        mhfs_cl_track_swap_tryorder(&tryorder[DAF_FLAC], &tryorder[0]);
-    }
-    else if(strcmp(lastFourChars, ".wav") == 0)
-    {
-        mhfs_cl_track_swap_tryorder(&tryorder[DAF_WAV], &tryorder[0]);
-    }
-    else if(strcmp(lastFourChars, ".mp3") == 0)
-    {
-        mhfs_cl_track_swap_tryorder(&tryorder[DAF_MP3], &tryorder[0]);
-    }
-    // check ID3 tags last as signal for mp3 as they could be anything
-    else if((pTrack->vf.buf != NULL) && (memcmp(pTrack->vf.buf, "ID3", 3) == 0))
-    {
-        mhfs_cl_track_swap_tryorder(&tryorder[DAF_MP3], &tryorder[0]);
-    }
-    else
-    {
-        MHFSCLTR_PRINT("warning: unable to guess format\n");
-    }
-
-    // finally attempt to open encoders
-    mhfs_cl_track_error res = MHFS_CL_TRACK_GENERIC_ERROR;
-    bool blockVFfailed = false;
-    uint32_t neededOffset;
-
-    for(unsigned i = 0; i < max_try_count; i++)
-    {
-        pTrack->vf.fileoffset = 0;
-        pTrack->decoderConfig.encodingFormat = tryorder[i];
-        ma_result openRes = ma_decoder_init(&mhfs_cl_track_on_read_ma_decoder, &mhfs_cl_track_on_seek_ma_decoder, &pTrack->vf, &pTrack->decoderConfig, &pTrack->decoder);
-        if(!BLOCKVF_OK(&pTrack->vf))
-        {
-            if(openRes == MA_SUCCESS) ma_decoder_uninit(&pTrack->decoder);
-            if(!blockVFfailed)
-            {
-                blockVFfailed = true;
-                neededOffset = pTrack->vf.lastdata.extradata;
-                res = mhfs_cl_track_error_from_blockvf_error(pTrack->vf.lastdata.code);
-            }
-        }
-        else if(openRes == MA_SUCCESS)
-        {
-            pTrack->dec_initialized = true;
-            return MHFS_CL_TRACK_SUCCESS;
-        }
-        // otherwise try the next codec
-        pTrack->vf.lastdata.code = BLOCKVF_SUCCESS;
-    }
-
-    // failure, reset the encoding format
-    pTrack->decoderConfig.encodingFormat = ma_encoding_format_unknown;
-    if(blockVFfailed)
-    {
-        pReturnData->needed_offset = neededOffset;
-    }
-    return res;
-}
-
 static inline uint32_t unsynchsafe_32(const uint32_t n)
 {
     uint32_t result = 0;
@@ -666,36 +569,12 @@ const mhfs_cl_track_meta_tags_comment *mhfs_cl_track_meta_tags_next_comment(mhfs
 
 static mhfs_cl_track_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock, void *context)
 {
-    pTrack->vf.fileoffset = 0;
-
-    // Skip over ID3 tags
-    const uint8_t *id; //[4];
-    for(;;)
-    {
-        id = blockvf_read_view(&pTrack->vf, 4);
-        if(id == NULL)
-        {
-            goto mhfs_cl_track_load_metadata_flac_io_error;
-        }
-        if(memcmp(id, "ID3", 3) !=  0) break;
-        const uint8_t *header =  blockvf_read_view(&pTrack->vf, 6); //[6]
-        if(header == NULL)
-        {
-            goto mhfs_cl_track_load_metadata_flac_io_error;
-        }
-        const uint8_t flags = header[1];
-        uint32_t headerSize = unsynchsafe_32((header[2] << 24) | (header[3] << 16) | (header[4] << 8) | (header[0]));
-        if(flags & 0x10)
-        {
-            headerSize += 10;
-        }
-        if(MA_SUCCESS != blockvf_seek(&pTrack->vf, headerSize, ma_seek_origin_current))
-        {
-            goto mhfs_cl_track_load_metadata_flac_io_error;
-        }
-    }
-
     // check for magic
+    const uint8_t *id = blockvf_read_view(&pTrack->vf, 4);
+    if(id == NULL)
+    {
+        goto mhfs_cl_track_load_metadata_flac_io_error;
+    }
     if(memcmp(id, "fLaC", 4) != 0)
     {
         return MHFS_CL_TRACK_GENERIC_ERROR;
@@ -827,11 +706,35 @@ mhfs_cl_track_load_metadata_flac_io_error:
     return MHFS_CL_TRACK_GENERIC_ERROR;
 }
 
-// pTrack must have an opened ma_decoder
-static mhfs_cl_track_error mhfs_cl_track_load_metadata_ma_decoder(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData)
+static mhfs_cl_track_error mhfs_cl_track_open_ma_decoder(mhfs_cl_track *pTrack, uint32_t *neededOffset)
 {
-    (void)pReturnData;
-    mhfs_cl_track_error retval = MHFS_CL_TRACK_SUCCESS;
+    pTrack->vf.fileoffset = 0;
+    pTrack->vf.lastdata.code = BLOCKVF_SUCCESS;
+    ma_result openRes = ma_decoder_init(&mhfs_cl_track_on_read_ma_decoder, &mhfs_cl_track_on_seek_ma_decoder, &pTrack->vf, &pTrack->decoderConfig, &pTrack->decoder);
+    if(!BLOCKVF_OK(&pTrack->vf))
+    {
+        if(openRes == MA_SUCCESS) ma_decoder_uninit(&pTrack->decoder);
+        *neededOffset = pTrack->vf.lastdata.extradata;
+        return mhfs_cl_track_error_from_blockvf_error(pTrack->vf.lastdata.code);
+    }
+    else if(openRes == MA_SUCCESS)
+    {
+        pTrack->dec_initialized = true;
+        return MHFS_CL_TRACK_SUCCESS;
+    }
+    return MHFS_CL_TRACK_GENERIC_ERROR;
+}
+
+static mhfs_cl_track_error mhfs_cl_track_load_metadata_ma_decoder(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock, void *context)
+{
+    // open the decoder
+    mhfs_cl_track_error retval = mhfs_cl_track_open_ma_decoder(pTrack, &pReturnData->needed_offset);
+    if(retval != MHFS_CL_TRACK_SUCCESS)
+    {
+        return retval;
+    }
+
+    // read and store the metadata
     const unsigned savefileoffset = pTrack->vf.fileoffset;
     pTrack->vf.fileoffset = 0;
     uint64_t totalPCMFrameCount = pTrack->meta.totalPCMFrameCount;
@@ -841,6 +744,10 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_ma_decoder(mhfs_cl_track 
     }
     MHFSCLTR_PRINT("decoder output samplerate %u\n", pTrack->decoder.outputSampleRate);
     mhfs_cl_track_meta_audioinfo_init(&pTrack->meta, totalPCMFrameCount, pTrack->decoder.outputSampleRate, pTrack->decoder.outputChannels, 0);
+    if(on_metablock != NULL)
+    {
+        on_metablock(context, MHFS_CL_TRACK_M_AUDIOINFO, &pTrack->meta);
+    }
 
     if(retval == MHFS_CL_TRACK_SUCCESS)
     {
@@ -851,28 +758,174 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_ma_decoder(mhfs_cl_track 
     return retval;
 }
 
+static inline ma_encoding_format mhfs_cl_track_guess_codec(mhfs_cl_track *pTrack, const uint8_t *id)
+{
+    const size_t namelen = strlen(pTrack->fullfilename);
+    const char *lastFourChars = (namelen >= 4) ? (pTrack->fullfilename + namelen - 4) : "";
+    if(memcmp(id, "fLaC", 4) == 0)
+    {
+        return ma_encoding_format_flac;
+    }
+    else if(memcmp(id, "RIFF", 4) == 0)
+    {
+        return ma_encoding_format_wav;
+    }
+    // fallback, attempt to speed up guesses by mime
+    else if(strcmp(pTrack->mime, "audio/flac") == 0)
+    {
+        return ma_encoding_format_flac;
+    }
+    else if((strcmp(pTrack->mime, "audio/wave") == 0) || (strcmp(pTrack->mime, "audio/wav") == 0))
+    {
+        return ma_encoding_format_wav;
+    }
+    else if(strcmp(pTrack->mime, "audio/mpeg") == 0)
+    {
+        return ma_encoding_format_mp3;
+    }
+    // fallback, fallback attempt to speed up guesses with file extension
+    else if(strcmp(lastFourChars, "flac") == 0)
+    {
+        return ma_encoding_format_flac;
+    }
+    else if(strcmp(lastFourChars, ".wav") == 0)
+    {
+        return ma_encoding_format_wav;
+    }
+    else if(strcmp(lastFourChars, ".mp3") == 0)
+    {
+        return ma_encoding_format_mp3;
+    }
+    else
+    {
+        MHFSCLTR_PRINT("warning: unable to guess format\n");
+        return ma_encoding_format_unknown;
+    }
+}
+
+typedef struct {
+    bool initialized;
+    mhfs_cl_track_error res;
+    uint32_t neededOffset;
+} mhfs_cl_track_io_error;
+
+static inline void mhfs_cl_track_io_error_update(mhfs_cl_track_io_error *ioError, const mhfs_cl_track_error res, const uint32_t neededOffset)
+{
+    if(res != MHFS_CL_TRACK_NEED_MORE_DATA) return;
+    if(!ioError->initialized)
+    {
+        ioError->initialized = true;
+        ioError->res = res;
+        ioError->neededOffset = neededOffset;
+    }
+}
+
 mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock, void *context)
 {
     mhfs_cl_track_return_data rd;
     if(pReturnData == NULL) pReturnData = &rd;
     pTrack->vf.lastdata.code = BLOCKVF_SUCCESS;
 
-    // try loading using our parser(s)
-    if(pTrack->decoderConfig.encodingFormat == ma_encoding_format_flac)
+    // seek past ID3 tags
+    pTrack->vf.fileoffset = 0;
+    const uint8_t *id; //[4];
+    for(;;)
     {
-        const mhfs_cl_track_error retval = mhfs_cl_track_load_metadata_flac(pTrack, pReturnData, on_metablock, context);
-        if((retval == MHFS_CL_TRACK_SUCCESS) || (retval == MHFS_CL_TRACK_NEED_MORE_DATA))
+        id = blockvf_read_view(&pTrack->vf, 4);
+        if(id == NULL)
+        {
+            break;
+        }
+        if(memcmp(id, "ID3", 3) !=  0) break;
+        const uint8_t *header =  blockvf_read_view(&pTrack->vf, 6); //[6]
+        if(header == NULL)
+        {
+            id = NULL;
+            break;
+        }
+        const uint8_t flags = header[1];
+        uint32_t headerSize = unsynchsafe_32((header[2] << 24) | (header[3] << 16) | (header[4] << 8) | (header[0]));
+        if(flags & 0x10)
+        {
+            headerSize += 10;
+        }
+        if(MA_SUCCESS != blockvf_seek(&pTrack->vf, headerSize, ma_seek_origin_current))
+        {
+            id = NULL;
+            break;
+        }
+    }
+    if(id == NULL)
+    {
+        if(!BLOCKVF_OK(&pTrack->vf))
+        {
+            const mhfs_cl_track_error retval = mhfs_cl_track_error_from_blockvf_error(pTrack->vf.lastdata.code);
+            pReturnData->needed_offset = pTrack->vf.lastdata.extradata;
+            MHFSCLTR_PRINT("%s failed: blockvf error\n", __func__);
+            return retval;
+        }
+        return MHFS_CL_TRACK_GENERIC_ERROR;
+    }
+    pTrack->afterID3Offset = pTrack->vf.fileoffset - 4;
+
+    // attempt to guess the codec to determine what codec to try first
+    ma_encoding_format encFmt;
+    if(pTrack->decoderConfig.encodingFormat == ma_encoding_format_unknown)
+    {
+        encFmt = mhfs_cl_track_guess_codec(pTrack, id);
+    }
+    else
+    {
+        encFmt = pTrack->decoderConfig.encodingFormat;
+    }
+    ma_encoding_format tryorder[] = { ma_encoding_format_flac, ma_encoding_format_mp3, ma_encoding_format_wav};
+    const unsigned max_try_count = sizeof(tryorder) / sizeof(tryorder[0]);
+    if(encFmt == ma_encoding_format_mp3)
+    {
+        mhfs_cl_track_swap_tryorder(&tryorder[DAF_MP3], &tryorder[0]);
+    }
+    else if(encFmt == ma_encoding_format_wav)
+    {
+        mhfs_cl_track_swap_tryorder(&tryorder[DAF_WAV], &tryorder[0]);
+    }
+
+    // try the various codecs
+    mhfs_cl_track_io_error ioError = {
+        .initialized = false
+    };
+    for(unsigned i = 0; i < max_try_count; i++)
+    {
+        pTrack->decoderConfig.encodingFormat = tryorder[i];
+        pTrack->vf.fileoffset = pTrack->afterID3Offset;
+
+        // try loading via our methods
+        mhfs_cl_track_return_data temprd;
+        if(pTrack->decoderConfig.encodingFormat == ma_encoding_format_flac)
+        {
+            const mhfs_cl_track_error retval = mhfs_cl_track_load_metadata_flac(pTrack, &temprd, on_metablock, context);
+            if(retval == MHFS_CL_TRACK_SUCCESS)
+            {
+                return retval;
+            }
+            mhfs_cl_track_io_error_update(&ioError, retval, temprd.needed_offset);
+        }
+
+        // try loading via ma_decoder
+        const mhfs_cl_track_error retval = mhfs_cl_track_load_metadata_ma_decoder(pTrack, &temprd, on_metablock, context);
+        if(retval == MHFS_CL_TRACK_SUCCESS)
         {
             return retval;
         }
-
-        pTrack->decoderConfig.encodingFormat = ma_encoding_format_unknown;
+        mhfs_cl_track_io_error_update(&ioError, retval, temprd.needed_offset);
     }
 
-    // fallback to using metadata from decoder
-    const mhfs_cl_track_error retval = mhfs_cl_track_open_ma_decoder(pTrack, pReturnData);
-    if(retval != MHFS_CL_TRACK_SUCCESS) return retval;
-    return mhfs_cl_track_load_metadata_ma_decoder(pTrack, pReturnData);
+    pTrack->decoderConfig.encodingFormat = encFmt;
+    if(ioError.initialized)
+    {
+        pReturnData->needed_offset = ioError.neededOffset;
+        return ioError.res;
+    }
+    return MHFS_CL_TRACK_GENERIC_ERROR;
 }
 
 mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *outFloat, mhfs_cl_track_return_data *pReturnData)
@@ -883,15 +936,15 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
     pTrack->vf.lastdata.code = BLOCKVF_SUCCESS;
 
     // initialize the decoder if necessary
-    if(!pTrack->dec_initialized)
-    {
-        retval = mhfs_cl_track_open_ma_decoder(pTrack, pReturnData);
-        if(retval != MHFS_CL_TRACK_SUCCESS) return retval;
-    }
     if(!pTrack->meta_initialized)
     {
         MHFSCLTR_PRINT("metadata is somehow not ititialized\n");
         return MHFS_CL_TRACK_GENERIC_ERROR;
+    }
+    if(!pTrack->dec_initialized)
+    {
+        retval = mhfs_cl_track_open_ma_decoder(pTrack, &pReturnData->needed_offset);
+        if(retval != MHFS_CL_TRACK_SUCCESS) return retval;
     }
 
     // seek to sample
