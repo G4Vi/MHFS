@@ -14,29 +14,35 @@ typedef enum {
     BLOCKVF_MEM_NEED_MORE = 2
 } blockvf_error;
 
-typedef struct {
-    blockvf_error code;
-    uint32_t extradata;
-} blockvf_last_data;
-
 typedef struct  {
     void *buf;
     unsigned blocksize;
     blockvf_memrange *block;
     unsigned filesize;
     unsigned fileoffset;
-    blockvf_last_data lastdata;
 } blockvf;
 
-#define BLOCKVF_OK(blockvf) ((blockvf)->lastdata.code == BLOCKVF_SUCCESS)
+typedef enum
+{
+    blockvf_seek_origin_start,
+    blockvf_seek_origin_current,
+    blockvf_seek_origin_end
+} blockvf_seek_origin;
 
 unsigned blockvf_sizeof(void);
 void blockvf_init(blockvf *pBlockvf, const unsigned blocksize);
 void *blockvf_add_block(blockvf *pBlockvf, const uint32_t block_start, const unsigned filesize);
-ma_result blockvf_seek(blockvf *pBlockvf, int64_t offset, ma_seek_origin origin);
-ma_result blockvf_read(blockvf *pBlockvf, void* bufferOut, size_t bytesToRead, size_t *bytesRead);
-const uint8_t *blockvf_read_view(blockvf *pBlockvf, const size_t bytesToRead);
+blockvf_error blockvf_seek(blockvf *pBlockvf, int64_t offset, blockvf_seek_origin origin);
+blockvf_error blockvf_read(blockvf *pBlockvf, void* bufferOut, size_t bytesToRead, size_t *bytesRead, uint32_t *pNeededOffset);
+blockvf_error blockvf_read_view(blockvf *pBlockvf, const size_t bytesToRead, const uint8_t **view, uint32_t *pNeededOffset);
 void blockvf_deinit(blockvf *pBlockvf);
+
+typedef struct {
+    blockvf_error code;
+    uint32_t extradata;
+} blockvf_ma_data;
+ma_result blockvf_seek_ma(blockvf *pBlockvf, int64_t offset, ma_seek_origin origin, const blockvf_ma_data *pMAData);
+ma_result blockvf_read_ma(blockvf *pBlockvf, void* bufferOut, size_t bytesToRead, size_t *bytesRead, blockvf_ma_data *pMAData);
 
 #if defined(BLOCKVF_IMPLEMENTATION)
 #ifndef block_vf_c
@@ -156,22 +162,16 @@ void *blockvf_add_block(blockvf *pBlockvf, const uint32_t block_start, const uns
     return ((uint8_t*)(pBlockvf->buf))+block_start;
 }
 
-ma_result blockvf_seek(blockvf *pBlockvf, int64_t offset, ma_seek_origin origin)
+blockvf_error blockvf_seek(blockvf *pBlockvf, int64_t offset, blockvf_seek_origin origin)
 {
-    if(!BLOCKVF_OK(pBlockvf))
+    if(origin == blockvf_seek_origin_end)
     {
-        //BLOCKVF_PRINT("on_seek_mem: already failed, breaking %"PRId64" %u\n", offset, origin);
-        return MA_ERROR;
-    }
-
-    if(origin == ma_seek_origin_end)
-    {
-        BLOCKVF_PRINT("on_seek_mem: ma_seek_origin_end not supported, breaking %"PRId64" %u\n", offset, origin);
-        return MA_ERROR;
+        BLOCKVF_PRINT("blockvf_seek: blockvf_seek_origin_end not supported, breaking %"PRId64" %u\n", offset, origin);
+        return BLOCKVF_GENERIC_ERROR;
     }
 
     unsigned tempoffset = pBlockvf->fileoffset;
-    if(origin == ma_seek_origin_current)
+    if(origin == blockvf_seek_origin_current)
     {
         tempoffset += offset;
     }
@@ -182,24 +182,16 @@ ma_result blockvf_seek(blockvf *pBlockvf, int64_t offset, ma_seek_origin origin)
     if((pBlockvf->filesize != 0) &&  (tempoffset > pBlockvf->filesize))
     {
         BLOCKVF_PRINT("blockvf_seek: seek past end of stream\n");        
-        return MA_ERROR;
+        return BLOCKVF_GENERIC_ERROR;
     }
 
     BLOCKVF_PRINT("blockvf_seek seek update fileoffset %u\n", tempoffset);
     pBlockvf->fileoffset = tempoffset;
-    return MA_SUCCESS;
+    return BLOCKVF_SUCCESS;
 }
 
-// returns false when more data is needed
-ma_result blockvf_read(blockvf *pBlockvf, void* bufferOut, size_t bytesToRead, size_t *bytesRead)
+blockvf_error blockvf_read(blockvf *pBlockvf, void* bufferOut, size_t bytesToRead, size_t *bytesRead, uint32_t *pNeededOffset)
 {
-    if(!BLOCKVF_OK(pBlockvf))
-    {
-        BLOCKVF_PRINT("on_read_mem: already failed\n");
-        *bytesRead = 0;
-        return MA_ERROR;
-    }
-
     if(pBlockvf->filesize > 0)
     {
         // don't allow us to read past EOF
@@ -216,7 +208,7 @@ ma_result blockvf_read(blockvf *pBlockvf, void* bufferOut, size_t bytesToRead, s
     {
         BLOCKVF_PRINT("blockvf_read: reached end of stream\n");
         *bytesRead = 0;        
-        return MA_SUCCESS;
+        return BLOCKVF_SUCCESS;
     }
     
     //  HARD fail, we don't have the needed data
@@ -224,9 +216,8 @@ ma_result blockvf_read(blockvf *pBlockvf, void* bufferOut, size_t bytesToRead, s
     if(!blockvf_has_bytes(pBlockvf, bytesToRead, &needed))
     {
         *bytesRead = 0;
-        pBlockvf->lastdata.code = BLOCKVF_MEM_NEED_MORE;
-        pBlockvf->lastdata.extradata = needed;
-        return MA_ERROR;
+        *pNeededOffset = needed;
+        return BLOCKVF_MEM_NEED_MORE;
     }
     
     // finally copy the data
@@ -237,11 +228,11 @@ ma_result blockvf_read(blockvf *pBlockvf, void* bufferOut, size_t bytesToRead, s
     memcpy(bufferOut, src, bytesToRead);
     pBlockvf->fileoffset += bytesToRead;
     *bytesRead = bytesToRead;
-    return MA_SUCCESS;
+    return BLOCKVF_SUCCESS;
 }
 
 // Zero copy blockvf access
-const uint8_t *blockvf_read_view(blockvf *pBlockvf, const size_t bytesToRead)
+blockvf_error blockvf_read_view(blockvf *pBlockvf, const size_t bytesToRead, const uint8_t **view, uint32_t *pNeededOffset)
 {
     if(pBlockvf->filesize > 0)
     {
@@ -250,7 +241,7 @@ const uint8_t *blockvf_read_view(blockvf *pBlockvf, const size_t bytesToRead)
         if(endoffset > pBlockvf->filesize)
         {
             BLOCKVF_PRINT("blockvf_read_view: file is too small\n");
-            return NULL;
+            return BLOCKVF_GENERIC_ERROR;
         }
     }
 
@@ -262,14 +253,14 @@ const uint8_t *blockvf_read_view(blockvf *pBlockvf, const size_t bytesToRead)
     //  HARD fail, we don't have the needed data
     else if(!blockvf_has_bytes(pBlockvf, bytesToRead, &needed))
     {
-        pBlockvf->lastdata.code = BLOCKVF_MEM_NEED_MORE;
-        pBlockvf->lastdata.extradata = needed;
-        return NULL;
+        *pNeededOffset = needed;
+        return BLOCKVF_MEM_NEED_MORE;
     }
 
     const unsigned before_offset = pBlockvf->fileoffset;
     pBlockvf->fileoffset += bytesToRead;
-    return ((uint8_t*)(pBlockvf->buf)) + before_offset;
+    *view = ((uint8_t*)(pBlockvf->buf)) + before_offset;
+    return BLOCKVF_SUCCESS;
 }
 
 void blockvf_deinit(blockvf *pBlockvf)
@@ -283,7 +274,68 @@ void blockvf_deinit(blockvf *pBlockvf)
     if(pBlockvf->buf != NULL) free(pBlockvf->buf);
 }
 
+// miniaudio wrappers
+ma_result blockvf_seek_ma(blockvf *pBlockvf, int64_t offset, ma_seek_origin origin, const blockvf_ma_data *pMAData)
+{
+    if(pMAData->code != BLOCKVF_SUCCESS)
+    {
+        //BLOCKVF_PRINT("on_seek_mem: already failed, breaking %"PRId64" %u\n", offset, origin);
+        return MA_ERROR;
+    }
 
+    blockvf_seek_origin bvf_origin;
+    switch(origin)
+    {
+        case ma_seek_origin_start:
+        bvf_origin = blockvf_seek_origin_start;
+        break;
+        case ma_seek_origin_current:
+        bvf_origin = blockvf_seek_origin_current;
+        break;
+        case ma_seek_origin_end:
+        bvf_origin = blockvf_seek_origin_end;
+        break;
+        default:
+        BLOCKVF_PRINT("unknown origin: %"PRId64" %u\n", offset, origin);
+        return MA_ERROR;
+        break;
+    }
+
+    const blockvf_error seekres = blockvf_seek(pBlockvf, offset, bvf_origin);
+    switch(seekres) {
+        case BLOCKVF_SUCCESS:
+        return MA_SUCCESS;
+        break;
+        case BLOCKVF_GENERIC_ERROR:
+        default:
+        return MA_ERROR;
+        break;
+    }
+}
+
+ma_result blockvf_read_ma(blockvf *pBlockvf, void* bufferOut, size_t bytesToRead, size_t *bytesRead, blockvf_ma_data *pMAData)
+{
+    if(pMAData->code != BLOCKVF_SUCCESS)
+    {
+        BLOCKVF_PRINT("on_read_mem: already failed\n");
+        *bytesRead = 0;
+        return MA_ERROR;
+    }
+
+    const blockvf_error bvfError = blockvf_read(pBlockvf, bufferOut, bytesToRead, bytesRead, &pMAData->extradata);
+    switch(bvfError)
+    {
+        case BLOCKVF_SUCCESS:
+        return MA_SUCCESS;
+        break;
+        case BLOCKVF_MEM_NEED_MORE:
+        pMAData->code = BLOCKVF_MEM_NEED_MORE;
+        case BLOCKVF_GENERIC_ERROR:
+        default:
+        return MA_ERROR;
+        break;
+    }
+}
 
 #endif  /* block_vf_c */
 #endif  /* BLOCKVF_IMPLEMENTATION */
