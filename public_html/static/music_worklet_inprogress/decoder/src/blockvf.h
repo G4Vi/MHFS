@@ -37,13 +37,6 @@ blockvf_error blockvf_read(blockvf *pBlockvf, void* bufferOut, size_t bytesToRea
 blockvf_error blockvf_read_view(blockvf *pBlockvf, const size_t bytesToRead, const uint8_t **view, uint32_t *pNeededOffset);
 void blockvf_deinit(blockvf *pBlockvf);
 
-typedef struct {
-    blockvf_error code;
-    uint32_t extradata;
-} blockvf_ma_data;
-ma_result blockvf_seek_ma(blockvf *pBlockvf, int64_t offset, ma_seek_origin origin, const blockvf_ma_data *pMAData);
-ma_result blockvf_read_ma(blockvf *pBlockvf, void* bufferOut, size_t bytesToRead, size_t *bytesRead, blockvf_ma_data *pMAData);
-
 #if defined(BLOCKVF_IMPLEMENTATION)
 #ifndef block_vf_c
 #define block_vf_c
@@ -272,69 +265,6 @@ void blockvf_deinit(blockvf *pBlockvf)
         block = nextblock;
     }
     if(pBlockvf->buf != NULL) free(pBlockvf->buf);
-}
-
-// miniaudio wrappers
-ma_result blockvf_seek_ma(blockvf *pBlockvf, int64_t offset, ma_seek_origin origin, const blockvf_ma_data *pMAData)
-{
-    if(pMAData->code != BLOCKVF_SUCCESS)
-    {
-        //BLOCKVF_PRINT("on_seek_mem: already failed, breaking %"PRId64" %u\n", offset, origin);
-        return MA_ERROR;
-    }
-
-    blockvf_seek_origin bvf_origin;
-    switch(origin)
-    {
-        case ma_seek_origin_start:
-        bvf_origin = blockvf_seek_origin_start;
-        break;
-        case ma_seek_origin_current:
-        bvf_origin = blockvf_seek_origin_current;
-        break;
-        case ma_seek_origin_end:
-        bvf_origin = blockvf_seek_origin_end;
-        break;
-        default:
-        BLOCKVF_PRINT("unknown origin: %"PRId64" %u\n", offset, origin);
-        return MA_ERROR;
-        break;
-    }
-
-    const blockvf_error seekres = blockvf_seek(pBlockvf, offset, bvf_origin);
-    switch(seekres) {
-        case BLOCKVF_SUCCESS:
-        return MA_SUCCESS;
-        break;
-        case BLOCKVF_GENERIC_ERROR:
-        default:
-        return MA_ERROR;
-        break;
-    }
-}
-
-ma_result blockvf_read_ma(blockvf *pBlockvf, void* bufferOut, size_t bytesToRead, size_t *bytesRead, blockvf_ma_data *pMAData)
-{
-    if(pMAData->code != BLOCKVF_SUCCESS)
-    {
-        BLOCKVF_PRINT("on_read_mem: already failed\n");
-        *bytesRead = 0;
-        return MA_ERROR;
-    }
-
-    const blockvf_error bvfError = blockvf_read(pBlockvf, bufferOut, bytesToRead, bytesRead, &pMAData->extradata);
-    switch(bvfError)
-    {
-        case BLOCKVF_SUCCESS:
-        return MA_SUCCESS;
-        break;
-        case BLOCKVF_MEM_NEED_MORE:
-        pMAData->code = BLOCKVF_MEM_NEED_MORE;
-        case BLOCKVF_GENERIC_ERROR:
-        default:
-        return MA_ERROR;
-        break;
-    }
 }
 
 #endif  /* block_vf_c */

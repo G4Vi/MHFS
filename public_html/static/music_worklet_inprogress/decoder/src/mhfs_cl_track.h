@@ -49,6 +49,11 @@ typedef struct {
 } mhfs_cl_track_allocs;
 
 typedef struct {
+    blockvf_error code;
+    uint32_t extradata;
+} mhfs_cl_track_blockvf_data;
+
+typedef struct {
     // for backup and restore
     ma_decoder backupDecoder;
     unsigned backupFileOffset;
@@ -58,7 +63,7 @@ typedef struct {
     ma_decoder decoder;
     bool dec_initialized;
     blockvf vf;
-    blockvf_ma_data vfData;
+    mhfs_cl_track_blockvf_data vfData;
     mhfs_cl_track_meta_audioinfo meta;
     unsigned afterID3Offset;
     bool meta_initialized;
@@ -248,7 +253,7 @@ static void mhfs_cl_track_meta_audioinfo_init(mhfs_cl_track_meta_audioinfo *pMet
     pMetadata->bitsPerSample = bitsPerSample;
 }
 
-static mhfs_cl_track_error mhfs_cl_track_error_from_blockvf_error(const blockvf_error bvferr)
+static inline mhfs_cl_track_error mhfs_cl_track_error_from_blockvf_error(const blockvf_error bvferr)
 {
     switch(bvferr)
     {
@@ -264,16 +269,67 @@ static mhfs_cl_track_error mhfs_cl_track_error_from_blockvf_error(const blockvf_
     }
 }
 
+static inline ma_result mhfs_cl_track_blockvf_error_to_ma_result(const blockvf_error bvfError, mhfs_cl_track_blockvf_data *pData)
+{
+    switch(bvfError)
+    {
+        case BLOCKVF_SUCCESS:
+        return MA_SUCCESS;
+        break;
+        case BLOCKVF_MEM_NEED_MORE:
+        pData->code = BLOCKVF_MEM_NEED_MORE;
+        case BLOCKVF_GENERIC_ERROR:
+        default:
+        return MA_ERROR;
+        break;
+    }
+}
+
 static ma_result mhfs_cl_track_on_seek_ma_decoder(ma_decoder *pDecoder, int64_t offset, ma_seek_origin origin)
 {
     mhfs_cl_track *pTrack = (mhfs_cl_track *)pDecoder->pUserData;
-    return blockvf_seek_ma(&pTrack->vf, offset, origin, &pTrack->vfData);
+    // for whatever reason miniaudio tries over an over again, check for repeat failures and error
+    if(pTrack->vfData.code != BLOCKVF_SUCCESS)
+    {
+        //BLOCKVF_PRINT("on_seek_mem: already failed, breaking %"PRId64" %u\n", offset, origin);
+        return MA_ERROR;
+    }
+
+    blockvf_seek_origin bvf_origin;
+    switch(origin)
+    {
+        case ma_seek_origin_start:
+        bvf_origin = blockvf_seek_origin_start;
+        break;
+        case ma_seek_origin_current:
+        bvf_origin = blockvf_seek_origin_current;
+        break;
+        case ma_seek_origin_end:
+        bvf_origin = blockvf_seek_origin_end;
+        break;
+        default:
+        BLOCKVF_PRINT("unknown origin: %"PRId64" %u\n", offset, origin);
+        return MA_ERROR;
+        break;
+    }
+
+    const blockvf_error seekres = blockvf_seek(&pTrack->vf, offset, bvf_origin);
+    return mhfs_cl_track_blockvf_error_to_ma_result(seekres, &pTrack->vfData);
 }
 
 static ma_result mhfs_cl_track_on_read_ma_decoder(ma_decoder *pDecoder, void* bufferOut, size_t bytesToRead, size_t *bytesRead)
 {
     mhfs_cl_track *pTrack = (mhfs_cl_track *)pDecoder->pUserData;
-    return blockvf_read_ma(&pTrack->vf, bufferOut, bytesToRead, bytesRead, &pTrack->vfData);
+    // for whatever reason miniaudio tries over an over again, check for repeat failures and error
+    if(pTrack->vfData.code != BLOCKVF_SUCCESS)
+    {
+        BLOCKVF_PRINT("on_read_mem: already failed\n");
+        *bytesRead = 0;
+        return MA_ERROR;
+    }
+
+    const blockvf_error bvfError = blockvf_read(&pTrack->vf, bufferOut, bytesToRead, bytesRead, &pTrack->vfData.extradata);
+    return mhfs_cl_track_blockvf_error_to_ma_result(bvfError, &pTrack->vfData);
 }
 
 uint64_t mhfs_cl_track_meta_audioinfo_totalPCMFrameCount(const mhfs_cl_track_meta_audioinfo *pInfo)
