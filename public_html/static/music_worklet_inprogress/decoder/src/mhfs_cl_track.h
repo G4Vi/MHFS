@@ -758,6 +758,146 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrac
     return MHFS_CL_TRACK_SUCCESS;
 }
 
+typedef enum {
+    MCT_MVER_TWOPOINTFIVE = 0x0,
+    MCT_MVER_RESERVED     = 0x1,
+    MCT_MVER_TWO          = 0x2,
+    MCT_MVER_ONE          = 0x3
+} mhfs_cl_track_mpeg_version;
+
+typedef enum {
+    MCT_MLAYER_RESERVED = 0x0,
+    MCT_MLAYER_3        = 0x1,
+    MCT_MLAYER_2        = 0x2,
+    MCT_MLAYER_1        = 0x3
+} mhfs_cl_track_mpeg_layer;
+
+static mhfs_cl_track_error mhfs_cl_track_load_metadata_mp3(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock, void *context)
+{
+    // check for magic
+    const uint8_t *id;
+    const blockvf_error idError = blockvf_read_view(&pTrack->vf, 4, &id, &pReturnData->needed_offset);
+    if(idError != BLOCKVF_SUCCESS)
+    {
+        return mhfs_cl_track_error_from_blockvf_error(idError);
+    }
+    const uint32_t uMagic = unaligned_beu32_to_native(id);
+    // sync
+    if((uMagic & 0xFFE00000) != 0xFFE00000)
+    {
+        return MHFS_CL_TRACK_GENERIC_ERROR;
+    }
+    // version
+    const unsigned version = (uMagic & 0x00180000) >> 19;
+    if(version == MCT_MVER_RESERVED)
+    {
+        return MHFS_CL_TRACK_GENERIC_ERROR;
+    }
+    // layer
+    const unsigned layer = (uMagic & 0x00060000) >> 17;
+    if(layer == MCT_MLAYER_RESERVED)
+    {
+        return MHFS_CL_TRACK_GENERIC_ERROR;
+    }
+    // crc
+    const unsigned crc = (uMagic & 0x00010000) >> 16;
+    (void)crc;
+    // bitrate index
+    const unsigned bitrateindex = (uMagic & 0x0000F000) >> 12;
+    MHFSCLTR_PRINT("birateindex %u\n", bitrateindex);
+    if(bitrateindex == 0xF)
+    {
+        return MHFS_CL_TRACK_GENERIC_ERROR;
+    }
+    // samplerate index
+    const unsigned samplerateindex = (uMagic & 0x00000C00) >> 10;
+    MHFSCLTR_PRINT("samplerateindex %u\n", samplerateindex);
+    if(samplerateindex == 0x3)
+    {
+        return MHFS_CL_TRACK_GENERIC_ERROR;
+    }
+    unsigned sampleRate;
+    if(version == MCT_MVER_ONE)
+    {
+        sampleRate = (samplerateindex == 0x0) ? 44100 : (samplerateindex == 0x1) ? 48000 : 32000;
+    }
+    else if(version == MCT_MVER_TWO)
+    {
+        sampleRate = (samplerateindex == 0x0) ? 22050 : (samplerateindex == 0x1) ? 24000 : 16000;
+    }
+    else if(version == MCT_MVER_TWOPOINTFIVE)
+    {
+        sampleRate = (samplerateindex == 0x0) ? 11025 : (samplerateindex == 0x1) ? 12000 : 8000;
+    }
+    else
+    {
+        return MHFS_CL_TRACK_GENERIC_ERROR;
+    }
+
+    //padding and priv -- not read
+    //channel mode
+    const unsigned channelmode = (uMagic & 0x000000C0) >> 6;
+    MHFSCLTR_PRINT("channel mode %u\n", channelmode);
+    const unsigned channels = (channelmode == 3) ? 1 : 2;
+
+    unsigned expectedXing = (channels == 2) ? 32 : 17;
+    expectedXing += (!crc);
+    MHFSCLTR_PRINT("Expecting xing %u bytes after mpeg header\n", expectedXing);
+    const blockvf_error skipblockError = blockvf_seek(&pTrack->vf, expectedXing, blockvf_seek_origin_current);
+    if(skipblockError != BLOCKVF_SUCCESS)
+    {
+        MHFSCLTR_PRINT("Stopping metadata parsing, blockvf error\n");
+        return mhfs_cl_track_error_from_blockvf_error(skipblockError);
+    }
+    // check for xing/VBR magic
+    const uint8_t *xing;
+    const blockvf_error xingError = blockvf_read_view(&pTrack->vf, 4, &xing, &pReturnData->needed_offset);
+    if(xingError != BLOCKVF_SUCCESS)
+    {
+        return mhfs_cl_track_error_from_blockvf_error(xingError);
+    }
+    MHFSCLTR_PRINT("xing/vbr magic %c %c %c %c | %x %x %x %x\n", xing[0], xing[1], xing[2], xing[3], xing[0], xing[1], xing[2], xing[3]);
+    if( (memcmp(xing, "Xing", 4) != 0) && (memcmp(xing, "Info", 4) != 0))
+    {
+        if((memcmp(xing, "ng\0\0", 4) != 0) && (memcmp(xing, "fo\0\0", 4) != 0))
+        {
+            MHFSCLTR_PRINT("No Xing magic\n");
+            return MHFS_CL_TRACK_GENERIC_ERROR;
+        }
+        pTrack->vf.fileoffset -= 2;
+    }
+    const uint8_t *flagsBytes;
+    const blockvf_error xingFlagsError = blockvf_read_view(&pTrack->vf, 4, &flagsBytes, &pReturnData->needed_offset);
+    if(xingFlagsError != BLOCKVF_SUCCESS)
+    {
+        return mhfs_cl_track_error_from_blockvf_error(xingFlagsError);
+    }
+    const uint32_t xingFlags = unaligned_beu32_to_native(flagsBytes);
+    if(xingFlags & 0x1)
+    {
+        const uint8_t *framesBytes;
+        const blockvf_error framesError = blockvf_read_view(&pTrack->vf, 4, &framesBytes, &pReturnData->needed_offset);
+        if(framesError != BLOCKVF_SUCCESS)
+        {
+            return mhfs_cl_track_error_from_blockvf_error(framesError);
+        }
+        const uint32_t frames = unaligned_beu32_to_native(framesBytes);
+        MHFSCLTR_PRINT("xing frames %u\n", frames);
+        // FIX ME FIX ME we add 1 to mp3frames because the decoder will currently (foolishly) decode the xing mp3frame
+        mhfs_cl_track_meta_audioinfo_init(&pTrack->meta, (frames + 1) * 1152, sampleRate, channels, 0);
+        if(on_metablock != NULL)
+        {
+            on_metablock(context, MHFS_CL_TRACK_M_AUDIOINFO, &pTrack->meta);
+        }
+        pTrack->meta_initialized = true;
+        return MHFS_CL_TRACK_SUCCESS;
+    }
+
+    return MHFS_CL_TRACK_GENERIC_ERROR;
+}
+
+
+
 static inline void mhfs_cl_track_blockvf_ma_decoder_call_before(mhfs_cl_track *pTrack, const bool bSaveDecoder)
 {
     pTrack->vfData.code = BLOCKVF_SUCCESS;
@@ -834,6 +974,7 @@ static inline ma_encoding_format mhfs_cl_track_guess_codec(mhfs_cl_track *pTrack
 {
     const size_t namelen = strlen(pTrack->fullfilename);
     const char *lastFourChars = (namelen >= 4) ? (pTrack->fullfilename + namelen - 4) : "";
+    const uint32_t uMagic = unaligned_beu32_to_native(id);
     if(memcmp(id, "fLaC", 4) == 0)
     {
         return ma_encoding_format_flac;
@@ -841,6 +982,12 @@ static inline ma_encoding_format mhfs_cl_track_guess_codec(mhfs_cl_track *pTrack
     else if(memcmp(id, "RIFF", 4) == 0)
     {
         return ma_encoding_format_wav;
+    }
+    // check mpeg sync and verify the audio version id isn't reserved
+    else if(((uMagic & 0xFFE00000) == 0xFFE00000) && ((uMagic & 0x00180000) != 0x80000))
+    {
+        MHFSCLTR_PRINT("ismp3\n");
+        return ma_encoding_format_mp3;
     }
     // fallback, attempt to speed up guesses by mime
     else if(strcmp(pTrack->mime, "audio/flac") == 0)
@@ -962,6 +1109,15 @@ mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_t
         if(pTrack->decoderConfig.encodingFormat == ma_encoding_format_flac)
         {
             const mhfs_cl_track_error retval = mhfs_cl_track_load_metadata_flac(pTrack, &temprd, on_metablock, context);
+            if(retval == MHFS_CL_TRACK_SUCCESS)
+            {
+                return retval;
+            }
+            mhfs_cl_track_io_error_update(&ioError, retval, temprd.needed_offset);
+        }
+        else if(pTrack->decoderConfig.encodingFormat == ma_encoding_format_mp3)
+        {
+            const mhfs_cl_track_error retval = mhfs_cl_track_load_metadata_mp3(pTrack, &temprd, on_metablock, context);
             if(retval == MHFS_CL_TRACK_SUCCESS)
             {
                 return retval;

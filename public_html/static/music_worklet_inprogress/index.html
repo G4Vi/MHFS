@@ -191,7 +191,7 @@
 
         const dlcell = document.createElement(ti);
         const dllink = dlcell.appendChild(document.createElement('a'));
-        dllink.href = DB2HTMLURL(currentPath+node.name);
+        dllink.href = DB2HTMLURL(currentPath ? (currentPath +'/'+node.name) : node.name);
         dllink.textContent = 'DL';
 
         let tablerow = document.createElement("tr");
