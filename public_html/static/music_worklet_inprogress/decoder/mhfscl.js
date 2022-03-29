@@ -267,9 +267,10 @@ const MHFSCLTrackOnMeta = function(mhfscltrackid, blockType, pBlock) {
     if(blockType === MHFSCL.TRACK_M_AUDIOINFO) {
         mhfscltrack.totalPCMFrameCount = MHFSCL.mhfs_cl_track_meta_audioinfo_totalPCMFrameCount(pBlock);
         mhfscltrack.sampleRate = MHFSCL.mhfs_cl_track_meta_audioinfo_sampleRate(pBlock);
-        mhfscltrack.bitsPerSample = MHFSCL.mhfs_cl_track_meta_audioinfo_bitsPerSample(pBlock);
         mhfscltrack.channels = MHFSCL.mhfs_cl_track_meta_audioinfo_channels(pBlock);
         mhfscltrack.duration = MHFSCL.mhfs_cl_track_meta_audioinfo_durationInSecs(pBlock);
+        mhfscltrack.fields = MHFSCL.mhfs_cl_track_meta_audioinfo_fields(pBlock);
+        mhfscltrack.bitsPerSample = MHFSCL.mhfs_cl_track_meta_audioinfo_bitsPerSample(pBlock);
     }
     else if(blockType == MHFSCL.TRACK_M_TAGS) {
         mhfscltrack.tags = {};
@@ -671,6 +672,17 @@ Module().then(function(MHFSCLMod){
     MHFSCL.mhfs_cl_djb2 = MHFSCLMod.cwrap('mhfs_cl_djb2', "number", ["number", "number"]);
 
     // mhfs_cl_track* constants
+    MHFSCL.ValueInfo = MHFSCLMod.cwrap('ValueInfo', "number", ["number", "number"]);
+    let mainindex = 0;
+    while(1) {
+        const ValueType = MHFSCL.ValueInfo(mainindex, 0);
+        if(ValueType == 0) break;
+        if(ValueType == 1) {
+            MHFSCL[MHFSCL.Module.UTF8ToString(MHFSCL.ValueInfo(mainindex, 1))] = MHFSCL.ValueInfo(mainindex, 2);
+        }
+        mainindex++;
+    }
+
     MHFSCL.mhfs_cl_track_return_data_sizeof = MHFSCLMod.ccall('mhfs_cl_track_return_data_sizeof', "number");
     if(MHFSCL.mhfs_cl_track_return_data_sizeof !== 4) {
         throw("Must update usage of MHFSCL.UINT32Value, unexpected MHFSCL.mhfs_cl_track_return_data_sizeof value");
@@ -689,8 +701,10 @@ Module().then(function(MHFSCLMod){
 
     MHFSCL.mhfs_cl_track_meta_audioinfo_totalPCMFrameCount = MHFSCLMod.cwrap('mhfs_cl_track_meta_audioinfo_totalPCMFrameCount', "number", ["number"]);
     MHFSCL.mhfs_cl_track_meta_audioinfo_sampleRate = MHFSCLMod.cwrap('mhfs_cl_track_meta_audioinfo_sampleRate', "number", ["number"]);
-    MHFSCL.mhfs_cl_track_meta_audioinfo_bitsPerSample = MHFSCLMod.cwrap('mhfs_cl_track_meta_audioinfo_bitsPerSample', "number", ["number"]);
     MHFSCL.mhfs_cl_track_meta_audioinfo_channels = MHFSCLMod.cwrap('mhfs_cl_track_meta_audioinfo_channels', "number", ["number"]);
+    MHFSCL.mhfs_cl_track_meta_audioinfo_fields = MHFSCLMod.cwrap('mhfs_cl_track_meta_audioinfo_fields', "number", ["number"]);
+    MHFSCL.mhfs_cl_track_meta_audioinfo_bitsPerSample = MHFSCLMod.cwrap('mhfs_cl_track_meta_audioinfo_bitsPerSample', "number", ["number"]);
+    MHFSCL.mhfs_cl_track_meta_audioinfo_bitrate = MHFSCLMod.cwrap('mhfs_cl_track_meta_audioinfo_bitrate', "number", ["number"]);
 
     MHFSCL.mhfs_cl_track_meta_tags_comment_size = MHFSCLMod.cwrap('mhfs_cl_track_meta_tags_comment_size', "number", ["number"]);
     MHFSCL.mhfs_cl_track_meta_tags_comment_data = MHFSCLMod.cwrap('mhfs_cl_track_meta_tags_comment_data', "number", ["number"]);

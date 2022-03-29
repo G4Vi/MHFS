@@ -10,9 +10,17 @@ typedef enum {
     MHFS_CL_TRACK_M_PICTURE = 2
 } mhfs_cl_track_meta;
 
+typedef enum {
+    MCT_MAI_FLD_EMPTY         = 0,
+    MCT_MAI_FLD_BITSPERSAMPLE = 1 << 0,
+    MCT_MAI_FLD_BITRATE       = 1 << 1
+} mhfs_cl_track_meta_audioinfo_field;
+
 typedef struct {
     uint64_t totalPCMFrameCount;
     uint32_t sampleRate;
+    mhfs_cl_track_meta_audioinfo_field fields;
+    uint16_t bitrate;
     uint8_t channels;
     uint8_t bitsPerSample;
 } mhfs_cl_track_meta_audioinfo;
@@ -104,6 +112,8 @@ LIBEXPORT const mhfs_cl_track_meta_tags_comment *mhfs_cl_track_meta_tags_next_co
 LIBEXPORT unsigned long mhfs_cl_djb2(const uint8_t *pData, const size_t dataLen);
 
 // For JS convenience constants ...
+LIBEXPORT uint64_t ValueInfo(const uint32_t itemIndex, const uint32_t subItemIndex);
+
 LIBEXPORT uint32_t mhfs_cl_track_return_data_sizeof(void);
 LIBEXPORT uint32_t mhfs_cl_track_sizeof(void);
 LIBEXPORT uint32_t MHFS_CL_TRACK_SUCCESS_func(void);
@@ -119,8 +129,10 @@ LIBEXPORT uint64_t mhfs_cl_track_currentFrame(const mhfs_cl_track *pTrack);
 
 LIBEXPORT uint64_t mhfs_cl_track_meta_audioinfo_totalPCMFrameCount(const mhfs_cl_track_meta_audioinfo *pInfo);
 LIBEXPORT uint32_t mhfs_cl_track_meta_audioinfo_sampleRate(const mhfs_cl_track_meta_audioinfo *pInfo);
-LIBEXPORT uint8_t mhfs_cl_track_meta_audioinfo_bitsPerSample(const mhfs_cl_track_meta_audioinfo *pInfo);
 LIBEXPORT uint8_t mhfs_cl_track_meta_audioinfo_channels(const mhfs_cl_track_meta_audioinfo *pInfo);
+LIBEXPORT uint32_t mhfs_cl_track_meta_audioinfo_fields(const mhfs_cl_track_meta_audioinfo *pInfo);
+LIBEXPORT uint8_t mhfs_cl_track_meta_audioinfo_bitsPerSample(const mhfs_cl_track_meta_audioinfo *pInfo);
+LIBEXPORT uint16_t mhfs_cl_track_meta_audioinfo_bitrate(const mhfs_cl_track_meta_audioinfo *pInfo);
 
 LIBEXPORT uint32_t mhfs_cl_track_meta_tags_comment_size(const mhfs_cl_track_meta_tags_comment*);
 LIBEXPORT const uint8_t *mhfs_cl_track_meta_tags_comment_data(const mhfs_cl_track_meta_tags_comment*);
@@ -173,6 +185,41 @@ uint32_t MHFS_CL_TRACK_M_TAGS_func(void)
 uint32_t MHFS_CL_TRACK_M_PICTURE_func(void)
 {
     return MHFS_CL_TRACK_M_PICTURE;
+}
+
+typedef enum {
+    MCT_VT_CONST_IV = 1,
+    MCT_VT_CONST_CSTRING = 2,
+    MCT_VT_ST = 2
+} MCT_ValueType;
+
+#define MCT_VT_DECLARE_CONST(XTYPE, X) \
+do {\
+switch(subItemIndex) {\
+case 0: \
+return XTYPE; \
+break; \
+case 1: \
+return (uint64_t)#X; \
+break; \
+case 2: \
+return X; \
+break; \
+} \
+} while(0)
+
+uint64_t ValueInfo(const uint32_t itemIndex, const uint32_t subItemIndex)
+{
+    switch(itemIndex)
+    {
+        case 0:
+        MCT_VT_DECLARE_CONST(MCT_VT_CONST_IV, MCT_MAI_FLD_BITSPERSAMPLE);
+        break;
+        case 1:
+        MCT_VT_DECLARE_CONST(MCT_VT_CONST_IV, MCT_MAI_FLD_BITRATE);
+        break;
+    }
+    return 0;
 }
 
 uint32_t mhfs_cl_track_meta_tags_comment_size(const mhfs_cl_track_meta_tags_comment *pComment)
@@ -350,6 +397,16 @@ uint8_t mhfs_cl_track_meta_audioinfo_bitsPerSample(const mhfs_cl_track_meta_audi
 uint8_t mhfs_cl_track_meta_audioinfo_channels(const mhfs_cl_track_meta_audioinfo *pInfo)
 {
     return pInfo->channels;
+}
+
+uint32_t mhfs_cl_track_meta_audioinfo_fields(const mhfs_cl_track_meta_audioinfo *pInfo)
+{
+    return pInfo->fields;
+}
+
+uint16_t mhfs_cl_track_meta_audioinfo_bitrate(const mhfs_cl_track_meta_audioinfo *pInfo)
+{
+    return pInfo->bitrate;
 }
 
 // round up to nearest multiple of 8
@@ -809,6 +866,12 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_mp3(mhfs_cl_track *pTrack
     {
         return MHFS_CL_TRACK_GENERIC_ERROR;
     }
+    static const uint8_t halfrate[2][3][15] = {
+        { { 0,4,8,12,16,20,24,28,32,40,48,56,64,72,80 }, { 0,4,8,12,16,20,24,28,32,40,48,56,64,72,80 }, { 0,16,24,28,32,40,48,56,64,72,80,88,96,112,128 } },
+        { { 0,16,20,24,28,32,40,48,56,64,80,96,112,128,160 }, { 0,16,24,28,32,40,48,56,64,80,96,112,128,160,192 }, { 0,16,32,48,64,80,96,112,128,144,160,176,192,208,224 } },
+    };
+    const unsigned bitrate = 2*halfrate[!!(version & 0x1)][layer - 1][bitrateindex];
+    MHFSCLTR_PRINT("bitrate %u\n", bitrate);
     // samplerate index
     const unsigned samplerateindex = (uMagic & 0x00000C00) >> 10;
     MHFSCLTR_PRINT("samplerateindex %u\n", samplerateindex);
@@ -816,24 +879,8 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_mp3(mhfs_cl_track *pTrack
     {
         return MHFS_CL_TRACK_GENERIC_ERROR;
     }
-    unsigned sampleRate;
-    if(version == MCT_MVER_ONE)
-    {
-        sampleRate = (samplerateindex == 0x0) ? 44100 : (samplerateindex == 0x1) ? 48000 : 32000;
-    }
-    else if(version == MCT_MVER_TWO)
-    {
-        sampleRate = (samplerateindex == 0x0) ? 22050 : (samplerateindex == 0x1) ? 24000 : 16000;
-    }
-    else if(version == MCT_MVER_TWOPOINTFIVE)
-    {
-        sampleRate = (samplerateindex == 0x0) ? 11025 : (samplerateindex == 0x1) ? 12000 : 8000;
-    }
-    else
-    {
-        return MHFS_CL_TRACK_GENERIC_ERROR;
-    }
-
+    static const unsigned g_hz[3] = { 44100, 48000, 32000 };
+    const unsigned sampleRate = g_hz[samplerateindex] >> (int)!(version & 0x1) >> (int)!(version & 0x2);
     //padding and priv -- not read
     //channel mode
     const unsigned channelmode = (uMagic & 0x000000C0) >> 6;
@@ -859,6 +906,7 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_mp3(mhfs_cl_track *pTrack
     MHFSCLTR_PRINT("xing/vbr magic %c %c %c %c | %x %x %x %x\n", xing[0], xing[1], xing[2], xing[3], xing[0], xing[1], xing[2], xing[3]);
     if( (memcmp(xing, "Xing", 4) != 0) && (memcmp(xing, "Info", 4) != 0))
     {
+        // Xing tag may be misplaced when CRC protection is enabled, check for that and zeroed flag fields
         if((memcmp(xing, "ng\0\0", 4) != 0) && (memcmp(xing, "fo\0\0", 4) != 0))
         {
             MHFSCLTR_PRINT("No Xing magic\n");
@@ -975,6 +1023,7 @@ static inline ma_encoding_format mhfs_cl_track_guess_codec(mhfs_cl_track *pTrack
     const size_t namelen = strlen(pTrack->fullfilename);
     const char *lastFourChars = (namelen >= 4) ? (pTrack->fullfilename + namelen - 4) : "";
     const uint32_t uMagic = unaligned_beu32_to_native(id);
+    MHFSCLTR_PRINT("uMagic %X %X %X %X @ 0x%X\n", id[0], id[1], id[2], id[3], pTrack->vf.fileoffset-4);
     if(memcmp(id, "fLaC", 4) == 0)
     {
         return ma_encoding_format_flac;
@@ -986,7 +1035,6 @@ static inline ma_encoding_format mhfs_cl_track_guess_codec(mhfs_cl_track *pTrack
     // check mpeg sync and verify the audio version id isn't reserved
     else if(((uMagic & 0xFFE00000) == 0xFFE00000) && ((uMagic & 0x00180000) != 0x80000))
     {
-        MHFSCLTR_PRINT("ismp3\n");
         return ma_encoding_format_mp3;
     }
     // fallback, attempt to speed up guesses by mime
@@ -1062,7 +1110,7 @@ mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_t
             return mhfs_cl_track_error_from_blockvf_error(headerError);
         }
         const uint8_t flags = header[1];
-        uint32_t headerSize = unsynchsafe_32((header[2] << 24) | (header[3] << 16) | (header[4] << 8) | (header[0]));
+        uint32_t headerSize = unsynchsafe_32((header[2] << 24) | (header[3] << 16) | (header[4] << 8) | (header[5]));
         if(flags & 0x10)
         {
             headerSize += 10;
