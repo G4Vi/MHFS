@@ -265,12 +265,19 @@ const MHFSCLObjectMap = ObjectMap();
 const MHFSCLTrackOnMeta = function(mhfscltrackid, blockType, pBlock) {
     const mhfscltrack = MHFSCLObjectMap.getData(mhfscltrackid);
     if(blockType === MHFSCL.TRACK_M_AUDIOINFO) {
-        mhfscltrack.totalPCMFrameCount = MHFSCL.mhfs_cl_track_meta_audioinfo_totalPCMFrameCount(pBlock);
-        mhfscltrack.sampleRate = MHFSCL.mhfs_cl_track_meta_audioinfo_sampleRate(pBlock);
-        mhfscltrack.channels = MHFSCL.mhfs_cl_track_meta_audioinfo_channels(pBlock);
+        const audioinfo = new MHFSCL.mhfs_cl_track_meta_audioinfo(pBlock);
+        mhfscltrack.totalPCMFrameCount = audioinfo.get('totalPCMFrameCount');
+        mhfscltrack.sampleRate = audioinfo.get('sampleRate');
+        mhfscltrack.channels = audioinfo.get('channels');
+        mhfscltrack.fields = audioinfo.get('fields');
+        if(mhfscltrack.fields & MHFSCL.MCT_MAI_FLD_BITSPERSAMPLE) {
+            mhfscltrack.bitsPerSample = audioinfo.get('bitsPerSample');
+        }
+        if(mhfscltrack.fields & MHFSCL.MCT_MAI_FLD_BITRATE) {
+            mhfscltrack.bitrate = audioinfo.get('bitrate');
+        }
+
         mhfscltrack.duration = MHFSCL.mhfs_cl_track_meta_audioinfo_durationInSecs(pBlock);
-        mhfscltrack.fields = MHFSCL.mhfs_cl_track_meta_audioinfo_fields(pBlock);
-        mhfscltrack.bitsPerSample = MHFSCL.mhfs_cl_track_meta_audioinfo_bitsPerSample(pBlock);
     }
     else if(blockType == MHFSCL.TRACK_M_TAGS) {
         mhfscltrack.tags = {};
@@ -672,16 +679,60 @@ Module().then(function(MHFSCLMod){
     MHFSCL.mhfs_cl_djb2 = MHFSCLMod.cwrap('mhfs_cl_djb2', "number", ["number", "number"]);
 
     // mhfs_cl_track* constants
+    MHFSCL.MCT_VT_CONST_IV = 1;
     MHFSCL.ValueInfo = MHFSCLMod.cwrap('ValueInfo', "number", ["number", "number"]);
+    const currentObject = [MHFSCL];
     let mainindex = 0;
     while(1) {
         const ValueType = MHFSCL.ValueInfo(mainindex, 0);
-        if(ValueType == 0) break;
-        if(ValueType == 1) {
+        if(ValueType === 0) break;
+        if(ValueType === MHFSCL.MCT_VT_CONST_IV) {
             MHFSCL[MHFSCL.Module.UTF8ToString(MHFSCL.ValueInfo(mainindex, 1))] = MHFSCL.ValueInfo(mainindex, 2);
+        }
+        else if(ValueType === MHFSCL.MCT_VT_CONST_CSTRING) {
+            MHFSCL[MHFSCL.Module.UTF8ToString(MHFSCL.ValueInfo(mainindex, 1))] = MHFSCL.Module.UTF8ToString(MHFSCL.ValueInfo(mainindex, 2));
+        }
+        else if(ValueType === MHFSCL.MCT_VT_ST) {
+            const struct = { name: MHFSCL.Module.UTF8ToString(MHFSCL.ValueInfo(mainindex, 1)), size: MHFSCL.ValueInfo(mainindex, 2), members : {}};
+            currentObject.push(struct);
+        }
+        else if(ValueType === MHFSCL.MCT_VT_ST_END) {
+            const structmeta = currentObject.pop();
+            const structPrototype = {
+                members : structmeta.members,
+                get : function(memberName) {
+                    const ptr = (this.ptr + this.members[memberName].offset);
+                    if(this.members[memberName].type === MHFSCL.MCT_VT_UINT32) {
+                        return MHFSCL.Module.HEAPU32[ptr  >> 2];
+                    }
+                    else if(this.members[memberName].type === MHFSCL.MCT_VT_UINT64) {
+                        return BigInt(MHFSCL.Module.HEAPU32[ptr  >> 2]) + (BigInt(MHFSCL.Module.HEAPU32[(ptr+4)  >> 2]) << BigInt(32));
+                    }
+                    else if(this.members[memberName].type === MHFSCL.MCT_VT_UINT16) {
+                        return MHFSCL.Module.HEAPU16[ptr  >> 1];
+                    }
+                    else if(this.members[memberName].type === MHFSCL.MCT_VT_UINT8) {
+                        return MHFSCL.Module.HEAPU8[ptr];
+                    }
+                    throw("ENOTIMPLEMENTED");
+                }
+            };
+            const struct = function(ptr) {
+                this.ptr = ptr;
+            };
+            struct.prototype = structPrototype;
+            struct.prototype.constructor = struct;
+            MHFSCL[structmeta.name] = struct;
+        }
+        else if((ValueType === MHFSCL.MCT_VT_UINT64) || (ValueType === MHFSCL.MCT_VT_UINT32) || (ValueType === MHFSCL.MCT_VT_UINT16) || (ValueType === MHFSCL.MCT_VT_UINT8)) {
+            currentObject[currentObject.length-1].members[MHFSCL.Module.UTF8ToString(MHFSCL.ValueInfo(mainindex, 1))] = {
+                type : ValueType,
+                offset : MHFSCL.ValueInfo(mainindex, 2)
+            };
         }
         mainindex++;
     }
+
 
     MHFSCL.mhfs_cl_track_return_data_sizeof = MHFSCLMod.ccall('mhfs_cl_track_return_data_sizeof', "number");
     if(MHFSCL.mhfs_cl_track_return_data_sizeof !== 4) {

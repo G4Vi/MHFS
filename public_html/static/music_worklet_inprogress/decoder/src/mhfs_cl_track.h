@@ -190,10 +190,15 @@ uint32_t MHFS_CL_TRACK_M_PICTURE_func(void)
 typedef enum {
     MCT_VT_CONST_IV = 1,
     MCT_VT_CONST_CSTRING = 2,
-    MCT_VT_ST = 2
+    MCT_VT_ST = 3,
+    MCT_VT_ST_END = 4,
+    MCT_VT_UINT64 = 5,
+    MCT_VT_UINT32 = 6,
+    MCT_VT_UINT16 = 7,
+    MCT_VT_UINT8  = 8
 } MCT_ValueType;
 
-#define MCT_VT_DECLARE_CONST(XTYPE, X) \
+#define MCT_VT_EXPOSE_CONST(XTYPE, X) \
 do {\
 switch(subItemIndex) {\
 case 0: \
@@ -208,15 +213,117 @@ break; \
 } \
 } while(0)
 
+#define MCT_VT_EXPOSE_CONST_IV(X) \
+MCT_VT_EXPOSE_CONST(MCT_VT_CONST_IV, X)
+
+#define MCT_VT_EXPOSE_STRUCT_MEMBER(XTYPE, XSTRUCT, XMEMBER) \
+do {\
+switch(subItemIndex) {\
+case 0: \
+return XTYPE; \
+break; \
+case 1: \
+return (uint64_t)#XMEMBER; \
+break; \
+case 2: \
+return offsetof(XSTRUCT, XMEMBER); \
+break; \
+} \
+} while(0)
+
+#define MCT_VT_EXPOSE_STRUCT_UINT64(XSTRUCT, XMEMBER) \
+MCT_VT_EXPOSE_STRUCT_MEMBER(MCT_VT_UINT64, XSTRUCT, XMEMBER)
+
+#define MCT_VT_EXPOSE_STRUCT_UINT32(XSTRUCT, XMEMBER) \
+MCT_VT_EXPOSE_STRUCT_MEMBER(MCT_VT_UINT32, XSTRUCT, XMEMBER)
+
+#define MCT_VT_EXPOSE_STRUCT_UINT16(XSTRUCT, XMEMBER) \
+MCT_VT_EXPOSE_STRUCT_MEMBER(MCT_VT_UINT16, XSTRUCT, XMEMBER)
+
+#define MCT_VT_EXPOSE_STRUCT_UINT8(XSTRUCT, XMEMBER) \
+MCT_VT_EXPOSE_STRUCT_MEMBER(MCT_VT_UINT8, XSTRUCT, XMEMBER)
+
+#define MCT_VT_EXPOSE_STRUCT_BEGIN(X) \
+do {\
+switch(subItemIndex) {\
+case 0: \
+return MCT_VT_ST; \
+break; \
+case 1: \
+return (uint64_t)#X; \
+break; \
+case 2: \
+return sizeof(X); \
+break; \
+} \
+} while(0)
+
+#define MCT_VT_EXPOSE_STRUCT_END() \
+do {\
+switch(subItemIndex) {\
+case 0: \
+return MCT_VT_ST_END; \
+break; \
+} \
+} while(0)
+
 uint64_t ValueInfo(const uint32_t itemIndex, const uint32_t subItemIndex)
 {
     switch(itemIndex)
     {
         case 0:
-        MCT_VT_DECLARE_CONST(MCT_VT_CONST_IV, MCT_MAI_FLD_BITSPERSAMPLE);
+        MCT_VT_EXPOSE_CONST_IV(MCT_VT_CONST_CSTRING);
         break;
         case 1:
-        MCT_VT_DECLARE_CONST(MCT_VT_CONST_IV, MCT_MAI_FLD_BITRATE);
+        MCT_VT_EXPOSE_CONST_IV(MCT_VT_ST);
+        break;
+        case 2:
+        MCT_VT_EXPOSE_CONST_IV(MCT_VT_ST_END);
+        break;
+        case 3:
+        MCT_VT_EXPOSE_CONST_IV(MCT_VT_UINT64);
+        break;
+        case 4:
+        MCT_VT_EXPOSE_CONST_IV(MCT_VT_UINT32);
+        break;
+        case 5:
+        MCT_VT_EXPOSE_CONST_IV(MCT_VT_UINT16);
+        break;
+        case 6:
+        MCT_VT_EXPOSE_CONST_IV(MCT_VT_UINT8);
+        break;
+        case 7:
+        MCT_VT_EXPOSE_CONST_IV(MCT_MAI_FLD_EMPTY);
+        break;
+        case 8:
+        MCT_VT_EXPOSE_CONST_IV(MCT_MAI_FLD_BITSPERSAMPLE);
+        break;
+        case 9:
+        MCT_VT_EXPOSE_CONST_IV(MCT_MAI_FLD_BITRATE);
+        break;
+        case 10:
+        MCT_VT_EXPOSE_STRUCT_BEGIN(mhfs_cl_track_meta_audioinfo);
+        break;
+        case 11:
+        MCT_VT_EXPOSE_STRUCT_UINT64(mhfs_cl_track_meta_audioinfo, totalPCMFrameCount);
+        break;
+        case 12:
+        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_audioinfo, sampleRate);
+        break;
+        case 13:
+        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_audioinfo, fields);
+        break;
+        case 14:
+        MCT_VT_EXPOSE_STRUCT_UINT16(mhfs_cl_track_meta_audioinfo, bitrate);
+        break;
+        case 15:
+        MCT_VT_EXPOSE_STRUCT_UINT8(mhfs_cl_track_meta_audioinfo, channels);
+        break;
+        case 16:
+        MCT_VT_EXPOSE_STRUCT_UINT8(mhfs_cl_track_meta_audioinfo, bitsPerSample);
+        break;
+        case 17:
+        MCT_VT_EXPOSE_STRUCT_END();
         break;
     }
     return 0;
@@ -292,12 +399,14 @@ const uint8_t *mhfs_cl_track_meta_picture_data(const mhfs_cl_track_meta_picture 
     return pMetaPicture->pictureData;
 }
 
-static void mhfs_cl_track_meta_audioinfo_init(mhfs_cl_track_meta_audioinfo *pMetadata, const uint64_t totalPCMFrameCount, const uint32_t sampleRate, const uint8_t channels, const uint8_t bitsPerSample)
+static void mhfs_cl_track_meta_audioinfo_init(mhfs_cl_track_meta_audioinfo *pMetadata, const uint64_t totalPCMFrameCount, const uint32_t sampleRate, const uint8_t channels, const mhfs_cl_track_meta_audioinfo_field fields, const uint8_t bitsPerSample, const uint16_t bitrate)
 {
     pMetadata->totalPCMFrameCount = totalPCMFrameCount;
     pMetadata->sampleRate = sampleRate;
     pMetadata->channels = channels;
+    pMetadata->fields = fields;
     pMetadata->bitsPerSample = bitsPerSample;
+    pMetadata->bitrate = bitrate;
 }
 
 static inline mhfs_cl_track_error mhfs_cl_track_error_from_blockvf_error(const blockvf_error bvferr)
@@ -754,7 +863,7 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrac
             const uint8_t bitsPerSample = (((blockData[12] & 0x1) << 4) | ((blockData[13] & 0xF0) >> 4))+1;
             const uint64_t top4 = (blockData[13] & 0xF);
             const uint64_t totalPCMFrameCount = (top4 << 32) | (blockData[14] << 24) | (blockData[15] << 16) | (blockData[16] << 8) | (blockData[17]);
-            mhfs_cl_track_meta_audioinfo_init(&pTrack->meta, totalPCMFrameCount, sampleRate, channels, bitsPerSample);
+            mhfs_cl_track_meta_audioinfo_init(&pTrack->meta, totalPCMFrameCount, sampleRate, channels, MCT_MAI_FLD_BITSPERSAMPLE, bitsPerSample, 0);
             if(on_metablock != NULL)
             {
                 on_metablock(context, MHFS_CL_TRACK_M_AUDIOINFO, &pTrack->meta);
@@ -932,7 +1041,7 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_mp3(mhfs_cl_track *pTrack
         const uint32_t frames = unaligned_beu32_to_native(framesBytes);
         MHFSCLTR_PRINT("xing frames %u\n", frames);
         // FIX ME FIX ME we add 1 to mp3frames because the decoder will currently (foolishly) decode the xing mp3frame
-        mhfs_cl_track_meta_audioinfo_init(&pTrack->meta, (frames + 1) * 1152, sampleRate, channels, 0);
+        mhfs_cl_track_meta_audioinfo_init(&pTrack->meta, (frames + 1) * 1152, sampleRate, channels, MCT_MAI_FLD_BITRATE, 0, bitrate);
         if(on_metablock != NULL)
         {
             on_metablock(context, MHFS_CL_TRACK_M_AUDIOINFO, &pTrack->meta);
@@ -1004,7 +1113,7 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_ma_decoder(mhfs_cl_track 
         ma_decoder_get_length_in_pcm_frames(&pTrack->decoder, &totalPCMFrameCount);
     }
     MHFSCLTR_PRINT("decoder output samplerate %u\n", pTrack->decoder.outputSampleRate);
-    mhfs_cl_track_meta_audioinfo_init(&pTrack->meta, totalPCMFrameCount, pTrack->decoder.outputSampleRate, pTrack->decoder.outputChannels, 0);
+    mhfs_cl_track_meta_audioinfo_init(&pTrack->meta, totalPCMFrameCount, pTrack->decoder.outputSampleRate, pTrack->decoder.outputChannels, MCT_MAI_FLD_EMPTY, 0, 0);
     if(on_metablock != NULL)
     {
         on_metablock(context, MHFS_CL_TRACK_M_AUDIOINFO, &pTrack->meta);
