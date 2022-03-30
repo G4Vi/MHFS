@@ -111,39 +111,8 @@ LIBEXPORT const mhfs_cl_track_meta_tags_comment *mhfs_cl_track_meta_tags_next_co
 // util
 LIBEXPORT unsigned long mhfs_cl_djb2(const uint8_t *pData, const size_t dataLen);
 
-// For JS convenience constants ...
+// For JS convenience export types
 LIBEXPORT uint64_t ValueInfo(const uint32_t itemIndex, const uint32_t subItemIndex);
-
-LIBEXPORT uint32_t mhfs_cl_track_return_data_sizeof(void);
-LIBEXPORT uint32_t mhfs_cl_track_sizeof(void);
-LIBEXPORT uint32_t MHFS_CL_TRACK_SUCCESS_func(void);
-LIBEXPORT uint32_t MHFS_CL_TRACK_GENERIC_ERROR_func(void);
-LIBEXPORT uint32_t MHFS_CL_TRACK_NEED_MORE_DATA_func(void);
-
-LIBEXPORT uint32_t MHFS_CL_TRACK_M_AUDIOINFO_func(void);
-LIBEXPORT uint32_t MHFS_CL_TRACK_M_TAGS_func(void);
-LIBEXPORT uint32_t MHFS_CL_TRACK_M_PICTURE_func(void);
-
-// For JS convenience access struct members ...
-LIBEXPORT uint64_t mhfs_cl_track_currentFrame(const mhfs_cl_track *pTrack);
-
-LIBEXPORT uint64_t mhfs_cl_track_meta_audioinfo_totalPCMFrameCount(const mhfs_cl_track_meta_audioinfo *pInfo);
-LIBEXPORT uint32_t mhfs_cl_track_meta_audioinfo_sampleRate(const mhfs_cl_track_meta_audioinfo *pInfo);
-LIBEXPORT uint8_t mhfs_cl_track_meta_audioinfo_channels(const mhfs_cl_track_meta_audioinfo *pInfo);
-LIBEXPORT uint32_t mhfs_cl_track_meta_audioinfo_fields(const mhfs_cl_track_meta_audioinfo *pInfo);
-LIBEXPORT uint8_t mhfs_cl_track_meta_audioinfo_bitsPerSample(const mhfs_cl_track_meta_audioinfo *pInfo);
-LIBEXPORT uint16_t mhfs_cl_track_meta_audioinfo_bitrate(const mhfs_cl_track_meta_audioinfo *pInfo);
-
-LIBEXPORT uint32_t mhfs_cl_track_meta_tags_comment_size(const mhfs_cl_track_meta_tags_comment*);
-LIBEXPORT const uint8_t *mhfs_cl_track_meta_tags_comment_data(const mhfs_cl_track_meta_tags_comment*);
-
-LIBEXPORT uint32_t mhfs_cl_track_meta_picture_type(const mhfs_cl_track_meta_picture *);
-LIBEXPORT uint32_t mhfs_cl_track_meta_picture_mime_size(const mhfs_cl_track_meta_picture *);
-LIBEXPORT const uint8_t *mhfs_cl_track_meta_picture_mime(const mhfs_cl_track_meta_picture *);
-LIBEXPORT uint32_t mhfs_cl_track_meta_picture_desc_size(const mhfs_cl_track_meta_picture *);
-LIBEXPORT const uint8_t *mhfs_cl_track_meta_picture_desc(const mhfs_cl_track_meta_picture *);
-LIBEXPORT uint32_t mhfs_cl_track_meta_picture_data_size(const mhfs_cl_track_meta_picture *);
-LIBEXPORT const uint8_t *mhfs_cl_track_meta_picture_data(const mhfs_cl_track_meta_picture *);
 
 #if defined(MHFSCLTRACK_IMPLEMENTATION)
 #ifndef mhfs_cl_track_c
@@ -174,24 +143,11 @@ unsigned long mhfs_cl_djb2(const uint8_t *pData, const size_t dataLen)
     return hash;
 }
 
-uint32_t MHFS_CL_TRACK_M_AUDIOINFO_func(void)
-{
-    return MHFS_CL_TRACK_M_AUDIOINFO;
-}
-uint32_t MHFS_CL_TRACK_M_TAGS_func(void)
-{
-    return MHFS_CL_TRACK_M_TAGS;
-}
-uint32_t MHFS_CL_TRACK_M_PICTURE_func(void)
-{
-    return MHFS_CL_TRACK_M_PICTURE;
-}
-
 typedef enum {
     MCT_VT_CONST_IV = 1,
     MCT_VT_CONST_CSTRING = 2,
-    MCT_VT_ST = 3,
-    MCT_VT_ST_END = 4,
+    MCT_VT_ST = 3,     // also used for unions
+    MCT_VT_ST_END = 4, // also used for unions
     MCT_VT_UINT64 = 5,
     MCT_VT_UINT32 = 6,
     MCT_VT_UINT16 = 7,
@@ -243,6 +199,12 @@ MCT_VT_EXPOSE_STRUCT_MEMBER(MCT_VT_UINT16, XSTRUCT, XMEMBER)
 #define MCT_VT_EXPOSE_STRUCT_UINT8(XSTRUCT, XMEMBER) \
 MCT_VT_EXPOSE_STRUCT_MEMBER(MCT_VT_UINT8, XSTRUCT, XMEMBER)
 
+#define MCT_VT_EXPOSE_STRUCT_PTR(XSTRUCT, XMEMBER) \
+do { \
+static_assert(sizeof(void*) == 4, "ptr size bad"); \
+MCT_VT_EXPOSE_STRUCT_MEMBER(MCT_VT_UINT32, XSTRUCT, XMEMBER); \
+} while(0)
+
 #define MCT_VT_EXPOSE_STRUCT_BEGIN(X) \
 do {\
 switch(subItemIndex) {\
@@ -293,49 +255,115 @@ uint64_t ValueInfo(const uint32_t itemIndex, const uint32_t subItemIndex)
         MCT_VT_EXPOSE_CONST_IV(MCT_VT_UINT8);
         break;
         case 7:
-        MCT_VT_EXPOSE_CONST_IV(MCT_MAI_FLD_EMPTY);
+        MCT_VT_EXPOSE_CONST_IV(MHFS_CL_TRACK_SUCCESS);
         break;
         case 8:
-        MCT_VT_EXPOSE_CONST_IV(MCT_MAI_FLD_BITSPERSAMPLE);
+        MCT_VT_EXPOSE_CONST_IV(MHFS_CL_TRACK_GENERIC_ERROR);
         break;
         case 9:
-        MCT_VT_EXPOSE_CONST_IV(MCT_MAI_FLD_BITRATE);
+        MCT_VT_EXPOSE_CONST_IV(MHFS_CL_TRACK_NEED_MORE_DATA);
         break;
         case 10:
-        MCT_VT_EXPOSE_STRUCT_BEGIN(mhfs_cl_track_meta_audioinfo);
+        MCT_VT_EXPOSE_CONST_IV(MHFS_CL_TRACK_M_AUDIOINFO);
         break;
         case 11:
-        MCT_VT_EXPOSE_STRUCT_UINT64(mhfs_cl_track_meta_audioinfo, totalPCMFrameCount);
+        MCT_VT_EXPOSE_CONST_IV(MHFS_CL_TRACK_M_TAGS);
         break;
         case 12:
-        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_audioinfo, sampleRate);
+        MCT_VT_EXPOSE_CONST_IV(MHFS_CL_TRACK_M_PICTURE);
         break;
         case 13:
-        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_audioinfo, fields);
+        MCT_VT_EXPOSE_STRUCT_BEGIN(mhfs_cl_track);
         break;
         case 14:
-        MCT_VT_EXPOSE_STRUCT_UINT16(mhfs_cl_track_meta_audioinfo, bitrate);
+        MCT_VT_EXPOSE_STRUCT_END();
         break;
         case 15:
-        MCT_VT_EXPOSE_STRUCT_UINT8(mhfs_cl_track_meta_audioinfo, channels);
+        MCT_VT_EXPOSE_STRUCT_BEGIN(mhfs_cl_track_return_data);
         break;
         case 16:
-        MCT_VT_EXPOSE_STRUCT_UINT8(mhfs_cl_track_meta_audioinfo, bitsPerSample);
+        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_return_data, frames_read);
         break;
         case 17:
+        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_return_data, needed_offset);
+        break;
+        case 18:
+        MCT_VT_EXPOSE_STRUCT_END();
+        break;
+        case 19:
+        MCT_VT_EXPOSE_CONST_IV(MCT_MAI_FLD_EMPTY);
+        break;
+        case 20:
+        MCT_VT_EXPOSE_CONST_IV(MCT_MAI_FLD_BITSPERSAMPLE);
+        break;
+        case 21:
+        MCT_VT_EXPOSE_CONST_IV(MCT_MAI_FLD_BITRATE);
+        break;
+        case 22:
+        MCT_VT_EXPOSE_STRUCT_BEGIN(mhfs_cl_track_meta_audioinfo);
+        break;
+        case 23:
+        MCT_VT_EXPOSE_STRUCT_UINT64(mhfs_cl_track_meta_audioinfo, totalPCMFrameCount);
+        break;
+        case 24:
+        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_audioinfo, sampleRate);
+        break;
+        case 25:
+        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_audioinfo, fields);
+        break;
+        case 26:
+        MCT_VT_EXPOSE_STRUCT_UINT16(mhfs_cl_track_meta_audioinfo, bitrate);
+        break;
+        case 27:
+        MCT_VT_EXPOSE_STRUCT_UINT8(mhfs_cl_track_meta_audioinfo, channels);
+        break;
+        case 28:
+        MCT_VT_EXPOSE_STRUCT_UINT8(mhfs_cl_track_meta_audioinfo, bitsPerSample);
+        break;
+        case 29:
+        MCT_VT_EXPOSE_STRUCT_END();
+        break;
+        case 30:
+        MCT_VT_EXPOSE_STRUCT_BEGIN(mhfs_cl_track_meta_tags_comment);
+        break;
+        case 31:
+        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_tags_comment, commentSize);
+        break;
+        case 32:
+        MCT_VT_EXPOSE_STRUCT_PTR(mhfs_cl_track_meta_tags_comment, comment);
+        break;
+        case 33:
+        MCT_VT_EXPOSE_STRUCT_END();
+        break;
+        case 34:
+        MCT_VT_EXPOSE_STRUCT_BEGIN(mhfs_cl_track_meta_picture);
+        break;
+        case 35:
+        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_picture, pictureType);
+        break;
+        case 36:
+        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_picture, mimeSize);
+        break;
+        case 37:
+        MCT_VT_EXPOSE_STRUCT_PTR(mhfs_cl_track_meta_picture, mime);
+        break;
+        case 38:
+        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_picture, descSize);
+        break;
+        case 39:
+        MCT_VT_EXPOSE_STRUCT_PTR(mhfs_cl_track_meta_picture, desc);
+        break;
+        case 40:
+        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_picture, pictureDataSize);
+        break;
+        case 41:
+        MCT_VT_EXPOSE_STRUCT_PTR(mhfs_cl_track_meta_picture, pictureData);
+        break;
+        case 42:
         MCT_VT_EXPOSE_STRUCT_END();
         break;
     }
     return 0;
-}
-
-uint32_t mhfs_cl_track_meta_tags_comment_size(const mhfs_cl_track_meta_tags_comment *pComment)
-{
-    return pComment->commentSize;
-}
-const uint8_t *mhfs_cl_track_meta_tags_comment_data(const mhfs_cl_track_meta_tags_comment *pComment)
-{
-    return pComment->comment;
 }
 
 uint32_t mhfs_cl_flac_picture_block_get_type(const void *pPictureBlock)
@@ -368,35 +396,6 @@ const UnalignedBEPascalString *mhfs_cl_flac_picture_block_get_desc(const uint8_t
 const UnalignedBEPascalString *mhfs_cl_flac_picture_block_get_picture(const uint8_t *pPictureBlock, const uint32_t mimeSize, const uint32_t descSize)
 {
     return (UnalignedBEPascalString*)(&pPictureBlock[8+mimeSize+4+descSize+16]);
-}
-
-uint32_t mhfs_cl_track_meta_picture_type(const mhfs_cl_track_meta_picture *pMetaPicture)
-{
-    return pMetaPicture->pictureType;
-}
-uint32_t mhfs_cl_track_meta_picture_mime_size(const mhfs_cl_track_meta_picture *pMetaPicture)
-{
-    return pMetaPicture->mimeSize;
-}
-const uint8_t *mhfs_cl_track_meta_picture_mime(const mhfs_cl_track_meta_picture *pMetaPicture)
-{
-    return pMetaPicture->mime;
-}
-uint32_t mhfs_cl_track_meta_picture_desc_size(const mhfs_cl_track_meta_picture *pMetaPicture)
-{
-    return pMetaPicture->descSize;
-}
-const uint8_t *mhfs_cl_track_meta_picture_desc(const mhfs_cl_track_meta_picture *pMetaPicture)
-{
-    return pMetaPicture->desc;
-}
-uint32_t mhfs_cl_track_meta_picture_data_size(const mhfs_cl_track_meta_picture *pMetaPicture)
-{
-    return pMetaPicture->pictureDataSize;
-}
-const uint8_t *mhfs_cl_track_meta_picture_data(const mhfs_cl_track_meta_picture *pMetaPicture)
-{
-    return pMetaPicture->pictureData;
 }
 
 static void mhfs_cl_track_meta_audioinfo_init(mhfs_cl_track_meta_audioinfo *pMetadata, const uint64_t totalPCMFrameCount, const uint32_t sampleRate, const uint8_t channels, const mhfs_cl_track_meta_audioinfo_field fields, const uint8_t bitsPerSample, const uint16_t bitrate)
@@ -486,36 +485,6 @@ static ma_result mhfs_cl_track_on_read_ma_decoder(ma_decoder *pDecoder, void* bu
 
     const blockvf_error bvfError = blockvf_read(&pTrack->vf, bufferOut, bytesToRead, bytesRead, &pTrack->vfData.extradata);
     return mhfs_cl_track_blockvf_error_to_ma_result(bvfError, &pTrack->vfData);
-}
-
-uint64_t mhfs_cl_track_meta_audioinfo_totalPCMFrameCount(const mhfs_cl_track_meta_audioinfo *pInfo)
-{
-    return pInfo->totalPCMFrameCount;
-}
-
-uint32_t mhfs_cl_track_meta_audioinfo_sampleRate(const mhfs_cl_track_meta_audioinfo *pInfo)
-{
-    return pInfo->sampleRate;
-}
-
-uint8_t mhfs_cl_track_meta_audioinfo_bitsPerSample(const mhfs_cl_track_meta_audioinfo *pInfo)
-{
-    return pInfo->bitsPerSample;
-}
-
-uint8_t mhfs_cl_track_meta_audioinfo_channels(const mhfs_cl_track_meta_audioinfo *pInfo)
-{
-    return pInfo->channels;
-}
-
-uint32_t mhfs_cl_track_meta_audioinfo_fields(const mhfs_cl_track_meta_audioinfo *pInfo)
-{
-    return pInfo->fields;
-}
-
-uint16_t mhfs_cl_track_meta_audioinfo_bitrate(const mhfs_cl_track_meta_audioinfo *pInfo)
-{
-    return pInfo->bitrate;
 }
 
 // round up to nearest multiple of 8
@@ -710,7 +679,7 @@ int mhfs_cl_track_seek_to_pcm_frame(mhfs_cl_track *pTrack, const uint32_t pcmFra
 {
     if(pTrack->dec_initialized)
     {
-        if(pcmFrameIndex >= mhfs_cl_track_meta_audioinfo_totalPCMFrameCount(&pTrack->meta))
+        if(pcmFrameIndex >= pTrack->meta.totalPCMFrameCount)
         {
             // allow seeking to 0 always
             if(pcmFrameIndex != 0)
@@ -721,36 +690,6 @@ int mhfs_cl_track_seek_to_pcm_frame(mhfs_cl_track *pTrack, const uint32_t pcmFra
     }
     pTrack->currentFrame = pcmFrameIndex;
     return 1;
-}
-
-uint32_t mhfs_cl_track_return_data_sizeof(void)
-{
-    return sizeof(mhfs_cl_track_return_data);
-}
-
-uint32_t mhfs_cl_track_sizeof(void)
-{
-    return sizeof(mhfs_cl_track);
-}
-
-uint32_t MHFS_CL_TRACK_SUCCESS_func(void)
-{
-    return MHFS_CL_TRACK_SUCCESS;
-}
-
-uint32_t MHFS_CL_TRACK_GENERIC_ERROR_func(void)
-{
-    return MHFS_CL_TRACK_GENERIC_ERROR;
-}
-
-uint32_t MHFS_CL_TRACK_NEED_MORE_DATA_func(void)
-{
-    return MHFS_CL_TRACK_NEED_MORE_DATA;
-}
-
-uint64_t mhfs_cl_track_currentFrame(const mhfs_cl_track *pTrack)
-{
-    return pTrack->currentFrame;
 }
 
 double mhfs_cl_track_meta_audioinfo_durationInSecs(const mhfs_cl_track_meta_audioinfo *pInfo)
@@ -1368,7 +1307,7 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
         pTrack->currentFrame += frames_decoded;
     }
 
-    MHFSCLTR_PRINT("returning from pTrack->currentFrame: %u, totalFrames %"PRIu64" frames_decoded %"PRIu64" desired %u\n", pTrack->currentFrame, mhfs_cl_track_meta_audioinfo_totalPCMFrameCount(&pTrack->meta), frames_decoded, desired_pcm_frames);
+    MHFSCLTR_PRINT("returning from pTrack->currentFrame: %u, totalFrames %"PRIu64" frames_decoded %"PRIu64" desired %u\n", pTrack->currentFrame, pTrack->meta.totalPCMFrameCount, frames_decoded, desired_pcm_frames);
     pReturnData->frames_read = frames_decoded;
     return MHFS_CL_TRACK_SUCCESS;
 

@@ -264,8 +264,8 @@ const MHFSCLObjectMap = ObjectMap();
 
 const MHFSCLTrackOnMeta = function(mhfscltrackid, blockType, pBlock) {
     const mhfscltrack = MHFSCLObjectMap.getData(mhfscltrackid);
-    if(blockType === MHFSCL.TRACK_M_AUDIOINFO) {
-        const audioinfo = new MHFSCL.mhfs_cl_track_meta_audioinfo(pBlock);
+    if(blockType === MHFSCL.MHFS_CL_TRACK_M_AUDIOINFO) {
+        const audioinfo = MHFSCL.mhfs_cl_track_meta_audioinfo.from(pBlock);
         mhfscltrack.totalPCMFrameCount = audioinfo.get('totalPCMFrameCount');
         mhfscltrack.sampleRate = audioinfo.get('sampleRate');
         mhfscltrack.channels = audioinfo.get('channels');
@@ -279,19 +279,21 @@ const MHFSCLTrackOnMeta = function(mhfscltrackid, blockType, pBlock) {
 
         mhfscltrack.duration = MHFSCL.mhfs_cl_track_meta_audioinfo_durationInSecs(pBlock);
     }
-    else if(blockType == MHFSCL.TRACK_M_TAGS) {
+    else if(blockType == MHFSCL.MHFS_CL_TRACK_M_TAGS) {
         mhfscltrack.tags = {};
         do {
-            const comment = MHFSCL.mhfs_cl_track_meta_tags_next_comment(pBlock);
-            if(comment === 0) break;
-            const strcomment = MHFSCL.Module.UTF8ToString(MHFSCL.mhfs_cl_track_meta_tags_comment_data(comment), MHFSCL.mhfs_cl_track_meta_tags_comment_size(comment));
+            const pComment = MHFSCL.mhfs_cl_track_meta_tags_next_comment(pBlock);
+            if(pComment === 0) break;
+            const comment = MHFSCL.mhfs_cl_track_meta_tags_comment.from(pComment);
+            const strcomment = MHFSCL.Module.UTF8ToString(comment.get('comment'), comment.get('commentSize'));
             console.log('comment: ' + strcomment);
             const [key, value] = strcomment.split('=', 2);
             mhfscltrack.tags[key] = value;
         } while(1);
     }
-    else if(blockType === MHFSCL.TRACK_M_PICTURE) {
-        const pictureType = MHFSCL.mhfs_cl_track_meta_picture_type(pBlock);
+    else if(blockType === MHFSCL.MHFS_CL_TRACK_M_PICTURE) {
+        const picture = MHFSCL.mhfs_cl_track_meta_picture.from(pBlock);
+        const pictureType = picture.get('pictureType');
         console.log('pictureType ' + pictureType);
         let setPicture = !mhfscltrack.picture;
         if(!setPicture) {
@@ -307,9 +309,9 @@ const MHFSCLTrackOnMeta = function(mhfscltrackid, blockType, pBlock) {
         if(setPicture) {
             mhfscltrack.picture = {
                 type : pictureType,
-                mime : MHFSCL.Module.UTF8ToString(MHFSCL.mhfs_cl_track_meta_picture_mime(pBlock), MHFSCL.mhfs_cl_track_meta_picture_mime_size(pBlock)),
-                pictureSize : MHFSCL.mhfs_cl_track_meta_picture_data_size(pBlock),
-                pPicture : MHFSCL.mhfs_cl_track_meta_picture_data(pBlock)
+                mime : MHFSCL.Module.UTF8ToString(picture.get('mime'), picture.get('mimeSize')),
+                pictureSize : picture.get('pictureDataSize'),
+                pPicture : picture.get('pictureData')
             };
         }
     }
@@ -369,10 +371,6 @@ const MHFSCLTrack = async function(gsignal, theURL, DLMGR) {
     that.seekSecs = function(floatseconds) {
         that.seek(Math.floor(floatseconds * that.sampleRate));
     };
-    
-    that.currentFrame = function() {
-        return MHFSCL.mhfs_cl_track_currentFrame(that.ptr);
-    };
 
     that._openPictureIfExists = function() {
         if(!that.picture) {
@@ -392,10 +390,10 @@ const MHFSCLTrack = async function(gsignal, theURL, DLMGR) {
     };
 
     // allocate memory for the mhfs_cl_track and return data
-    const alignedTrackSize = MHFSCL.AlignedSize(MHFSCL.mhfs_cl_track_sizeof);
-    that.ptr = MHFSCL.Module._malloc(alignedTrackSize + MHFSCL.mhfs_cl_track_return_data_sizeof);
+    const alignedTrackSize = MHFSCL.AlignedSize(MHFSCL.mhfs_cl_track.sizeof);
+    that.ptr = MHFSCL.Module._malloc(alignedTrackSize + MHFSCL.mhfs_cl_track_return_data.sizeof);
     if(!that.ptr) throw("failed malloc");
-    const rd = that.ptr + alignedTrackSize;
+    const rd = MHFSCL.mhfs_cl_track_return_data.from(that.ptr + alignedTrackSize);
     const thatid = MHFSCLObjectMap.addData(that);
     try {
         // initialize the track
@@ -410,7 +408,7 @@ const MHFSCLTrack = async function(gsignal, theURL, DLMGR) {
         // load enough of the track that the metadata loads
         for(;;) {
             that.picture = null;
-            const code = MHFSCL.mhfs_cl_track_load_metadata(that.ptr, rd, MHFSCL.pMHFSCLTrackOnMeta, thatid);
+            const code = MHFSCL.mhfs_cl_track_load_metadata(that.ptr, rd.ptr, MHFSCL.pMHFSCLTrackOnMeta, thatid);
             if(code === MHFSCL.MHFS_CL_TRACK_SUCCESS) {
                 break;
             }
@@ -418,7 +416,7 @@ const MHFSCLTrack = async function(gsignal, theURL, DLMGR) {
                 that.close();
                 throw("Failed opening MHFSCLTrack");
             }
-            start = MHFSCL.UINT32Value(rd);
+            start = rd.get('needed_offset');
             await that.downloadAndStoreChunk(start, gsignal);
         }
     }
@@ -519,9 +517,10 @@ const MHFSCLDecoder = async function(outputSampleRate, outputChannelCount) {
     that.f32_size = 4;
     that.pcm_float_frame_size = that.f32_size * that.outputChannelCount;
 
-    that.returnDataAlloc = MHFSCLAllocation(MHFSCL.mhfs_cl_track_return_data_sizeof);
+    that.returnDataAlloc = MHFSCLAllocation(MHFSCL.mhfs_cl_track_return_data.sizeof);
     that.deinterleaveDataAlloc = MHFSCLArrsAlloc(outputChannelCount, that.outputSampleRate*that.f32_size);
     //that.DM = DownloadManager(262144);
+    that.rd = MHFSCL.mhfs_cl_track_return_data.from(that.returnDataAlloc.ptr);
 
     that.flush = async function() {
         MHFSCL.mhfs_cl_decoder_flush(that.ptr);
@@ -588,14 +587,12 @@ const MHFSCLDecoder = async function(outputSampleRate, outputChannelCount) {
               
         while(1) {              
             // attempt to decode the samples
-            const rd = that.returnDataAlloc.ptr;
-            const code = MHFSCL.mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(that.ptr, that.track.ptr, todec, destdata, rd);
-            const retdata = MHFSCL.UINT32Value(rd);
+            const code = MHFSCL.mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(that.ptr, that.track.ptr, todec, destdata, that.rd.ptr);
 
             // success, retdata is frames read
             if(code === MHFSCL.MHFS_CL_TRACK_SUCCESS)
             {
-                return retdata;
+                return that.rd.get('frames_read');
             }
             if(code !== MHFSCL.MHFS_CL_TRACK_NEED_MORE_DATA)
             {
@@ -603,7 +600,7 @@ const MHFSCLDecoder = async function(outputSampleRate, outputChannelCount) {
             }
 
             // download more data
-            await that.track.downloadAndStoreChunk(retdata, mysignal);
+            await that.track.downloadAndStoreChunk(that.rd.get('needed_offset'), mysignal);
         }        
     };
 
@@ -722,7 +719,10 @@ Module().then(function(MHFSCLMod){
             };
             struct.prototype = structPrototype;
             struct.prototype.constructor = struct;
-            MHFSCL[structmeta.name] = struct;
+            MHFSCL[structmeta.name] = {
+                from : (ptr) => new struct(ptr),
+                sizeof : structmeta.size
+            };
         }
         else if((ValueType === MHFSCL.MCT_VT_UINT64) || (ValueType === MHFSCL.MCT_VT_UINT32) || (ValueType === MHFSCL.MCT_VT_UINT16) || (ValueType === MHFSCL.MCT_VT_UINT8)) {
             currentObject[currentObject.length-1].members[MHFSCL.Module.UTF8ToString(MHFSCL.ValueInfo(mainindex, 1))] = {
@@ -732,41 +732,6 @@ Module().then(function(MHFSCLMod){
         }
         mainindex++;
     }
-
-
-    MHFSCL.mhfs_cl_track_return_data_sizeof = MHFSCLMod.ccall('mhfs_cl_track_return_data_sizeof', "number");
-    if(MHFSCL.mhfs_cl_track_return_data_sizeof !== 4) {
-        throw("Must update usage of MHFSCL.UINT32Value, unexpected MHFSCL.mhfs_cl_track_return_data_sizeof value");
-    }
-    MHFSCL.mhfs_cl_track_sizeof =  MHFSCLMod.ccall('mhfs_cl_track_sizeof', "number");
-    MHFSCL.MHFS_CL_TRACK_SUCCESS = MHFSCLMod.ccall('MHFS_CL_TRACK_SUCCESS_func', "number");
-    MHFSCL.MHFS_CL_TRACK_GENERIC_ERROR = MHFSCLMod.ccall('MHFS_CL_TRACK_GENERIC_ERROR_func', "number");
-    MHFSCL.MHFS_CL_TRACK_NEED_MORE_DATA = MHFSCLMod.ccall('MHFS_CL_TRACK_NEED_MORE_DATA_func', "number");
-
-    MHFSCL.TRACK_M_AUDIOINFO = MHFSCLMod.ccall('MHFS_CL_TRACK_M_AUDIOINFO_func', "number");
-    MHFSCL.TRACK_M_TAGS  = MHFSCLMod.ccall('MHFS_CL_TRACK_M_TAGS_func', "number");
-    MHFSCL.TRACK_M_PICTURE = MHFSCLMod.ccall('MHFS_CL_TRACK_M_PICTURE_func', "number");
-
-    // mhfs_cl_track* access struct members
-    MHFSCL.mhfs_cl_track_currentFrame =  MHFSCLMod.cwrap('mhfs_cl_track_currentFrame', "number", ["number"]);
-
-    MHFSCL.mhfs_cl_track_meta_audioinfo_totalPCMFrameCount = MHFSCLMod.cwrap('mhfs_cl_track_meta_audioinfo_totalPCMFrameCount', "number", ["number"]);
-    MHFSCL.mhfs_cl_track_meta_audioinfo_sampleRate = MHFSCLMod.cwrap('mhfs_cl_track_meta_audioinfo_sampleRate', "number", ["number"]);
-    MHFSCL.mhfs_cl_track_meta_audioinfo_channels = MHFSCLMod.cwrap('mhfs_cl_track_meta_audioinfo_channels', "number", ["number"]);
-    MHFSCL.mhfs_cl_track_meta_audioinfo_fields = MHFSCLMod.cwrap('mhfs_cl_track_meta_audioinfo_fields', "number", ["number"]);
-    MHFSCL.mhfs_cl_track_meta_audioinfo_bitsPerSample = MHFSCLMod.cwrap('mhfs_cl_track_meta_audioinfo_bitsPerSample', "number", ["number"]);
-    MHFSCL.mhfs_cl_track_meta_audioinfo_bitrate = MHFSCLMod.cwrap('mhfs_cl_track_meta_audioinfo_bitrate', "number", ["number"]);
-
-    MHFSCL.mhfs_cl_track_meta_tags_comment_size = MHFSCLMod.cwrap('mhfs_cl_track_meta_tags_comment_size', "number", ["number"]);
-    MHFSCL.mhfs_cl_track_meta_tags_comment_data = MHFSCLMod.cwrap('mhfs_cl_track_meta_tags_comment_data', "number", ["number"]);
-
-    MHFSCL.mhfs_cl_track_meta_picture_type = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_type', "number", ["number"]);
-    MHFSCL.mhfs_cl_track_meta_picture_mime_size = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_mime_size', "number", ["number"]);
-    MHFSCL.mhfs_cl_track_meta_picture_mime = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_mime', "number", ["number"]);
-    MHFSCL.mhfs_cl_track_meta_picture_desc_size = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_desc_size', "number", ["number"]);
-    MHFSCL.mhfs_cl_track_meta_picture_desc = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_desc', "number", ["number"]);
-    MHFSCL.mhfs_cl_track_meta_picture_data_size = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_data_size', "number", ["number"]);
-    MHFSCL.mhfs_cl_track_meta_picture_data = MHFSCLMod.cwrap('mhfs_cl_track_meta_picture_data', "number", ["number"]);
 
     // mhfs_cl_decoder functions
     MHFSCL.mhfs_cl_decoder_open = MHFSCLMod.cwrap('mhfs_cl_decoder_open', "number", ["number", "number", "number"]);
@@ -780,10 +745,6 @@ Module().then(function(MHFSCLMod){
 
     // finish setup
     MHFSCL.PTRSIZE = 4;
-
-    MHFSCL.UINT32Value = function(ptr) {
-        return MHFSCL.Module.HEAPU32[ptr >> 2];
-    };
 
     MHFSCL.AlignedSize = function(size) {
         return Math.ceil(size/4) * 4;

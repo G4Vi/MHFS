@@ -82,21 +82,21 @@ mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32(mhfs_cl_decoder *mhfs_d,
     }
     
     // fast path, no resampling / channel conversion needed
-    if((mhfs_cl_track_meta_audioinfo_sampleRate(&pTrack->meta) == mhfs_d->outputSampleRate) && (mhfs_cl_track_meta_audioinfo_channels(&pTrack->meta) == mhfs_d->outputChannels))
+    if((pTrack->meta.sampleRate == mhfs_d->outputSampleRate) && (pTrack->meta.channels == mhfs_d->outputChannels))
     {
         return mhfs_cl_track_read_pcm_frames_f32(pTrack, desired_pcm_frames, outFloat, pReturnData);
     }
     else
     {
         // initialize the data converter
-        if(mhfs_d->has_madc && (mhfs_d->madc.channelsIn != mhfs_cl_track_meta_audioinfo_channels(&pTrack->meta)))
+        if(mhfs_d->has_madc && (mhfs_d->madc.channelsIn != pTrack->meta.channels))
         {
             ma_data_converter_uninit(&mhfs_d->madc, NULL);
             mhfs_d->has_madc = false;            
         }
         if(!mhfs_d->has_madc)
         {
-            ma_data_converter_config config = ma_data_converter_config_init(ma_format_f32, ma_format_f32, mhfs_cl_track_meta_audioinfo_channels(&pTrack->meta), mhfs_d->outputChannels, mhfs_cl_track_meta_audioinfo_sampleRate(&pTrack->meta), mhfs_d->outputSampleRate);
+            ma_data_converter_config config = ma_data_converter_config_init(ma_format_f32, ma_format_f32, pTrack->meta.channels, mhfs_d->outputChannels, pTrack->meta.sampleRate, mhfs_d->outputSampleRate);
             if(ma_data_converter_init(&config, NULL, &mhfs_d->madc) != MA_SUCCESS)
             {
                 MHFSCLDEC_PRINT("failed to init data converter\n");
@@ -105,9 +105,9 @@ mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32(mhfs_cl_decoder *mhfs_d,
             mhfs_d->has_madc = true;
             MHFSCLDEC_PRINT("success init data converter\n"); 
         }
-        else if(mhfs_d->madc.sampleRateIn != mhfs_cl_track_meta_audioinfo_sampleRate(&pTrack->meta))
+        else if(mhfs_d->madc.sampleRateIn != pTrack->meta.sampleRate)
         {
-            if(ma_data_converter_set_rate(&mhfs_d->madc, mhfs_cl_track_meta_audioinfo_sampleRate(&pTrack->meta), mhfs_d->outputSampleRate) != MA_SUCCESS)
+            if(ma_data_converter_set_rate(&mhfs_d->madc, pTrack->meta.sampleRate, mhfs_d->outputSampleRate) != MA_SUCCESS)
             {
                 MHFSCLDEC_PRINT("failed to change data converter samplerate\n");
                 return MHFS_CL_TRACK_GENERIC_ERROR;
@@ -121,7 +121,7 @@ mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32(mhfs_cl_decoder *mhfs_d,
             MHFSCLDEC_PRINT("failed to get data converter input frame count\n");
             return MHFS_CL_TRACK_GENERIC_ERROR;
         }
-        const size_t reqBytes = dec_frames_req * sizeof(float32_t)*mhfs_cl_track_meta_audioinfo_channels(&pTrack->meta);
+        const size_t reqBytes = dec_frames_req * sizeof(float32_t)*pTrack->meta.channels;
         if(reqBytes > mhfs_d->dcTempOutSize)
         {
             float32_t *tempOut = realloc(mhfs_d->pDCTempOut, reqBytes);
