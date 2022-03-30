@@ -277,12 +277,12 @@ const MHFSCLTrackOnMeta = function(mhfscltrackid, blockType, pBlock) {
             mhfscltrack.bitrate = audioinfo.get('bitrate');
         }
 
-        mhfscltrack.duration = MHFSCL.mhfs_cl_track_meta_audioinfo_durationInSecs(pBlock);
+        mhfscltrack.duration = MHFSCL.Module._mhfs_cl_track_meta_audioinfo_durationInSecs(pBlock);
     }
     else if(blockType == MHFSCL.MHFS_CL_TRACK_M_TAGS) {
         mhfscltrack.tags = {};
         do {
-            const pComment = MHFSCL.mhfs_cl_track_meta_tags_next_comment(pBlock);
+            const pComment = MHFSCL.Module._mhfs_cl_track_meta_tags_next_comment(pBlock);
             if(pComment === 0) break;
             const comment = MHFSCL.mhfs_cl_track_meta_tags_comment.from(pComment);
             const strcomment = MHFSCL.Module.UTF8ToString(comment.get('comment'), comment.get('commentSize'));
@@ -339,10 +339,10 @@ const MHFSCLTrack = async function(gsignal, theURL, DLMGR) {
     };
 
     that._storeChunk = function(chunk, start) {
-        let blockptr = MHFSCL.mhfs_cl_track_add_block(that.ptr, start, that.filesize);
+        let blockptr = MHFSCL.Module._mhfs_cl_track_add_block(that.ptr, start, that.filesize);
         if(!blockptr)
         {
-            throw("failed MHFSCL.mhfs_cl_track_add_block");
+            throw("failed MHFSCL.Module._mhfs_cl_track_add_block");
         }
         let dataHeap = new Uint8Array(MHFSCL.Module.HEAPU8.buffer, blockptr, chunk.data.byteLength);
         dataHeap.set(chunk.data);
@@ -357,7 +357,7 @@ const MHFSCLTrack = async function(gsignal, theURL, DLMGR) {
     that.close = function() {
         if(that.ptr){
             if(that.initialized) {
-                MHFSCL.mhfs_cl_track_deinit(that.ptr);
+                MHFSCL.Module._mhfs_cl_track_deinit(that.ptr);
             }
             MHFSCL.Module._free(that.ptr);
             that.ptr = null;
@@ -365,7 +365,7 @@ const MHFSCLTrack = async function(gsignal, theURL, DLMGR) {
     };
     
     that.seek = function(pcmFrameIndex) {
-        if(!MHFSCL.mhfs_cl_track_seek_to_pcm_frame(that.ptr, pcmFrameIndex)) throw("Failed to seek to " + pcmFrameIndex);
+        if(!MHFSCL.Module._mhfs_cl_track_seek_to_pcm_frame(that.ptr, pcmFrameIndex)) throw("Failed to seek to " + pcmFrameIndex);
     };
 
     that.seekSecs = function(floatseconds) {
@@ -376,7 +376,7 @@ const MHFSCLTrack = async function(gsignal, theURL, DLMGR) {
         if(!that.picture) {
             return undefined;
         }
-        that.picture.hash = MHFSCL.mhfs_cl_djb2(that.picture.pPicture, that.picture.pictureSize);
+        that.picture.hash = MHFSCL.Module._mhfs_cl_djb2(that.picture.pPicture, that.picture.pictureSize);
         that.picture.toURL = function() {
             const srcData = new Uint8Array(MHFSCL.Module.HEAPU8.buffer, that.picture.pPicture, that.picture.pictureSize);
             const picData = new Uint8Array(srcData);
@@ -395,20 +395,23 @@ const MHFSCLTrack = async function(gsignal, theURL, DLMGR) {
     if(!that.ptr) throw("failed malloc");
     const rd = MHFSCL.mhfs_cl_track_return_data.from(that.ptr + alignedTrackSize);
     const thatid = MHFSCLObjectMap.addData(that);
+    const pFullFilename = MHFSCL.Module.allocateUTF8(theURL);
+    let pMime;
     try {
         // initialize the track
         let start = 0;
         const firstreq = await that._downloadChunk(start, gsignal);
         const mime = firstreq.headers['Content-Type'] || '';
+        pMime = MHFSCL.Module.allocateUTF8(mime);
         const totalPCMFrames = firstreq.headers['X-MHFS-totalPCMFrameCount'] || 0;
-        MHFSCL.mhfs_cl_track_init(that.ptr, that.CHUNKSIZE, mime, theURL, totalPCMFrames);
+        MHFSCL.Module._mhfs_cl_track_init(that.ptr, that.CHUNKSIZE);
         that.initialized = true;
         that._storeChunk(firstreq, start);
 
         // load enough of the track that the metadata loads
         for(;;) {
             that.picture = null;
-            const code = MHFSCL.mhfs_cl_track_load_metadata(that.ptr, rd.ptr, MHFSCL.pMHFSCLTrackOnMeta, thatid);
+            const code = MHFSCL.Module._mhfs_cl_track_load_metadata(that.ptr, rd.ptr, pMime, pFullFilename, totalPCMFrames & 0xFFFFFFFF, (totalPCMFrames >> 32) & 0xFFFFFFFF, MHFSCL.pMHFSCLTrackOnMeta, thatid);
             if(code === MHFSCL.MHFS_CL_TRACK_SUCCESS) {
                 break;
             }
@@ -425,6 +428,8 @@ const MHFSCLTrack = async function(gsignal, theURL, DLMGR) {
         throw(error);
     }
     finally {
+        MHFSCL.Module._free(pFullFilename);
+        if(pMime) MHFSCL.Module._free(pMime);
         MHFSCLObjectMap.removeData(thatid);
     }
 
@@ -509,7 +514,7 @@ const MHFSCLDecoder = async function(outputSampleRate, outputChannelCount) {
         await waitForEvent(MHFSCL, 'ready');
     }
 	const that = {};
-	that.ptr = MHFSCL.mhfs_cl_decoder_open(outputSampleRate, outputChannelCount, outputSampleRate);
+	that.ptr = MHFSCL.Module._mhfs_cl_decoder_open(outputSampleRate, outputChannelCount, outputSampleRate);
     if(! that.ptr) throw("Failed to open decoder");
 
     that.outputSampleRate = outputSampleRate;
@@ -523,7 +528,7 @@ const MHFSCLDecoder = async function(outputSampleRate, outputChannelCount) {
     that.rd = MHFSCL.mhfs_cl_track_return_data.from(that.returnDataAlloc.ptr);
 
     that.flush = async function() {
-        MHFSCL.mhfs_cl_decoder_flush(that.ptr);
+        MHFSCL.Module._mhfs_cl_decoder_flush(that.ptr);
     };
 
     that.closeCurrentTrack = async function() {
@@ -535,7 +540,7 @@ const MHFSCLDecoder = async function(outputSampleRate, outputChannelCount) {
 
     that.close = async function(){
         await that.closeCurrentTrack();
-        MHFSCL.mhfs_cl_decoder_close(that.ptr);
+        MHFSCL.Module._mhfs_cl_decoder_close(that.ptr);
         that.ptr = 0;
         that.returnDataAlloc.free();
         that.deinterleaveDataAlloc.free();
@@ -587,7 +592,7 @@ const MHFSCLDecoder = async function(outputSampleRate, outputChannelCount) {
               
         while(1) {              
             // attempt to decode the samples
-            const code = MHFSCL.mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(that.ptr, that.track.ptr, todec, destdata, that.rd.ptr);
+            const code = MHFSCL.Module._mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(that.ptr, that.track.ptr, todec, destdata, that.rd.ptr);
 
             // success, retdata is frames read
             if(code === MHFSCL.MHFS_CL_TRACK_SUCCESS)
@@ -596,7 +601,7 @@ const MHFSCLDecoder = async function(outputSampleRate, outputChannelCount) {
             }
             if(code !== MHFSCL.MHFS_CL_TRACK_NEED_MORE_DATA)
             {
-                throw("mhfs_cl_track_read_pcm_frames_f32 failed");
+                throw("mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved failed");
             }
 
             // download more data
@@ -661,25 +666,11 @@ export { MHFSCLDecoder };
 Module().then(function(MHFSCLMod){
     MHFSCL.Module = MHFSCLMod;
 
-    // mhfs_cl_track* functions
-    MHFSCL.mhfs_cl_track_init = MHFSCLMod.cwrap('mhfs_cl_track_init', null, ["number", "number", "string", "string", "number"]);
-    MHFSCL.mhfs_cl_track_deinit = MHFSCLMod.cwrap('mhfs_cl_track_deinit', null, ["number"]);
-    MHFSCL.mhfs_cl_track_add_block = MHFSCLMod.cwrap('mhfs_cl_track_add_block', "number", ["number", "number", "number"]);
-    MHFSCL.mhfs_cl_track_load_metadata = MHFSCLMod.cwrap('mhfs_cl_track_load_metadata', "number", ["number", "number", "number", "number"]);
-    MHFSCL.mhfs_cl_track_seek_to_pcm_frame = MHFSCLMod.cwrap('mhfs_cl_track_seek_to_pcm_frame', "number", ["number", "number"]);
-    MHFSCL.mhfs_cl_track_read_pcm_frames_f32 = MHFSCLMod.cwrap('mhfs_cl_track_read_pcm_frames_f32', "number", ["number", "number", "number", "number"]);
-
-    MHFSCL.mhfs_cl_track_meta_audioinfo_durationInSecs = MHFSCLMod.cwrap('mhfs_cl_track_meta_audioinfo_durationInSecs', "number", ["number"]);
-    MHFSCL.mhfs_cl_track_meta_tags_next_comment = MHFSCLMod.cwrap('mhfs_cl_track_meta_tags_next_comment', "number", ["number"]);
-
-    // mhfs_cl_track util functions
-    MHFSCL.mhfs_cl_djb2 = MHFSCLMod.cwrap('mhfs_cl_djb2', "number", ["number", "number"]);
-
-    // mhfs_cl_track* constants
-    MHFSCL.MCT_VT_CONST_IV = 1;
-    MHFSCL.ValueInfo = MHFSCLMod.cwrap('ValueInfo', "number", ["number", "number"]);
+    // Load types
+    MHFSCL.ValueInfo = MHFSCLMod._ValueInfo;
     const currentObject = [MHFSCL];
     let mainindex = 0;
+    MHFSCL[MHFSCL.Module.UTF8ToString(MHFSCL.ValueInfo(mainindex, 1))] = MHFSCL.ValueInfo(mainindex, 2); // load MCT_VT_CONST_IV)
     while(1) {
         const ValueType = MHFSCL.ValueInfo(mainindex, 0);
         if(ValueType === 0) break;
@@ -732,13 +723,6 @@ Module().then(function(MHFSCLMod){
         }
         mainindex++;
     }
-
-    // mhfs_cl_decoder functions
-    MHFSCL.mhfs_cl_decoder_open = MHFSCLMod.cwrap('mhfs_cl_decoder_open', "number", ["number", "number", "number"]);
-    MHFSCL.mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved = MHFSCLMod.cwrap('mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved', "number", ["number", "number", "number", "number", "number"]);
-    MHFSCL.mhfs_cl_decoder_close = MHFSCLMod.cwrap('mhfs_cl_decoder_close', null, ["number"]);
-    MHFSCL.mhfs_cl_decoder_flush = MHFSCLMod.cwrap('mhfs_cl_decoder_flush', null, ["number"]);
-
 
     // link callbacks in
     MHFSCL.pMHFSCLTrackOnMeta = MHFSCL.Module.addFunction(MHFSCLTrackOnMeta, 'viii');

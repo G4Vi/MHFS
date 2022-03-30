@@ -76,8 +76,6 @@ typedef struct {
     unsigned afterID3Offset;
     bool meta_initialized;
     uint32_t currentFrame;
-    char mime[16];
-    char fullfilename[256];
 } mhfs_cl_track;
 
 typedef enum {
@@ -98,10 +96,10 @@ typedef union {
 #define LIBEXPORT
 #endif
 
-LIBEXPORT void mhfs_cl_track_init(mhfs_cl_track *pTrack, const unsigned blocksize, const char *mime, const char *fullfilename, const uint64_t totalPCMFrameCount);
+LIBEXPORT void mhfs_cl_track_init(mhfs_cl_track *pTrack, const unsigned blocksize);
 LIBEXPORT void mhfs_cl_track_deinit(mhfs_cl_track *pTrack);
 LIBEXPORT void *mhfs_cl_track_add_block(mhfs_cl_track *pTrack, const uint32_t block_start, const unsigned filesize);
-LIBEXPORT mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock, void *context);
+LIBEXPORT mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const char *mime, const char *fullfilename, const uint64_t totalPCMFrameCount, const mhfs_cl_track_on_metablock on_metablock, void *context);
 LIBEXPORT int mhfs_cl_track_seek_to_pcm_frame(mhfs_cl_track *pTrack, const uint32_t pcmFrameIndex);
 LIBEXPORT mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *outFloat, mhfs_cl_track_return_data *pReturnData);
 
@@ -234,132 +232,135 @@ uint64_t ValueInfo(const uint32_t itemIndex, const uint32_t subItemIndex)
     switch(itemIndex)
     {
         case 0:
-        MCT_VT_EXPOSE_CONST_IV(MCT_VT_CONST_CSTRING);
+        MCT_VT_EXPOSE_CONST_IV(MCT_VT_CONST_IV);
         break;
         case 1:
-        MCT_VT_EXPOSE_CONST_IV(MCT_VT_ST);
+        MCT_VT_EXPOSE_CONST_IV(MCT_VT_CONST_CSTRING);
         break;
         case 2:
-        MCT_VT_EXPOSE_CONST_IV(MCT_VT_ST_END);
+        MCT_VT_EXPOSE_CONST_IV(MCT_VT_ST);
         break;
         case 3:
-        MCT_VT_EXPOSE_CONST_IV(MCT_VT_UINT64);
+        MCT_VT_EXPOSE_CONST_IV(MCT_VT_ST_END);
         break;
         case 4:
-        MCT_VT_EXPOSE_CONST_IV(MCT_VT_UINT32);
+        MCT_VT_EXPOSE_CONST_IV(MCT_VT_UINT64);
         break;
         case 5:
-        MCT_VT_EXPOSE_CONST_IV(MCT_VT_UINT16);
+        MCT_VT_EXPOSE_CONST_IV(MCT_VT_UINT32);
         break;
         case 6:
-        MCT_VT_EXPOSE_CONST_IV(MCT_VT_UINT8);
+        MCT_VT_EXPOSE_CONST_IV(MCT_VT_UINT16);
         break;
         case 7:
-        MCT_VT_EXPOSE_CONST_IV(MHFS_CL_TRACK_SUCCESS);
+        MCT_VT_EXPOSE_CONST_IV(MCT_VT_UINT8);
         break;
         case 8:
-        MCT_VT_EXPOSE_CONST_IV(MHFS_CL_TRACK_GENERIC_ERROR);
+        MCT_VT_EXPOSE_CONST_IV(MHFS_CL_TRACK_SUCCESS);
         break;
         case 9:
-        MCT_VT_EXPOSE_CONST_IV(MHFS_CL_TRACK_NEED_MORE_DATA);
+        MCT_VT_EXPOSE_CONST_IV(MHFS_CL_TRACK_GENERIC_ERROR);
         break;
         case 10:
-        MCT_VT_EXPOSE_CONST_IV(MHFS_CL_TRACK_M_AUDIOINFO);
+        MCT_VT_EXPOSE_CONST_IV(MHFS_CL_TRACK_NEED_MORE_DATA);
         break;
         case 11:
-        MCT_VT_EXPOSE_CONST_IV(MHFS_CL_TRACK_M_TAGS);
+        MCT_VT_EXPOSE_CONST_IV(MHFS_CL_TRACK_M_AUDIOINFO);
         break;
         case 12:
-        MCT_VT_EXPOSE_CONST_IV(MHFS_CL_TRACK_M_PICTURE);
+        MCT_VT_EXPOSE_CONST_IV(MHFS_CL_TRACK_M_TAGS);
         break;
         case 13:
-        MCT_VT_EXPOSE_STRUCT_BEGIN(mhfs_cl_track);
+        MCT_VT_EXPOSE_CONST_IV(MHFS_CL_TRACK_M_PICTURE);
         break;
         case 14:
-        MCT_VT_EXPOSE_STRUCT_END();
+        MCT_VT_EXPOSE_STRUCT_BEGIN(mhfs_cl_track);
         break;
         case 15:
-        MCT_VT_EXPOSE_STRUCT_BEGIN(mhfs_cl_track_return_data);
+        MCT_VT_EXPOSE_STRUCT_END();
         break;
         case 16:
-        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_return_data, frames_read);
+        MCT_VT_EXPOSE_STRUCT_BEGIN(mhfs_cl_track_return_data);
         break;
         case 17:
-        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_return_data, needed_offset);
+        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_return_data, frames_read);
         break;
         case 18:
-        MCT_VT_EXPOSE_STRUCT_END();
+        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_return_data, needed_offset);
         break;
         case 19:
-        MCT_VT_EXPOSE_CONST_IV(MCT_MAI_FLD_EMPTY);
+        MCT_VT_EXPOSE_STRUCT_END();
         break;
         case 20:
-        MCT_VT_EXPOSE_CONST_IV(MCT_MAI_FLD_BITSPERSAMPLE);
+        MCT_VT_EXPOSE_CONST_IV(MCT_MAI_FLD_EMPTY);
         break;
         case 21:
-        MCT_VT_EXPOSE_CONST_IV(MCT_MAI_FLD_BITRATE);
+        MCT_VT_EXPOSE_CONST_IV(MCT_MAI_FLD_BITSPERSAMPLE);
         break;
         case 22:
-        MCT_VT_EXPOSE_STRUCT_BEGIN(mhfs_cl_track_meta_audioinfo);
+        MCT_VT_EXPOSE_CONST_IV(MCT_MAI_FLD_BITRATE);
         break;
         case 23:
-        MCT_VT_EXPOSE_STRUCT_UINT64(mhfs_cl_track_meta_audioinfo, totalPCMFrameCount);
+        MCT_VT_EXPOSE_STRUCT_BEGIN(mhfs_cl_track_meta_audioinfo);
         break;
         case 24:
-        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_audioinfo, sampleRate);
+        MCT_VT_EXPOSE_STRUCT_UINT64(mhfs_cl_track_meta_audioinfo, totalPCMFrameCount);
         break;
         case 25:
-        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_audioinfo, fields);
+        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_audioinfo, sampleRate);
         break;
         case 26:
-        MCT_VT_EXPOSE_STRUCT_UINT16(mhfs_cl_track_meta_audioinfo, bitrate);
+        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_audioinfo, fields);
         break;
         case 27:
-        MCT_VT_EXPOSE_STRUCT_UINT8(mhfs_cl_track_meta_audioinfo, channels);
+        MCT_VT_EXPOSE_STRUCT_UINT16(mhfs_cl_track_meta_audioinfo, bitrate);
         break;
         case 28:
-        MCT_VT_EXPOSE_STRUCT_UINT8(mhfs_cl_track_meta_audioinfo, bitsPerSample);
+        MCT_VT_EXPOSE_STRUCT_UINT8(mhfs_cl_track_meta_audioinfo, channels);
         break;
         case 29:
-        MCT_VT_EXPOSE_STRUCT_END();
+        MCT_VT_EXPOSE_STRUCT_UINT8(mhfs_cl_track_meta_audioinfo, bitsPerSample);
         break;
         case 30:
-        MCT_VT_EXPOSE_STRUCT_BEGIN(mhfs_cl_track_meta_tags_comment);
-        break;
-        case 31:
-        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_tags_comment, commentSize);
-        break;
-        case 32:
-        MCT_VT_EXPOSE_STRUCT_PTR(mhfs_cl_track_meta_tags_comment, comment);
-        break;
-        case 33:
         MCT_VT_EXPOSE_STRUCT_END();
         break;
+        case 31:
+        MCT_VT_EXPOSE_STRUCT_BEGIN(mhfs_cl_track_meta_tags_comment);
+        break;
+        case 32:
+        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_tags_comment, commentSize);
+        break;
+        case 33:
+        MCT_VT_EXPOSE_STRUCT_PTR(mhfs_cl_track_meta_tags_comment, comment);
+        break;
         case 34:
-        MCT_VT_EXPOSE_STRUCT_BEGIN(mhfs_cl_track_meta_picture);
+        MCT_VT_EXPOSE_STRUCT_END();
         break;
         case 35:
-        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_picture, pictureType);
+        MCT_VT_EXPOSE_STRUCT_BEGIN(mhfs_cl_track_meta_picture);
         break;
         case 36:
-        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_picture, mimeSize);
+        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_picture, pictureType);
         break;
         case 37:
-        MCT_VT_EXPOSE_STRUCT_PTR(mhfs_cl_track_meta_picture, mime);
+        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_picture, mimeSize);
         break;
         case 38:
-        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_picture, descSize);
+        MCT_VT_EXPOSE_STRUCT_PTR(mhfs_cl_track_meta_picture, mime);
         break;
         case 39:
-        MCT_VT_EXPOSE_STRUCT_PTR(mhfs_cl_track_meta_picture, desc);
+        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_picture, descSize);
         break;
         case 40:
-        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_picture, pictureDataSize);
+        MCT_VT_EXPOSE_STRUCT_PTR(mhfs_cl_track_meta_picture, desc);
         break;
         case 41:
-        MCT_VT_EXPOSE_STRUCT_PTR(mhfs_cl_track_meta_picture, pictureData);
+        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_picture, pictureDataSize);
         break;
         case 42:
+        MCT_VT_EXPOSE_STRUCT_PTR(mhfs_cl_track_meta_picture, pictureData);
+        break;
+        case 43:
         MCT_VT_EXPOSE_STRUCT_END();
         break;
     }
@@ -639,14 +640,12 @@ static inline void mhfs_cl_track_allocs_restore(mhfs_cl_track *pTrack)
     return mhfs_cl_track_allocs_backup_or_restore(pTrack, false);
 }
 
-void mhfs_cl_track_init(mhfs_cl_track *pTrack, const unsigned blocksize, const char *mime, const char *fullfilename, const uint64_t totalPCMFrameCount)
+void mhfs_cl_track_init(mhfs_cl_track *pTrack, const unsigned blocksize)
 {
     for(unsigned i = 0; i < MHFS_CL_TRACK_MAX_ALLOCS; i++)
     {
         pTrack->allocs.allocptrs[i] = NULL;
     }
-    snprintf(pTrack->mime, mhfs_cl_member_size(mhfs_cl_track, mime), "%s", mime);
-    snprintf(pTrack->fullfilename, mhfs_cl_member_size(mhfs_cl_track, fullfilename), "%s", fullfilename);
     pTrack->decoderConfig = ma_decoder_config_init(ma_format_f32, 0, 0);
     ma_allocation_callbacks cbs;
     cbs.pUserData = pTrack;
@@ -659,7 +658,6 @@ void mhfs_cl_track_init(mhfs_cl_track *pTrack, const unsigned blocksize, const c
     pTrack->dec_initialized = false;
     blockvf_init(&pTrack->vf, blocksize);
     pTrack->meta_initialized = false;
-    pTrack->meta.totalPCMFrameCount = totalPCMFrameCount;
     pTrack->currentFrame = 0;
 }
 
@@ -1066,10 +1064,10 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_ma_decoder(mhfs_cl_track 
     return retval;
 }
 
-static inline ma_encoding_format mhfs_cl_track_guess_codec(mhfs_cl_track *pTrack, const uint8_t *id)
+static inline ma_encoding_format mhfs_cl_track_guess_codec(mhfs_cl_track *pTrack, const uint8_t *id, const char *mime, const char *fullfilename)
 {
-    const size_t namelen = strlen(pTrack->fullfilename);
-    const char *lastFourChars = (namelen >= 4) ? (pTrack->fullfilename + namelen - 4) : "";
+    const size_t namelen = strlen(fullfilename);
+    const char *lastFourChars = (namelen >= 4) ? (fullfilename + namelen - 4) : "";
     const uint32_t uMagic = unaligned_beu32_to_native(id);
     MHFSCLTR_PRINT("uMagic %X %X %X %X @ 0x%X\n", id[0], id[1], id[2], id[3], pTrack->vf.fileoffset-4);
     if(memcmp(id, "fLaC", 4) == 0)
@@ -1086,15 +1084,15 @@ static inline ma_encoding_format mhfs_cl_track_guess_codec(mhfs_cl_track *pTrack
         return ma_encoding_format_mp3;
     }
     // fallback, attempt to speed up guesses by mime
-    else if(strcmp(pTrack->mime, "audio/flac") == 0)
+    else if(strcmp(mime, "audio/flac") == 0)
     {
         return ma_encoding_format_flac;
     }
-    else if((strcmp(pTrack->mime, "audio/wave") == 0) || (strcmp(pTrack->mime, "audio/wav") == 0))
+    else if((strcmp(mime, "audio/wave") == 0) || (strcmp(mime, "audio/wav") == 0))
     {
         return ma_encoding_format_wav;
     }
-    else if(strcmp(pTrack->mime, "audio/mpeg") == 0)
+    else if(strcmp(mime, "audio/mpeg") == 0)
     {
         return ma_encoding_format_mp3;
     }
@@ -1135,7 +1133,7 @@ static inline void mhfs_cl_track_io_error_update(mhfs_cl_track_io_error *ioError
     }
 }
 
-mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock, void *context)
+mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const char *mime, const char *fullfilename, const uint64_t totalPCMFrameCount, const mhfs_cl_track_on_metablock on_metablock, void *context)
 {
     mhfs_cl_track_return_data rd;
     if(pReturnData == NULL) pReturnData = &rd;
@@ -1174,7 +1172,7 @@ mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_t
     ma_encoding_format encFmt;
     if(pTrack->decoderConfig.encodingFormat == ma_encoding_format_unknown)
     {
-        encFmt = mhfs_cl_track_guess_codec(pTrack, id);
+        encFmt = mhfs_cl_track_guess_codec(pTrack, id, mime, fullfilename);
     }
     else
     {
@@ -1190,6 +1188,9 @@ mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_t
     {
         mhfs_cl_track_swap_tryorder(&tryorder[DAF_WAV], &tryorder[0]);
     }
+
+    // set this as a fallback
+    pTrack->meta.totalPCMFrameCount = totalPCMFrameCount;
 
     // try the various codecs
     mhfs_cl_track_io_error ioError = {
