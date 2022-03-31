@@ -619,6 +619,25 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrac
     return MHFS_CL_TRACK_SUCCESS;
 }
 
+static inline mhfs_cl_track_error mhfs_cl_parse_id3_header_after_magic(blockvf *pBlockvf, uint32_t *blockvfNeededOffset, uint16_t *id3version,  uint8_t *flags, uint32_t *tagSize)
+{
+    const uint8_t *header;
+    const blockvf_error headerError = blockvf_read_view(pBlockvf, 7, &header, blockvfNeededOffset);
+    if(headerError != BLOCKVF_SUCCESS)
+    {
+        return mhfs_cl_track_error_from_blockvf_error(headerError);
+    }
+    uint32_t headerSize = unsynchsafe_32((header[3] << 24) | (header[4] << 16) | (header[5] << 8) | (header[6]));
+    if(header[2] & 0x10)
+    {
+        headerSize += 10;
+    }
+    *id3version = (header[0] << 8) | header[1];
+    *flags = header[2];
+    *tagSize = headerSize;
+    return MHFS_CL_TRACK_SUCCESS;
+}
+
 typedef enum {
     MCT_MVER_TWOPOINTFIVE = 0x0,
     MCT_MVER_RESERVED     = 0x1,
@@ -636,6 +655,87 @@ typedef enum {
 static mhfs_cl_track_error mhfs_cl_track_load_metadata_mp3(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock, void *context)
 {
     const unsigned startoffset = pTrack->vf.fileoffset;
+
+    // we care about id3 tags in mp3
+    pTrack->vf.fileoffset = 0;
+    for(;;)
+    {
+        const uint8_t *id;
+        const blockvf_error idError = blockvf_read_view(&pTrack->vf, 3, &id, &pReturnData->needed_offset);
+        if(idError != BLOCKVF_SUCCESS)
+        {
+            return mhfs_cl_track_error_from_blockvf_error(idError);
+        }
+        if(memcmp(id, "ID3", 3) != 0) break;
+        uint16_t version;
+        uint8_t flags;
+        uint32_t tagSize;
+        const mhfs_cl_track_error parseError = mhfs_cl_parse_id3_header_after_magic(&pTrack->vf, &pReturnData->needed_offset, &version, &flags, &tagSize);
+        if(parseError != MHFS_CL_TRACK_SUCCESS)
+        {
+            return parseError;
+        }
+        MHFSCLTR_PRINT("id3 version: %X %X\n", (version >> 8) & 0xFF, version & 0xFF);
+        const uint8_t *frames;
+        const blockvf_error frameError = blockvf_read_view(&pTrack->vf, tagSize, &frames, &pReturnData->needed_offset);
+        if(frameError != BLOCKVF_SUCCESS)
+        {
+            return mhfs_cl_track_error_from_blockvf_error(frameError);
+        }
+        while(tagSize >= 10) {
+            const uint32_t framesize = unsynchsafe_32(unaligned_beu32_to_native(frames+4));
+            unsigned frameheadersize = 10;
+            MHFSCLTR_PRINT("id3 frameid: %c %c %c %c size: %u\n", frames[0], frames[1], frames[2], frames[3], framesize);
+            if(frames[9] & 0x3) {
+                MHFSCLTR_PRINT("unsync applied\n");
+            }
+            else if(frames[9] & 0x1) {
+                const uint32_t dli = unsynchsafe_32(unaligned_beu32_to_native(&frames[10]));
+                MHFSCLTR_PRINT("data length indicator %u\n", dli);
+                frameheadersize += 4;
+            }
+            if((framesize+frameheadersize) > tagSize)
+            {
+                MHFSCLTR_PRINT("id3 frame exceeds tag!, size left: %u\n", tagSize-frameheadersize);
+                break;
+            }
+            if(memcmp(frames, "APIC", 4) == 0)
+            {
+                if(on_metablock != NULL)
+                {
+                    const uint8_t *apicCurrentItem = &frames[frameheadersize];
+                    const uint8_t encoding = apicCurrentItem[0]; apicCurrentItem++;
+                    const char *mime = (char*)apicCurrentItem;
+                    const uint32_t mimeSize = strlen(mime); apicCurrentItem += (mimeSize+1);
+                    uint8_t type = apicCurrentItem[0]; apicCurrentItem++;
+                    const char *desc = (char*)apicCurrentItem;
+                    const uint32_t descSize = strlen(desc); apicCurrentItem += (descSize+1);
+                    uint32_t pictureDataSize = framesize - 4 - mimeSize - descSize;
+                    const uint8_t *pictureData = apicCurrentItem;
+                    if((pictureData+pictureDataSize) != (frames + (framesize+frameheadersize)))
+                    {
+                        MHFSCLTR_PRINT("picture size is messed up\n");
+                    }
+                    MHFSCLTR_PRINT("APIC encoding: %X mime: %s type: %X, desc: %s\n", encoding, mime, type, desc);
+                    mhfs_cl_track_meta_picture picture = {
+                        .pictureType = type,
+                        .mimeSize = mimeSize,
+                        .mime = (uint8_t*)mime,
+                        .descSize = descSize,
+                        .desc = (uint8_t*)desc,
+                        .pictureDataSize = pictureDataSize,
+                        .pictureData = pictureData
+                    };
+                    on_metablock(context, MHFS_CL_TRACK_M_PICTURE, &picture);
+                }
+            }
+
+            tagSize -= (framesize+frameheadersize);
+            frames += (framesize+frameheadersize);
+        }
+    }
+    pTrack->vf.fileoffset = startoffset;
+
     // check for magic
     const uint8_t *id;
     const blockvf_error idError = blockvf_read_view(&pTrack->vf, 4, &id, &pReturnData->needed_offset);
@@ -787,6 +887,8 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_mp3(mhfs_cl_track *pTrack
 
     // ID3 TLEN?
 
+
+
     //estimate from bitrate?
 
     return MHFS_CL_TRACK_GENERIC_ERROR;
@@ -866,12 +968,11 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_ma_decoder(mhfs_cl_track 
     return retval;
 }
 
-static inline ma_encoding_format mhfs_cl_track_guess_codec(mhfs_cl_track *pTrack, const uint8_t *id, const char *mime, const char *fullfilename)
+static inline ma_encoding_format mhfs_cl_guess_codec(const uint8_t *id, const char *mime, const char *fullfilename)
 {
     const size_t namelen = strlen(fullfilename);
     const char *lastFourChars = (namelen >= 4) ? (fullfilename + namelen - 4) : "";
     const uint32_t uMagic = unaligned_beu32_to_native(id);
-    MHFSCLTR_PRINT("uMagic %X %X %X %X @ 0x%X\n", id[0], id[1], id[2], id[3], pTrack->vf.fileoffset-4);
     if(memcmp(id, "fLaC", 4) == 0)
     {
         return ma_encoding_format_flac;
@@ -942,7 +1043,7 @@ mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_t
 
     // seek past ID3 tags
     pTrack->vf.fileoffset = 0;
-    const uint8_t *id; //[4];
+    const uint8_t *id;
     for(;;)
     {
         const blockvf_error idError = blockvf_read_view(&pTrack->vf, 4, &id, &pReturnData->needed_offset);
@@ -950,20 +1051,18 @@ mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_t
         {
             return mhfs_cl_track_error_from_blockvf_error(idError);
         }
-        if(memcmp(id, "ID3", 3) !=  0) break;
-        const uint8_t *header;
-        const blockvf_error headerError = blockvf_read_view(&pTrack->vf, 6, &header, &pReturnData->needed_offset);
-        if(headerError != BLOCKVF_SUCCESS)
+        MHFSCLTR_PRINT("uMagic %X %X %X %X @ 0x%X\n", id[0], id[1], id[2], id[3], pTrack->vf.fileoffset-4);
+        if(memcmp(id, "ID3", 3) != 0) break;
+        pTrack->vf.fileoffset--;
+        uint16_t id3version;
+        uint8_t flags;
+        uint32_t tagSize;
+        const mhfs_cl_track_error parseError = mhfs_cl_parse_id3_header_after_magic(&pTrack->vf, &pReturnData->needed_offset, &id3version, &flags, &tagSize);
+        if(parseError != MHFS_CL_TRACK_SUCCESS)
         {
-            return mhfs_cl_track_error_from_blockvf_error(headerError);
+            return parseError;
         }
-        const uint8_t flags = header[1];
-        uint32_t headerSize = unsynchsafe_32((header[2] << 24) | (header[3] << 16) | (header[4] << 8) | (header[5]));
-        if(flags & 0x10)
-        {
-            headerSize += 10;
-        }
-        if(BLOCKVF_SUCCESS != blockvf_seek(&pTrack->vf, headerSize, blockvf_seek_origin_current))
+        if(BLOCKVF_SUCCESS != blockvf_seek(&pTrack->vf, tagSize, blockvf_seek_origin_current))
         {
             return MHFS_CL_TRACK_GENERIC_ERROR;
         }
@@ -974,7 +1073,7 @@ mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_t
     ma_encoding_format encFmt;
     if(pTrack->decoderConfig.encodingFormat == ma_encoding_format_unknown)
     {
-        encFmt = mhfs_cl_track_guess_codec(pTrack, id, mime, fullfilename);
+        encFmt = mhfs_cl_guess_codec(id, mime, fullfilename);
     }
     else
     {
