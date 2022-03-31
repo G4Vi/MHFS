@@ -16,3 +16,6 @@
 
 #define MHFSCLDECODER_IMPLEMENTATION
 #include "mhfs_cl_decoder.h"
+
+#define MHFSCLMISC_IMPLEMENTATION
+#include "mhfs_cl_misc.h"

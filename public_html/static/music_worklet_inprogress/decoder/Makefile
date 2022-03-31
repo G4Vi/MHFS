@@ -11,7 +11,7 @@ CFLAGS:=-Wall -Wextra -Werror -I$(DRFLACDIR) -I$(MINIAUDIODIR) -DMA_NO_DEVICE_IO
 all: CFLAGS += -O3
 all: $(TARGET)
 
-$(TARGET): $(SRCDIR)/mhfs_cl.c $(DRFLACDIR)/dr_flac.h $(MINIAUDIODIR)/miniaudio.h $(SRCDIR)/blockvf.h $(SRCDIR)/mhfs_cl_track.h $(SRCDIR)/mhfs_cl_decoder.h
+$(TARGET): $(SRCDIR)/mhfs_cl.c $(DRFLACDIR)/dr_flac.h $(MINIAUDIODIR)/miniaudio.h $(SRCDIR)/blockvf.h $(SRCDIR)/mhfs_cl_track.h $(SRCDIR)/mhfs_cl_decoder.h $(SRCDIR)/exposetype.h $(SRCDIR)/mhfs_cl_misc.h
 	mkdir -p $(OUTDIR)
 	$(CC) $(CFLAGS) -o $@ $<
 
