@@ -110,7 +110,7 @@ LIBEXPORT const mhfs_cl_track_meta_tags_comment *mhfs_cl_track_meta_tags_next_co
 LIBEXPORT unsigned long mhfs_cl_djb2(const uint8_t *pData, const size_t dataLen);
 
 // For JS convenience export types
-LIBEXPORT uint64_t ValueInfo(const uint32_t itemIndex, const uint32_t subItemIndex);
+LIBEXPORT uint64_t mhfs_cl_et_load_type(const uint32_t itemIndex, const uint32_t subItemIndex);
 
 #if defined(MHFSCLTRACK_IMPLEMENTATION)
 #ifndef mhfs_cl_track_c
@@ -142,17 +142,17 @@ unsigned long mhfs_cl_djb2(const uint8_t *pData, const size_t dataLen)
 }
 
 typedef enum {
-    MCT_VT_CONST_IV = 1,
-    MCT_VT_CONST_CSTRING = 2,
-    MCT_VT_ST = 3,     // also used for unions
-    MCT_VT_ST_END = 4, // also used for unions
-    MCT_VT_UINT64 = 5,
-    MCT_VT_UINT32 = 6,
-    MCT_VT_UINT16 = 7,
-    MCT_VT_UINT8  = 8
-} MCT_ValueType;
+    ET_TT_CONST_IV = 1,
+    ET_TT_CONST_CSTRING = 2,
+    ET_TT_ST = 3,     // also used for unions
+    ET_TT_ST_END = 4, // also used for unions
+    ET_TT_UINT64 = 5,
+    ET_TT_UINT32 = 6,
+    ET_TT_UINT16 = 7,
+    ET_TT_UINT8  = 8
+} et_type_type;
 
-#define MCT_VT_EXPOSE_CONST(XTYPE, X) \
+#define ET_EXPOSE_CONST(XTYPE, X) \
 do {\
 switch(subItemIndex) {\
 case 0: \
@@ -167,10 +167,10 @@ break; \
 } \
 } while(0)
 
-#define MCT_VT_EXPOSE_CONST_IV(X) \
-MCT_VT_EXPOSE_CONST(MCT_VT_CONST_IV, X)
+#define ET_EXPOSE_CONST_IV(X) \
+ET_EXPOSE_CONST(ET_TT_CONST_IV, X)
 
-#define MCT_VT_EXPOSE_STRUCT_MEMBER(XTYPE, XSTRUCT, XMEMBER) \
+#define ET_EXPOSE_STRUCT_MEMBER(XTYPE, XSTRUCT, XMEMBER) \
 do {\
 switch(subItemIndex) {\
 case 0: \
@@ -185,29 +185,29 @@ break; \
 } \
 } while(0)
 
-#define MCT_VT_EXPOSE_STRUCT_UINT64(XSTRUCT, XMEMBER) \
-MCT_VT_EXPOSE_STRUCT_MEMBER(MCT_VT_UINT64, XSTRUCT, XMEMBER)
+#define ET_EXPOSE_STRUCT_UINT64(XSTRUCT, XMEMBER) \
+ET_EXPOSE_STRUCT_MEMBER(ET_TT_UINT64, XSTRUCT, XMEMBER)
 
-#define MCT_VT_EXPOSE_STRUCT_UINT32(XSTRUCT, XMEMBER) \
-MCT_VT_EXPOSE_STRUCT_MEMBER(MCT_VT_UINT32, XSTRUCT, XMEMBER)
+#define ET_EXPOSE_STRUCT_UINT32(XSTRUCT, XMEMBER) \
+ET_EXPOSE_STRUCT_MEMBER(ET_TT_UINT32, XSTRUCT, XMEMBER)
 
-#define MCT_VT_EXPOSE_STRUCT_UINT16(XSTRUCT, XMEMBER) \
-MCT_VT_EXPOSE_STRUCT_MEMBER(MCT_VT_UINT16, XSTRUCT, XMEMBER)
+#define ET_EXPOSE_STRUCT_UINT16(XSTRUCT, XMEMBER) \
+ET_EXPOSE_STRUCT_MEMBER(ET_TT_UINT16, XSTRUCT, XMEMBER)
 
-#define MCT_VT_EXPOSE_STRUCT_UINT8(XSTRUCT, XMEMBER) \
-MCT_VT_EXPOSE_STRUCT_MEMBER(MCT_VT_UINT8, XSTRUCT, XMEMBER)
+#define ET_EXPOSE_STRUCT_UINT8(XSTRUCT, XMEMBER) \
+ET_EXPOSE_STRUCT_MEMBER(ET_TT_UINT8, XSTRUCT, XMEMBER)
 
-#define MCT_VT_EXPOSE_STRUCT_PTR(XSTRUCT, XMEMBER) \
+#define ET_EXPOSE_STRUCT_PTR(XSTRUCT, XMEMBER) \
 do { \
 static_assert(sizeof(void*) == 4, "ptr size bad"); \
-MCT_VT_EXPOSE_STRUCT_MEMBER(MCT_VT_UINT32, XSTRUCT, XMEMBER); \
+ET_EXPOSE_STRUCT_MEMBER(ET_TT_UINT32, XSTRUCT, XMEMBER); \
 } while(0)
 
-#define MCT_VT_EXPOSE_STRUCT_BEGIN(X) \
+#define ET_EXPOSE_STRUCT_BEGIN(X) \
 do {\
 switch(subItemIndex) {\
 case 0: \
-return MCT_VT_ST; \
+return ET_TT_ST; \
 break; \
 case 1: \
 return (uint64_t)#X; \
@@ -218,150 +218,150 @@ break; \
 } \
 } while(0)
 
-#define MCT_VT_EXPOSE_STRUCT_END() \
+#define ET_EXPOSE_STRUCT_END() \
 do {\
 switch(subItemIndex) {\
 case 0: \
-return MCT_VT_ST_END; \
+return ET_TT_ST_END; \
 break; \
 } \
 } while(0)
 
-uint64_t ValueInfo(const uint32_t itemIndex, const uint32_t subItemIndex)
+uint64_t mhfs_cl_et_load_type(const uint32_t itemIndex, const uint32_t subItemIndex)
 {
     switch(itemIndex)
     {
         case 0:
-        MCT_VT_EXPOSE_CONST_IV(MCT_VT_CONST_IV);
+        ET_EXPOSE_CONST_IV(ET_TT_CONST_IV);
         break;
         case 1:
-        MCT_VT_EXPOSE_CONST_IV(MCT_VT_CONST_CSTRING);
+        ET_EXPOSE_CONST_IV(ET_TT_CONST_CSTRING);
         break;
         case 2:
-        MCT_VT_EXPOSE_CONST_IV(MCT_VT_ST);
+        ET_EXPOSE_CONST_IV(ET_TT_ST);
         break;
         case 3:
-        MCT_VT_EXPOSE_CONST_IV(MCT_VT_ST_END);
+        ET_EXPOSE_CONST_IV(ET_TT_ST_END);
         break;
         case 4:
-        MCT_VT_EXPOSE_CONST_IV(MCT_VT_UINT64);
+        ET_EXPOSE_CONST_IV(ET_TT_UINT64);
         break;
         case 5:
-        MCT_VT_EXPOSE_CONST_IV(MCT_VT_UINT32);
+        ET_EXPOSE_CONST_IV(ET_TT_UINT32);
         break;
         case 6:
-        MCT_VT_EXPOSE_CONST_IV(MCT_VT_UINT16);
+        ET_EXPOSE_CONST_IV(ET_TT_UINT16);
         break;
         case 7:
-        MCT_VT_EXPOSE_CONST_IV(MCT_VT_UINT8);
+        ET_EXPOSE_CONST_IV(ET_TT_UINT8);
         break;
         case 8:
-        MCT_VT_EXPOSE_CONST_IV(MHFS_CL_TRACK_SUCCESS);
+        ET_EXPOSE_CONST_IV(MHFS_CL_TRACK_SUCCESS);
         break;
         case 9:
-        MCT_VT_EXPOSE_CONST_IV(MHFS_CL_TRACK_GENERIC_ERROR);
+        ET_EXPOSE_CONST_IV(MHFS_CL_TRACK_GENERIC_ERROR);
         break;
         case 10:
-        MCT_VT_EXPOSE_CONST_IV(MHFS_CL_TRACK_NEED_MORE_DATA);
+        ET_EXPOSE_CONST_IV(MHFS_CL_TRACK_NEED_MORE_DATA);
         break;
         case 11:
-        MCT_VT_EXPOSE_CONST_IV(MHFS_CL_TRACK_M_AUDIOINFO);
+        ET_EXPOSE_CONST_IV(MHFS_CL_TRACK_M_AUDIOINFO);
         break;
         case 12:
-        MCT_VT_EXPOSE_CONST_IV(MHFS_CL_TRACK_M_TAGS);
+        ET_EXPOSE_CONST_IV(MHFS_CL_TRACK_M_TAGS);
         break;
         case 13:
-        MCT_VT_EXPOSE_CONST_IV(MHFS_CL_TRACK_M_PICTURE);
+        ET_EXPOSE_CONST_IV(MHFS_CL_TRACK_M_PICTURE);
         break;
         case 14:
-        MCT_VT_EXPOSE_STRUCT_BEGIN(mhfs_cl_track);
+        ET_EXPOSE_STRUCT_BEGIN(mhfs_cl_track);
         break;
         case 15:
-        MCT_VT_EXPOSE_STRUCT_END();
+        ET_EXPOSE_STRUCT_END();
         break;
         case 16:
-        MCT_VT_EXPOSE_STRUCT_BEGIN(mhfs_cl_track_return_data);
+        ET_EXPOSE_STRUCT_BEGIN(mhfs_cl_track_return_data);
         break;
         case 17:
-        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_return_data, frames_read);
+        ET_EXPOSE_STRUCT_UINT32(mhfs_cl_track_return_data, frames_read);
         break;
         case 18:
-        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_return_data, needed_offset);
+        ET_EXPOSE_STRUCT_UINT32(mhfs_cl_track_return_data, needed_offset);
         break;
         case 19:
-        MCT_VT_EXPOSE_STRUCT_END();
+        ET_EXPOSE_STRUCT_END();
         break;
         case 20:
-        MCT_VT_EXPOSE_CONST_IV(MCT_MAI_FLD_EMPTY);
+        ET_EXPOSE_CONST_IV(MCT_MAI_FLD_EMPTY);
         break;
         case 21:
-        MCT_VT_EXPOSE_CONST_IV(MCT_MAI_FLD_BITSPERSAMPLE);
+        ET_EXPOSE_CONST_IV(MCT_MAI_FLD_BITSPERSAMPLE);
         break;
         case 22:
-        MCT_VT_EXPOSE_CONST_IV(MCT_MAI_FLD_BITRATE);
+        ET_EXPOSE_CONST_IV(MCT_MAI_FLD_BITRATE);
         break;
         case 23:
-        MCT_VT_EXPOSE_STRUCT_BEGIN(mhfs_cl_track_meta_audioinfo);
+        ET_EXPOSE_STRUCT_BEGIN(mhfs_cl_track_meta_audioinfo);
         break;
         case 24:
-        MCT_VT_EXPOSE_STRUCT_UINT64(mhfs_cl_track_meta_audioinfo, totalPCMFrameCount);
+        ET_EXPOSE_STRUCT_UINT64(mhfs_cl_track_meta_audioinfo, totalPCMFrameCount);
         break;
         case 25:
-        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_audioinfo, sampleRate);
+        ET_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_audioinfo, sampleRate);
         break;
         case 26:
-        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_audioinfo, fields);
+        ET_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_audioinfo, fields);
         break;
         case 27:
-        MCT_VT_EXPOSE_STRUCT_UINT16(mhfs_cl_track_meta_audioinfo, bitrate);
+        ET_EXPOSE_STRUCT_UINT16(mhfs_cl_track_meta_audioinfo, bitrate);
         break;
         case 28:
-        MCT_VT_EXPOSE_STRUCT_UINT8(mhfs_cl_track_meta_audioinfo, channels);
+        ET_EXPOSE_STRUCT_UINT8(mhfs_cl_track_meta_audioinfo, channels);
         break;
         case 29:
-        MCT_VT_EXPOSE_STRUCT_UINT8(mhfs_cl_track_meta_audioinfo, bitsPerSample);
+        ET_EXPOSE_STRUCT_UINT8(mhfs_cl_track_meta_audioinfo, bitsPerSample);
         break;
         case 30:
-        MCT_VT_EXPOSE_STRUCT_END();
+        ET_EXPOSE_STRUCT_END();
         break;
         case 31:
-        MCT_VT_EXPOSE_STRUCT_BEGIN(mhfs_cl_track_meta_tags_comment);
+        ET_EXPOSE_STRUCT_BEGIN(mhfs_cl_track_meta_tags_comment);
         break;
         case 32:
-        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_tags_comment, commentSize);
+        ET_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_tags_comment, commentSize);
         break;
         case 33:
-        MCT_VT_EXPOSE_STRUCT_PTR(mhfs_cl_track_meta_tags_comment, comment);
+        ET_EXPOSE_STRUCT_PTR(mhfs_cl_track_meta_tags_comment, comment);
         break;
         case 34:
-        MCT_VT_EXPOSE_STRUCT_END();
+        ET_EXPOSE_STRUCT_END();
         break;
         case 35:
-        MCT_VT_EXPOSE_STRUCT_BEGIN(mhfs_cl_track_meta_picture);
+        ET_EXPOSE_STRUCT_BEGIN(mhfs_cl_track_meta_picture);
         break;
         case 36:
-        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_picture, pictureType);
+        ET_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_picture, pictureType);
         break;
         case 37:
-        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_picture, mimeSize);
+        ET_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_picture, mimeSize);
         break;
         case 38:
-        MCT_VT_EXPOSE_STRUCT_PTR(mhfs_cl_track_meta_picture, mime);
+        ET_EXPOSE_STRUCT_PTR(mhfs_cl_track_meta_picture, mime);
         break;
         case 39:
-        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_picture, descSize);
+        ET_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_picture, descSize);
         break;
         case 40:
-        MCT_VT_EXPOSE_STRUCT_PTR(mhfs_cl_track_meta_picture, desc);
+        ET_EXPOSE_STRUCT_PTR(mhfs_cl_track_meta_picture, desc);
         break;
         case 41:
-        MCT_VT_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_picture, pictureDataSize);
+        ET_EXPOSE_STRUCT_UINT32(mhfs_cl_track_meta_picture, pictureDataSize);
         break;
         case 42:
-        MCT_VT_EXPOSE_STRUCT_PTR(mhfs_cl_track_meta_picture, pictureData);
+        ET_EXPOSE_STRUCT_PTR(mhfs_cl_track_meta_picture, pictureData);
         break;
         case 43:
-        MCT_VT_EXPOSE_STRUCT_END();
+        ET_EXPOSE_STRUCT_END();
         break;
     }
     return 0;
