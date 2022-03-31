@@ -635,6 +635,7 @@ typedef enum {
 
 static mhfs_cl_track_error mhfs_cl_track_load_metadata_mp3(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock, void *context)
 {
+    const unsigned startoffset = pTrack->vf.fileoffset;
     // check for magic
     const uint8_t *id;
     const blockvf_error idError = blockvf_read_view(&pTrack->vf, 4, &id, &pReturnData->needed_offset);
@@ -700,7 +701,7 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_mp3(mhfs_cl_track *pTrack
         MHFSCLTR_PRINT("Stopping metadata parsing, blockvf error\n");
         return mhfs_cl_track_error_from_blockvf_error(skipblockError);
     }
-    // check for xing/VBR magic
+    // check for xing
     const uint8_t *xing;
     const blockvf_error xingError = blockvf_read_view(&pTrack->vf, 4, &xing, &pReturnData->needed_offset);
     if(xingError != BLOCKVF_SUCCESS)
@@ -708,34 +709,71 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_mp3(mhfs_cl_track *pTrack
         return mhfs_cl_track_error_from_blockvf_error(xingError);
     }
     MHFSCLTR_PRINT("xing/vbr magic %c %c %c %c | %x %x %x %x\n", xing[0], xing[1], xing[2], xing[3], xing[0], xing[1], xing[2], xing[3]);
-    if( (memcmp(xing, "Xing", 4) != 0) && (memcmp(xing, "Info", 4) != 0))
+    bool isXing = (memcmp(xing, "Xing", 4) == 0) || (memcmp(xing, "Info", 4) == 0);
+    if(!isXing)
     {
         // Xing tag may be misplaced when CRC protection is enabled, check for that and zeroed flag fields
-        if((memcmp(xing, "ng\0\0", 4) != 0) && (memcmp(xing, "fo\0\0", 4) != 0))
+        isXing = (memcmp(xing, "ng\0\0", 4) == 0) || (memcmp(xing, "fo\0\0", 4) == 0);
+        if(isXing)
         {
-            MHFSCLTR_PRINT("No Xing magic\n");
-            return MHFS_CL_TRACK_GENERIC_ERROR;
+            pTrack->vf.fileoffset -= 2;
         }
-        pTrack->vf.fileoffset -= 2;
     }
-    const uint8_t *flagsBytes;
-    const blockvf_error xingFlagsError = blockvf_read_view(&pTrack->vf, 4, &flagsBytes, &pReturnData->needed_offset);
-    if(xingFlagsError != BLOCKVF_SUCCESS)
+    if(isXing)
     {
-        return mhfs_cl_track_error_from_blockvf_error(xingFlagsError);
-    }
-    const uint32_t xingFlags = unaligned_beu32_to_native(flagsBytes);
-    if(xingFlags & 0x1)
-    {
-        const uint8_t *framesBytes;
-        const blockvf_error framesError = blockvf_read_view(&pTrack->vf, 4, &framesBytes, &pReturnData->needed_offset);
-        if(framesError != BLOCKVF_SUCCESS)
+        const uint8_t *flagsBytes;
+        const blockvf_error xingFlagsError = blockvf_read_view(&pTrack->vf, 4, &flagsBytes, &pReturnData->needed_offset);
+        if(xingFlagsError != BLOCKVF_SUCCESS)
         {
-            return mhfs_cl_track_error_from_blockvf_error(framesError);
+            return mhfs_cl_track_error_from_blockvf_error(xingFlagsError);
         }
-        const uint32_t frames = unaligned_beu32_to_native(framesBytes);
-        MHFSCLTR_PRINT("xing frames %u\n", frames);
-        // FIX ME FIX ME we add 1 to mp3frames because the decoder will currently (foolishly) decode the xing mp3frame
+        const uint32_t xingFlags = unaligned_beu32_to_native(flagsBytes);
+        if(xingFlags & 0x1)
+        {
+            const uint8_t *framesBytes;
+            const blockvf_error framesError = blockvf_read_view(&pTrack->vf, 4, &framesBytes, &pReturnData->needed_offset);
+            if(framesError != BLOCKVF_SUCCESS)
+            {
+                return mhfs_cl_track_error_from_blockvf_error(framesError);
+            }
+            const uint32_t frames = unaligned_beu32_to_native(framesBytes);
+            MHFSCLTR_PRINT("xing frames %u\n", frames);
+            // FIX ME FIX ME we add 1 to mp3frames because the decoder will currently (foolishly) decode the xing mp3frame
+            mhfs_cl_track_meta_audioinfo_init(&pTrack->meta, (frames + 1) * 1152, sampleRate, channels, MCT_MAI_FLD_BITRATE, 0, bitrate);
+            if(on_metablock != NULL)
+            {
+                on_metablock(context, MHFS_CL_TRACK_M_AUDIOINFO, &pTrack->meta);
+            }
+            pTrack->meta_initialized = true;
+            return MHFS_CL_TRACK_SUCCESS;
+        }
+        return MHFS_CL_TRACK_GENERIC_ERROR;
+    }
+
+    // check for VBRI
+    const blockvf_error seekVBRI = blockvf_seek(&pTrack->vf, startoffset+36, blockvf_seek_origin_start);
+    if(seekVBRI != BLOCKVF_SUCCESS)
+    {
+        return mhfs_cl_track_error_from_blockvf_error(seekVBRI);
+    }
+    const uint8_t *vbriMagic;
+    const blockvf_error vbriMagicError = blockvf_read_view(&pTrack->vf, 4, &vbriMagic, &pReturnData->needed_offset);
+    if(vbriMagicError != BLOCKVF_SUCCESS)
+    {
+        return mhfs_cl_track_error_from_blockvf_error(vbriMagicError);
+    }
+    if(memcmp(vbriMagic, "VBRI", 4) == 0)
+    {
+        MHFSCLTR_PRINT("VBRI found\n");
+        const uint8_t *vbriFields;
+        const blockvf_error vbriFieldsError = blockvf_read_view(&pTrack->vf, 22, &vbriFields, &pReturnData->needed_offset);
+        if(vbriFieldsError != BLOCKVF_SUCCESS)
+        {
+            return mhfs_cl_track_error_from_blockvf_error(vbriFieldsError);
+        }
+        const uint32_t frames = unaligned_beu32_to_native(&vbriFields[10]);
+        MHFSCLTR_PRINT("vbri frames %u\n", frames);
+        // FIX ME FIX ME need to verify pcmframes  calculation
         mhfs_cl_track_meta_audioinfo_init(&pTrack->meta, (frames + 1) * 1152, sampleRate, channels, MCT_MAI_FLD_BITRATE, 0, bitrate);
         if(on_metablock != NULL)
         {
@@ -744,6 +782,12 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_mp3(mhfs_cl_track *pTrack
         pTrack->meta_initialized = true;
         return MHFS_CL_TRACK_SUCCESS;
     }
+
+    // TODO
+
+    // ID3 TLEN?
+
+    //estimate from bitrate?
 
     return MHFS_CL_TRACK_GENERIC_ERROR;
 }
