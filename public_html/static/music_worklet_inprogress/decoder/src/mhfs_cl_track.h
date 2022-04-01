@@ -125,6 +125,18 @@ static inline uint32_t unaligned_beu32_to_native(const void *src)
     return (pNum[0] << 24) | (pNum[1] << 16) | (pNum[2] << 8) | (pNum[3]);
 }
 
+static inline uint32_t unaligned_leu32_to_native(const void *src)
+{
+    const uint8_t *pNum = src;
+    return (pNum[0]) | (pNum[1] << 8) | (pNum[2] << 16) | (pNum[3] << 24);
+}
+
+static inline uint32_t unaligned_leu16_to_native(const void *src)
+{
+    const uint8_t *pNum = src;
+    return (pNum[0]) | (pNum[1] << 8);
+}
+
 uint32_t mhfs_cl_flac_picture_block_get_type(const void *pPictureBlock)
 {
     return unaligned_beu32_to_native(pPictureBlock);
@@ -894,6 +906,150 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_mp3(mhfs_cl_track *pTrack
     return MHFS_CL_TRACK_GENERIC_ERROR;
 }
 
+typedef enum {
+MCT_WAVE_FORMAT_PCM          = 0x1,
+MCT_WAVE_FORMAT_ADPCM        = 0x2,
+MCT_WAVE_FORMAT_IEEE_FLOAT   = 0x3,
+MCT_WAVE_FORMAT_ALAW         = 0x6,
+MCT_WAVE_FORMAT_MULAW        = 0x7,
+MCT_WAVE_FORMAT_DVI_ADPCM    = 0x11,
+MCT_WAVE_FORMAT_EXTENSIBLE   = 0xFFFE
+} mhfs_cl_wav_format;
+
+typedef enum {
+    MCT_WAVE_CHUNK_FMT = 'f' | ('m' << 8) | ('t' << 16) | (' ' << 24),
+    MCT_WAVE_CHUNK_DATA = 'd' | ('a' << 8) | ('t' << 16) | ('a' << 24)
+} mhfs_cl_riff_chunk_type;
+
+static inline mhfs_cl_track_error mhfs_cl_wav_read_chunk_header(blockvf *pBlockvf, uint32_t *pNeededOffset, mhfs_cl_riff_chunk_type *pChunkType, uint32_t *pChunkSize)
+{
+    const uint8_t *chunkHeader;
+    const blockvf_error chunkHeaderError = blockvf_read_view(pBlockvf, 8, &chunkHeader, pNeededOffset);
+    if(chunkHeaderError != BLOCKVF_SUCCESS)
+    {
+        return mhfs_cl_track_error_from_blockvf_error(chunkHeaderError);
+    }
+    *pChunkType = unaligned_leu32_to_native(&chunkHeader[0]);
+    *pChunkSize = unaligned_leu32_to_native(&chunkHeader[4]);
+    return MHFS_CL_TRACK_SUCCESS;
+}
+
+static mhfs_cl_track_error mhfs_cl_track_load_metadata_wav(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock, void *context)
+{
+    {
+    const uint8_t *wavHeader;
+    const blockvf_error wavHeaderError = blockvf_read_view(&pTrack->vf, 12, &wavHeader, &pReturnData->needed_offset);
+    if(wavHeaderError != BLOCKVF_SUCCESS)
+    {
+        return mhfs_cl_track_error_from_blockvf_error(wavHeaderError);
+    }
+
+    if(memcmp(&wavHeader[0], "RIFF", 4) != 0)
+    {
+        return MHFS_CL_TRACK_GENERIC_ERROR;
+    }
+    /* chunksize is here */
+    if(memcmp(&wavHeader[8], "WAVE", 4) != 0)
+    {
+        return MHFS_CL_TRACK_GENERIC_ERROR;
+    }
+    }
+
+    bool bGotFmt = false;
+    unsigned channels;
+    unsigned sampleRate;
+    unsigned bitsPerSample;
+    uint64_t totalPCMFrameCount;
+    unsigned bytesPerPCMFrame;
+    do {
+        mhfs_cl_riff_chunk_type chunkType;
+        uint32_t chunkSize;
+        const mhfs_cl_track_error chunkHeaderError = mhfs_cl_wav_read_chunk_header(&pTrack->vf, &pReturnData->needed_offset, &chunkType, &chunkSize);
+        if(chunkHeaderError != MHFS_CL_TRACK_SUCCESS)
+        {
+            return chunkHeaderError;
+        }
+        if(chunkType == MCT_WAVE_CHUNK_FMT)
+        {
+            const uint8_t *fmtChunk;
+            const blockvf_error chunkReadError = blockvf_read_view(&pTrack->vf, chunkSize, &fmtChunk, &pReturnData->needed_offset);
+            if(chunkReadError != BLOCKVF_SUCCESS)
+            {
+                return mhfs_cl_track_error_from_blockvf_error(chunkReadError);
+            }
+            const mhfs_cl_wav_format audioFormat = unaligned_leu16_to_native(&fmtChunk[0]);
+            switch(audioFormat)
+            {
+                case MCT_WAVE_FORMAT_PCM:
+                /*case MCT_WAVE_FORMAT_ADPCM:
+                case MCT_WAVE_FORMAT_IEEE_FLOAT:
+                case MCT_WAVE_FORMAT_ALAW:
+                case MCT_WAVE_FORMAT_MULAW:
+                case MCT_WAVE_FORMAT_DVI_ADPCM:*/
+                case MCT_WAVE_FORMAT_EXTENSIBLE:
+                break;
+                default:
+                MHFSCLTR_PRINT("wav format not supported\n");
+                return MHFS_CL_TRACK_GENERIC_ERROR;
+            }
+            channels = unaligned_leu16_to_native(&fmtChunk[2]);
+            sampleRate = unaligned_leu32_to_native(&fmtChunk[4]);
+            /* byterate is here */
+            const unsigned blockAlign = unaligned_leu16_to_native(&fmtChunk[12]);
+            bitsPerSample = unaligned_leu16_to_native(&fmtChunk[14]);
+            if(chunkSize > 16)
+            {
+
+            }
+
+            /*
+            The bytes per frame is a bit ambiguous. It can be either be based on the bits per sample, or the block align. The way I'm doing it here
+            is that if the bits per sample is a multiple of 8, use floor(bitsPerSample*channels/8), otherwise fall back to the block align.
+            */
+            if ((bitsPerSample & 0x7) == 0) {
+                /* Bits per sample is a multiple of 8. */
+                bytesPerPCMFrame = (bitsPerSample * channels) >> 3;
+            } else {
+                bytesPerPCMFrame = blockAlign;
+            }
+
+            /* Validation for known formats. a-law and mu-law should be 1 byte per channel. If it's not, it's not decodable. */
+            if (audioFormat == DR_WAVE_FORMAT_ALAW || audioFormat == DR_WAVE_FORMAT_MULAW) {
+                if (bytesPerPCMFrame != channels) {
+                    return MHFS_CL_TRACK_GENERIC_ERROR;
+                }
+            }
+            bGotFmt = true;
+        }
+        else if(chunkType == MCT_WAVE_CHUNK_DATA)
+        {
+            if(!bGotFmt)
+            {
+                return MHFS_CL_TRACK_GENERIC_ERROR;
+            }
+            totalPCMFrameCount = chunkSize / bytesPerPCMFrame;
+            mhfs_cl_track_meta_audioinfo_init(&pTrack->meta, totalPCMFrameCount, sampleRate, channels, MCT_MAI_FLD_BITSPERSAMPLE, bitsPerSample, 0);
+            if(on_metablock != NULL)
+            {
+                on_metablock(context, MHFS_CL_TRACK_M_AUDIOINFO, &pTrack->meta);
+            }
+            pTrack->meta_initialized = true;
+            MHFSCLTR_PRINT("self initialized metadata from wav\n");
+            return MHFS_CL_TRACK_SUCCESS;
+        }
+        else
+        {
+            const blockvf_error chunkSkipError = blockvf_seek(&pTrack->vf, chunkSize, blockvf_seek_origin_current);
+            if(chunkSkipError != BLOCKVF_SUCCESS)
+            {
+                return mhfs_cl_track_error_from_blockvf_error(chunkSkipError);
+            }
+        }
+    } while(1);
+
+    return MHFS_CL_TRACK_GENERIC_ERROR;
+}
+
 
 
 static inline void mhfs_cl_track_blockvf_ma_decoder_call_before(mhfs_cl_track *pTrack, const bool bSaveDecoder)
@@ -1107,6 +1263,15 @@ mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_t
         if(pTrack->decoderConfig.encodingFormat == ma_encoding_format_flac)
         {
             const mhfs_cl_track_error retval = mhfs_cl_track_load_metadata_flac(pTrack, &temprd, on_metablock, context);
+            if(retval == MHFS_CL_TRACK_SUCCESS)
+            {
+                return retval;
+            }
+            mhfs_cl_track_io_error_update(&ioError, retval, temprd.needed_offset);
+        }
+        else if(pTrack->decoderConfig.encodingFormat == ma_encoding_format_wav)
+        {
+            const mhfs_cl_track_error retval = mhfs_cl_track_load_metadata_wav(pTrack, &temprd, on_metablock, context);
             if(retval == MHFS_CL_TRACK_SUCCESS)
             {
                 return retval;
