@@ -1,5 +1,7 @@
-#pragma once
 // ExposeType: Expose constants, structs, and unions to js
+#pragma once
+#include <stddef.h>
+#include <assert.h>
 
 typedef enum {
     ET_TT_CONST_IV = 1,

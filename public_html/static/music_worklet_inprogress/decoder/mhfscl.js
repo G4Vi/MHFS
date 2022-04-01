@@ -412,10 +412,10 @@ const MHFSCLTrack = async function(gsignal, theURL, DLMGR) {
         for(;;) {
             that.picture = null;
             const code = MHFSCL.Module._mhfs_cl_track_load_metadata(that.ptr, rd.ptr, pMime, pFullFilename, totalPCMFrames & 0xFFFFFFFF, (totalPCMFrames >> 32) & 0xFFFFFFFF, MHFSCL.pMHFSCLTrackOnMeta, thatid);
-            if(code === MHFSCL.MHFS_CL_TRACK_SUCCESS) {
+            if(code === MHFSCL.MHFS_CL_SUCCESS) {
                 break;
             }
-            if(code !== MHFSCL.MHFS_CL_TRACK_NEED_MORE_DATA){
+            if(code !== MHFSCL.MHFS_CL_NEED_MORE_DATA){
                 that.close();
                 throw("Failed opening MHFSCLTrack");
             }
@@ -595,11 +595,11 @@ const MHFSCLDecoder = async function(outputSampleRate, outputChannelCount) {
             const code = MHFSCL.Module._mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(that.ptr, that.track.ptr, todec, destdata, that.rd.ptr);
 
             // success, retdata is frames read
-            if(code === MHFSCL.MHFS_CL_TRACK_SUCCESS)
+            if(code === MHFSCL.MHFS_CL_SUCCESS)
             {
                 return that.rd.get('frames_read');
             }
-            if(code !== MHFSCL.MHFS_CL_TRACK_NEED_MORE_DATA)
+            if(code !== MHFSCL.MHFS_CL_NEED_MORE_DATA)
             {
                 throw("mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved failed");
             }

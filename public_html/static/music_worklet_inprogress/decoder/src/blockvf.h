@@ -1,4 +1,5 @@
-#pragma once
+#ifndef blockvf_h
+#define blockvf_h
 #include <stdbool.h>
 #include <stdint.h>
 #include <inttypes.h>
@@ -36,6 +37,7 @@ blockvf_error blockvf_seek(blockvf *pBlockvf, int64_t offset, blockvf_seek_origi
 blockvf_error blockvf_read(blockvf *pBlockvf, void* bufferOut, size_t bytesToRead, size_t *bytesRead, uint32_t *pNeededOffset);
 blockvf_error blockvf_read_view(blockvf *pBlockvf, const size_t bytesToRead, const uint8_t **view, uint32_t *pNeededOffset);
 void blockvf_deinit(blockvf *pBlockvf);
+#endif /* blockvf_h */
 
 #if defined(BLOCKVF_IMPLEMENTATION)
 #ifndef block_vf_c

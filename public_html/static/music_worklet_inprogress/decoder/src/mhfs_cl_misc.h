@@ -1,7 +1,5 @@
-#pragma once
-
-#include <stdint.h>
-#include <stddef.h>
+#ifndef mhfs_cl_misc_h
+#define mhfs_cl_misc_h
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -9,18 +7,22 @@
 #else
 #define LIBEXPORT
 #endif
+#include <stdint.h>
+#include <stddef.h>
 
 // util
 LIBEXPORT unsigned long mhfs_cl_djb2(const uint8_t *pData, const size_t dataLen);
 
 // For JS convenience export types
 LIBEXPORT uint64_t mhfs_cl_et_load_type(const uint32_t itemIndex, const uint32_t subItemIndex);
+#endif /* mhfs_cl_misc_h */
 
 #if defined(MHFSCLMISC_IMPLEMENTATION)
 #ifndef mhfs_cl_misc_c
 #define mhfs_cl_misc_c
 
 #include "exposetype.h"
+#include "mhfs_cl.h"
 #include "mhfs_cl_track.h"
 
 unsigned long mhfs_cl_djb2(const uint8_t *pData, const size_t dataLen)
@@ -62,13 +64,13 @@ uint64_t mhfs_cl_et_load_type(const uint32_t itemIndex, const uint32_t subItemIn
         ET_EXPOSE_CONST_IV(ET_TT_UINT8);
         break;
         case 8:
-        ET_EXPOSE_CONST_IV(MHFS_CL_TRACK_SUCCESS);
+        ET_EXPOSE_CONST_IV(MHFS_CL_SUCCESS);
         break;
         case 9:
-        ET_EXPOSE_CONST_IV(MHFS_CL_TRACK_GENERIC_ERROR);
+        ET_EXPOSE_CONST_IV(MHFS_CL_ERROR);
         break;
         case 10:
-        ET_EXPOSE_CONST_IV(MHFS_CL_TRACK_NEED_MORE_DATA);
+        ET_EXPOSE_CONST_IV(MHFS_CL_NEED_MORE_DATA);
         break;
         case 11:
         ET_EXPOSE_CONST_IV(MHFS_CL_TRACK_M_AUDIOINFO);

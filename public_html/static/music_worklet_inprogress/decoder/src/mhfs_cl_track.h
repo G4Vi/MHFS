@@ -1,6 +1,16 @@
-#pragma once
+#ifndef mhfs_cl_track_h
+#define mhfs_cl_track_h
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#define LIBEXPORT EMSCRIPTEN_KEEPALIVE
+#else
+#define LIBEXPORT
+#endif
+#include "miniaudio.h"
 
 #include "blockvf.h"
+#include "mhfs_cl.h"
 
 typedef float float32_t;
 
@@ -78,33 +88,21 @@ typedef struct {
     uint32_t currentFrame;
 } mhfs_cl_track;
 
-typedef enum {
-    MHFS_CL_TRACK_SUCCESS = 0,
-    MHFS_CL_TRACK_GENERIC_ERROR = 1,
-    MHFS_CL_TRACK_NEED_MORE_DATA = 2,
-} mhfs_cl_track_error;
-
 typedef union {
     uint32_t frames_read;
     uint32_t needed_offset;
 } mhfs_cl_track_return_data;
 
-#ifdef __EMSCRIPTEN__
-#include <emscripten.h>
-#define LIBEXPORT EMSCRIPTEN_KEEPALIVE
-#else
-#define LIBEXPORT
-#endif
-
 LIBEXPORT void mhfs_cl_track_init(mhfs_cl_track *pTrack, const unsigned blocksize);
 LIBEXPORT void mhfs_cl_track_deinit(mhfs_cl_track *pTrack);
 LIBEXPORT void *mhfs_cl_track_add_block(mhfs_cl_track *pTrack, const uint32_t block_start, const unsigned filesize);
-LIBEXPORT mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const char *mime, const char *fullfilename, const uint64_t totalPCMFrameCount, const mhfs_cl_track_on_metablock on_metablock, void *context);
+LIBEXPORT mhfs_cl_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const char *mime, const char *fullfilename, const uint64_t totalPCMFrameCount, const mhfs_cl_track_on_metablock on_metablock, void *context);
 LIBEXPORT int mhfs_cl_track_seek_to_pcm_frame(mhfs_cl_track *pTrack, const uint32_t pcmFrameIndex);
-LIBEXPORT mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *outFloat, mhfs_cl_track_return_data *pReturnData);
+LIBEXPORT mhfs_cl_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *outFloat, mhfs_cl_track_return_data *pReturnData);
 
 LIBEXPORT double mhfs_cl_track_meta_audioinfo_durationInSecs(const mhfs_cl_track_meta_audioinfo *pInfo);
 LIBEXPORT const mhfs_cl_track_meta_tags_comment *mhfs_cl_track_meta_tags_next_comment(mhfs_cl_track_meta_tags *pTags);
+#endif /* mhfs_cl_track.h */
 
 #if defined(MHFSCLTRACK_IMPLEMENTATION)
 #ifndef mhfs_cl_track_c
@@ -179,19 +177,19 @@ static void mhfs_cl_track_meta_audioinfo_init(mhfs_cl_track_meta_audioinfo *pMet
     pMetadata->bitrate = bitrate;
 }
 
-static inline mhfs_cl_track_error mhfs_cl_track_error_from_blockvf_error(const blockvf_error bvferr)
+static inline mhfs_cl_error mhfs_cl_error_from_blockvf_error(const blockvf_error bvferr)
 {
     switch(bvferr)
     {
         case BLOCKVF_SUCCESS:
-        return MHFS_CL_TRACK_SUCCESS;
+        return MHFS_CL_SUCCESS;
 
         case BLOCKVF_MEM_NEED_MORE:
-        return MHFS_CL_TRACK_NEED_MORE_DATA;
+        return MHFS_CL_NEED_MORE_DATA;
 
         case BLOCKVF_GENERIC_ERROR:
         default:
-        return MHFS_CL_TRACK_GENERIC_ERROR;
+        return MHFS_CL_ERROR;
     }
 }
 
@@ -499,18 +497,18 @@ const mhfs_cl_track_meta_tags_comment *mhfs_cl_track_meta_tags_next_comment(mhfs
     return &pTags->currentComment;
 }
 
-static mhfs_cl_track_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock, void *context)
+static mhfs_cl_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock, void *context)
 {
     // check for magic
     const uint8_t *id;
     const blockvf_error idError = blockvf_read_view(&pTrack->vf, 4, &id, &pReturnData->needed_offset);
     if(idError != BLOCKVF_SUCCESS)
     {
-        return mhfs_cl_track_error_from_blockvf_error(idError);
+        return mhfs_cl_error_from_blockvf_error(idError);
     }
     if(memcmp(id, "fLaC", 4) != 0)
     {
-        return MHFS_CL_TRACK_GENERIC_ERROR;
+        return MHFS_CL_ERROR;
     }
 
     // parse metadata blocks
@@ -525,7 +523,7 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrac
         {
             if(mbheaderError == BLOCKVF_MEM_NEED_MORE)
             {
-                return mhfs_cl_track_error_from_blockvf_error(mbheaderError);
+                return mhfs_cl_error_from_blockvf_error(mbheaderError);
             }
             MHFSCLTR_PRINT("Stopping metadata parsing, blockvf error\n");
             break;
@@ -555,7 +553,7 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrac
         {
             if(blockdataError == BLOCKVF_MEM_NEED_MORE)
             {
-                return mhfs_cl_track_error_from_blockvf_error(blockdataError);
+                return mhfs_cl_error_from_blockvf_error(blockdataError);
             }
             MHFSCLTR_PRINT("Stopping metadata parsing, blockvf error\n");
             break;
@@ -620,7 +618,7 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrac
     } while(!isLast);
     if(!hasStreamInfo)
     {
-        return MHFS_CL_TRACK_GENERIC_ERROR;
+        return MHFS_CL_ERROR;
     }
     else if(!hasSeekTable)
     {
@@ -628,16 +626,16 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_flac(mhfs_cl_track *pTrac
     }
 
     pTrack->meta_initialized = true;
-    return MHFS_CL_TRACK_SUCCESS;
+    return MHFS_CL_SUCCESS;
 }
 
-static inline mhfs_cl_track_error mhfs_cl_parse_id3_header_after_magic(blockvf *pBlockvf, uint32_t *blockvfNeededOffset, uint16_t *id3version,  uint8_t *flags, uint32_t *tagSize)
+static inline mhfs_cl_error mhfs_cl_parse_id3_header_after_magic(blockvf *pBlockvf, uint32_t *blockvfNeededOffset, uint16_t *id3version,  uint8_t *flags, uint32_t *tagSize)
 {
     const uint8_t *header;
     const blockvf_error headerError = blockvf_read_view(pBlockvf, 7, &header, blockvfNeededOffset);
     if(headerError != BLOCKVF_SUCCESS)
     {
-        return mhfs_cl_track_error_from_blockvf_error(headerError);
+        return mhfs_cl_error_from_blockvf_error(headerError);
     }
     uint32_t headerSize = unsynchsafe_32((header[3] << 24) | (header[4] << 16) | (header[5] << 8) | (header[6]));
     if(header[2] & 0x10)
@@ -647,7 +645,7 @@ static inline mhfs_cl_track_error mhfs_cl_parse_id3_header_after_magic(blockvf *
     *id3version = (header[0] << 8) | header[1];
     *flags = header[2];
     *tagSize = headerSize;
-    return MHFS_CL_TRACK_SUCCESS;
+    return MHFS_CL_SUCCESS;
 }
 
 typedef enum {
@@ -664,7 +662,7 @@ typedef enum {
     MCT_MLAYER_1        = 0x3
 } mhfs_cl_track_mpeg_layer;
 
-static mhfs_cl_track_error mhfs_cl_track_load_metadata_mp3(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock, void *context)
+static mhfs_cl_error mhfs_cl_track_load_metadata_mp3(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock, void *context)
 {
     const unsigned startoffset = pTrack->vf.fileoffset;
 
@@ -676,14 +674,14 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_mp3(mhfs_cl_track *pTrack
         const blockvf_error idError = blockvf_read_view(&pTrack->vf, 3, &id, &pReturnData->needed_offset);
         if(idError != BLOCKVF_SUCCESS)
         {
-            return mhfs_cl_track_error_from_blockvf_error(idError);
+            return mhfs_cl_error_from_blockvf_error(idError);
         }
         if(memcmp(id, "ID3", 3) != 0) break;
         uint16_t version;
         uint8_t flags;
         uint32_t tagSize;
-        const mhfs_cl_track_error parseError = mhfs_cl_parse_id3_header_after_magic(&pTrack->vf, &pReturnData->needed_offset, &version, &flags, &tagSize);
-        if(parseError != MHFS_CL_TRACK_SUCCESS)
+        const mhfs_cl_error parseError = mhfs_cl_parse_id3_header_after_magic(&pTrack->vf, &pReturnData->needed_offset, &version, &flags, &tagSize);
+        if(parseError != MHFS_CL_SUCCESS)
         {
             return parseError;
         }
@@ -692,7 +690,7 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_mp3(mhfs_cl_track *pTrack
         const blockvf_error frameError = blockvf_read_view(&pTrack->vf, tagSize, &frames, &pReturnData->needed_offset);
         if(frameError != BLOCKVF_SUCCESS)
         {
-            return mhfs_cl_track_error_from_blockvf_error(frameError);
+            return mhfs_cl_error_from_blockvf_error(frameError);
         }
         while(tagSize >= 10) {
             const uint32_t framesize = unsynchsafe_32(unaligned_beu32_to_native(frames+4));
@@ -753,25 +751,25 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_mp3(mhfs_cl_track *pTrack
     const blockvf_error idError = blockvf_read_view(&pTrack->vf, 4, &id, &pReturnData->needed_offset);
     if(idError != BLOCKVF_SUCCESS)
     {
-        return mhfs_cl_track_error_from_blockvf_error(idError);
+        return mhfs_cl_error_from_blockvf_error(idError);
     }
     const uint32_t uMagic = unaligned_beu32_to_native(id);
     // sync
     if((uMagic & 0xFFE00000) != 0xFFE00000)
     {
-        return MHFS_CL_TRACK_GENERIC_ERROR;
+        return MHFS_CL_ERROR;
     }
     // version
     const unsigned version = (uMagic & 0x00180000) >> 19;
     if(version == MCT_MVER_RESERVED)
     {
-        return MHFS_CL_TRACK_GENERIC_ERROR;
+        return MHFS_CL_ERROR;
     }
     // layer
     const unsigned layer = (uMagic & 0x00060000) >> 17;
     if(layer == MCT_MLAYER_RESERVED)
     {
-        return MHFS_CL_TRACK_GENERIC_ERROR;
+        return MHFS_CL_ERROR;
     }
     // crc
     const unsigned crc = (uMagic & 0x00010000) >> 16;
@@ -781,7 +779,7 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_mp3(mhfs_cl_track *pTrack
     MHFSCLTR_PRINT("birateindex %u\n", bitrateindex);
     if(bitrateindex == 0xF)
     {
-        return MHFS_CL_TRACK_GENERIC_ERROR;
+        return MHFS_CL_ERROR;
     }
     static const uint8_t halfrate[2][3][15] = {
         { { 0,4,8,12,16,20,24,28,32,40,48,56,64,72,80 }, { 0,4,8,12,16,20,24,28,32,40,48,56,64,72,80 }, { 0,16,24,28,32,40,48,56,64,72,80,88,96,112,128 } },
@@ -794,7 +792,7 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_mp3(mhfs_cl_track *pTrack
     MHFSCLTR_PRINT("samplerateindex %u\n", samplerateindex);
     if(samplerateindex == 0x3)
     {
-        return MHFS_CL_TRACK_GENERIC_ERROR;
+        return MHFS_CL_ERROR;
     }
     static const unsigned g_hz[3] = { 44100, 48000, 32000 };
     const unsigned sampleRate = g_hz[samplerateindex] >> (int)!(version & 0x1) >> (int)!(version & 0x2);
@@ -811,14 +809,14 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_mp3(mhfs_cl_track *pTrack
     if(skipblockError != BLOCKVF_SUCCESS)
     {
         MHFSCLTR_PRINT("Stopping metadata parsing, blockvf error\n");
-        return mhfs_cl_track_error_from_blockvf_error(skipblockError);
+        return mhfs_cl_error_from_blockvf_error(skipblockError);
     }
     // check for xing
     const uint8_t *xing;
     const blockvf_error xingError = blockvf_read_view(&pTrack->vf, 4, &xing, &pReturnData->needed_offset);
     if(xingError != BLOCKVF_SUCCESS)
     {
-        return mhfs_cl_track_error_from_blockvf_error(xingError);
+        return mhfs_cl_error_from_blockvf_error(xingError);
     }
     MHFSCLTR_PRINT("xing/vbr magic %c %c %c %c | %x %x %x %x\n", xing[0], xing[1], xing[2], xing[3], xing[0], xing[1], xing[2], xing[3]);
     bool isXing = (memcmp(xing, "Xing", 4) == 0) || (memcmp(xing, "Info", 4) == 0);
@@ -837,7 +835,7 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_mp3(mhfs_cl_track *pTrack
         const blockvf_error xingFlagsError = blockvf_read_view(&pTrack->vf, 4, &flagsBytes, &pReturnData->needed_offset);
         if(xingFlagsError != BLOCKVF_SUCCESS)
         {
-            return mhfs_cl_track_error_from_blockvf_error(xingFlagsError);
+            return mhfs_cl_error_from_blockvf_error(xingFlagsError);
         }
         const uint32_t xingFlags = unaligned_beu32_to_native(flagsBytes);
         if(xingFlags & 0x1)
@@ -846,7 +844,7 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_mp3(mhfs_cl_track *pTrack
             const blockvf_error framesError = blockvf_read_view(&pTrack->vf, 4, &framesBytes, &pReturnData->needed_offset);
             if(framesError != BLOCKVF_SUCCESS)
             {
-                return mhfs_cl_track_error_from_blockvf_error(framesError);
+                return mhfs_cl_error_from_blockvf_error(framesError);
             }
             const uint32_t frames = unaligned_beu32_to_native(framesBytes);
             MHFSCLTR_PRINT("xing frames %u\n", frames);
@@ -857,22 +855,22 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_mp3(mhfs_cl_track *pTrack
                 on_metablock(context, MHFS_CL_TRACK_M_AUDIOINFO, &pTrack->meta);
             }
             pTrack->meta_initialized = true;
-            return MHFS_CL_TRACK_SUCCESS;
+            return MHFS_CL_SUCCESS;
         }
-        return MHFS_CL_TRACK_GENERIC_ERROR;
+        return MHFS_CL_ERROR;
     }
 
     // check for VBRI
     const blockvf_error seekVBRI = blockvf_seek(&pTrack->vf, startoffset+36, blockvf_seek_origin_start);
     if(seekVBRI != BLOCKVF_SUCCESS)
     {
-        return mhfs_cl_track_error_from_blockvf_error(seekVBRI);
+        return mhfs_cl_error_from_blockvf_error(seekVBRI);
     }
     const uint8_t *vbriMagic;
     const blockvf_error vbriMagicError = blockvf_read_view(&pTrack->vf, 4, &vbriMagic, &pReturnData->needed_offset);
     if(vbriMagicError != BLOCKVF_SUCCESS)
     {
-        return mhfs_cl_track_error_from_blockvf_error(vbriMagicError);
+        return mhfs_cl_error_from_blockvf_error(vbriMagicError);
     }
     if(memcmp(vbriMagic, "VBRI", 4) == 0)
     {
@@ -881,7 +879,7 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_mp3(mhfs_cl_track *pTrack
         const blockvf_error vbriFieldsError = blockvf_read_view(&pTrack->vf, 22, &vbriFields, &pReturnData->needed_offset);
         if(vbriFieldsError != BLOCKVF_SUCCESS)
         {
-            return mhfs_cl_track_error_from_blockvf_error(vbriFieldsError);
+            return mhfs_cl_error_from_blockvf_error(vbriFieldsError);
         }
         const uint32_t frames = unaligned_beu32_to_native(&vbriFields[10]);
         MHFSCLTR_PRINT("vbri frames %u\n", frames);
@@ -892,7 +890,7 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_mp3(mhfs_cl_track *pTrack
             on_metablock(context, MHFS_CL_TRACK_M_AUDIOINFO, &pTrack->meta);
         }
         pTrack->meta_initialized = true;
-        return MHFS_CL_TRACK_SUCCESS;
+        return MHFS_CL_SUCCESS;
     }
 
     // TODO
@@ -903,7 +901,7 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_mp3(mhfs_cl_track *pTrack
 
     //estimate from bitrate?
 
-    return MHFS_CL_TRACK_GENERIC_ERROR;
+    return MHFS_CL_ERROR;
 }
 
 typedef enum {
@@ -921,37 +919,37 @@ typedef enum {
     MCT_WAVE_CHUNK_DATA = 'd' | ('a' << 8) | ('t' << 16) | ('a' << 24)
 } mhfs_cl_riff_chunk_type;
 
-static inline mhfs_cl_track_error mhfs_cl_wav_read_chunk_header(blockvf *pBlockvf, uint32_t *pNeededOffset, mhfs_cl_riff_chunk_type *pChunkType, uint32_t *pChunkSize)
+static inline mhfs_cl_error mhfs_cl_wav_read_chunk_header(blockvf *pBlockvf, uint32_t *pNeededOffset, mhfs_cl_riff_chunk_type *pChunkType, uint32_t *pChunkSize)
 {
     const uint8_t *chunkHeader;
     const blockvf_error chunkHeaderError = blockvf_read_view(pBlockvf, 8, &chunkHeader, pNeededOffset);
     if(chunkHeaderError != BLOCKVF_SUCCESS)
     {
-        return mhfs_cl_track_error_from_blockvf_error(chunkHeaderError);
+        return mhfs_cl_error_from_blockvf_error(chunkHeaderError);
     }
     *pChunkType = unaligned_leu32_to_native(&chunkHeader[0]);
     *pChunkSize = unaligned_leu32_to_native(&chunkHeader[4]);
-    return MHFS_CL_TRACK_SUCCESS;
+    return MHFS_CL_SUCCESS;
 }
 
-static mhfs_cl_track_error mhfs_cl_track_load_metadata_wav(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock, void *context)
+static mhfs_cl_error mhfs_cl_track_load_metadata_wav(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock, void *context)
 {
     {
     const uint8_t *wavHeader;
     const blockvf_error wavHeaderError = blockvf_read_view(&pTrack->vf, 12, &wavHeader, &pReturnData->needed_offset);
     if(wavHeaderError != BLOCKVF_SUCCESS)
     {
-        return mhfs_cl_track_error_from_blockvf_error(wavHeaderError);
+        return mhfs_cl_error_from_blockvf_error(wavHeaderError);
     }
 
     if(memcmp(&wavHeader[0], "RIFF", 4) != 0)
     {
-        return MHFS_CL_TRACK_GENERIC_ERROR;
+        return MHFS_CL_ERROR;
     }
     /* chunksize is here */
     if(memcmp(&wavHeader[8], "WAVE", 4) != 0)
     {
-        return MHFS_CL_TRACK_GENERIC_ERROR;
+        return MHFS_CL_ERROR;
     }
     }
 
@@ -964,8 +962,8 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_wav(mhfs_cl_track *pTrack
     do {
         mhfs_cl_riff_chunk_type chunkType;
         uint32_t chunkSize;
-        const mhfs_cl_track_error chunkHeaderError = mhfs_cl_wav_read_chunk_header(&pTrack->vf, &pReturnData->needed_offset, &chunkType, &chunkSize);
-        if(chunkHeaderError != MHFS_CL_TRACK_SUCCESS)
+        const mhfs_cl_error chunkHeaderError = mhfs_cl_wav_read_chunk_header(&pTrack->vf, &pReturnData->needed_offset, &chunkType, &chunkSize);
+        if(chunkHeaderError != MHFS_CL_SUCCESS)
         {
             return chunkHeaderError;
         }
@@ -975,7 +973,7 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_wav(mhfs_cl_track *pTrack
             const blockvf_error chunkReadError = blockvf_read_view(&pTrack->vf, chunkSize, &fmtChunk, &pReturnData->needed_offset);
             if(chunkReadError != BLOCKVF_SUCCESS)
             {
-                return mhfs_cl_track_error_from_blockvf_error(chunkReadError);
+                return mhfs_cl_error_from_blockvf_error(chunkReadError);
             }
             const mhfs_cl_wav_format audioFormat = unaligned_leu16_to_native(&fmtChunk[0]);
             switch(audioFormat)
@@ -990,7 +988,7 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_wav(mhfs_cl_track *pTrack
                 break;
                 default:
                 MHFSCLTR_PRINT("wav format not supported\n");
-                return MHFS_CL_TRACK_GENERIC_ERROR;
+                return MHFS_CL_ERROR;
             }
             channels = unaligned_leu16_to_native(&fmtChunk[2]);
             sampleRate = unaligned_leu32_to_native(&fmtChunk[4]);
@@ -1016,7 +1014,7 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_wav(mhfs_cl_track *pTrack
             /* Validation for known formats. a-law and mu-law should be 1 byte per channel. If it's not, it's not decodable. */
             if (audioFormat == DR_WAVE_FORMAT_ALAW || audioFormat == DR_WAVE_FORMAT_MULAW) {
                 if (bytesPerPCMFrame != channels) {
-                    return MHFS_CL_TRACK_GENERIC_ERROR;
+                    return MHFS_CL_ERROR;
                 }
             }
             bGotFmt = true;
@@ -1025,7 +1023,7 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_wav(mhfs_cl_track *pTrack
         {
             if(!bGotFmt)
             {
-                return MHFS_CL_TRACK_GENERIC_ERROR;
+                return MHFS_CL_ERROR;
             }
             totalPCMFrameCount = chunkSize / bytesPerPCMFrame;
             mhfs_cl_track_meta_audioinfo_init(&pTrack->meta, totalPCMFrameCount, sampleRate, channels, MCT_MAI_FLD_BITSPERSAMPLE, bitsPerSample, 0);
@@ -1035,19 +1033,19 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_wav(mhfs_cl_track *pTrack
             }
             pTrack->meta_initialized = true;
             MHFSCLTR_PRINT("self initialized metadata from wav\n");
-            return MHFS_CL_TRACK_SUCCESS;
+            return MHFS_CL_SUCCESS;
         }
         else
         {
             const blockvf_error chunkSkipError = blockvf_seek(&pTrack->vf, chunkSize, blockvf_seek_origin_current);
             if(chunkSkipError != BLOCKVF_SUCCESS)
             {
-                return mhfs_cl_track_error_from_blockvf_error(chunkSkipError);
+                return mhfs_cl_error_from_blockvf_error(chunkSkipError);
             }
         }
     } while(1);
 
-    return MHFS_CL_TRACK_GENERIC_ERROR;
+    return MHFS_CL_ERROR;
 }
 
 
@@ -1061,7 +1059,7 @@ static inline void mhfs_cl_track_blockvf_ma_decoder_call_before(mhfs_cl_track *p
     }
 }
 
-static inline mhfs_cl_track_error mhfs_cl_track_blockvf_ma_decoder_call_after(mhfs_cl_track *pTrack, const bool bRestoreDecoder, uint32_t *pNeededOffset)
+static inline mhfs_cl_error mhfs_cl_track_blockvf_ma_decoder_call_after(mhfs_cl_track *pTrack, const bool bRestoreDecoder, uint32_t *pNeededOffset)
 {
     if(pTrack->vfData.code != BLOCKVF_SUCCESS)
     {
@@ -1071,16 +1069,16 @@ static inline mhfs_cl_track_error mhfs_cl_track_blockvf_ma_decoder_call_after(mh
             mhfs_cl_track_allocs_restore(pTrack);
         }
     }
-    return mhfs_cl_track_error_from_blockvf_error(pTrack->vfData.code);
+    return mhfs_cl_error_from_blockvf_error(pTrack->vfData.code);
 }
 
-static mhfs_cl_track_error mhfs_cl_track_open_ma_decoder(mhfs_cl_track *pTrack, uint32_t *pNeededOffset)
+static mhfs_cl_error mhfs_cl_track_open_ma_decoder(mhfs_cl_track *pTrack, uint32_t *pNeededOffset)
 {
     pTrack->vf.fileoffset = 0;
     mhfs_cl_track_blockvf_ma_decoder_call_before(pTrack, false);
     const ma_result openRes = ma_decoder_init(&mhfs_cl_track_on_read_ma_decoder, &mhfs_cl_track_on_seek_ma_decoder, pTrack, &pTrack->decoderConfig, &pTrack->decoder);
-    const mhfs_cl_track_error openBlockRes = mhfs_cl_track_blockvf_ma_decoder_call_after(pTrack, false, pNeededOffset);
-    if(openBlockRes != MHFS_CL_TRACK_SUCCESS)
+    const mhfs_cl_error openBlockRes = mhfs_cl_track_blockvf_ma_decoder_call_after(pTrack, false, pNeededOffset);
+    if(openBlockRes != MHFS_CL_SUCCESS)
     {
         if(openRes == MA_SUCCESS) ma_decoder_uninit(&pTrack->decoder);
         return openBlockRes;
@@ -1088,16 +1086,16 @@ static mhfs_cl_track_error mhfs_cl_track_open_ma_decoder(mhfs_cl_track *pTrack, 
     else if(openRes == MA_SUCCESS)
     {
         pTrack->dec_initialized = true;
-        return MHFS_CL_TRACK_SUCCESS;
+        return MHFS_CL_SUCCESS;
     }
-    return MHFS_CL_TRACK_GENERIC_ERROR;
+    return MHFS_CL_ERROR;
 }
 
-static mhfs_cl_track_error mhfs_cl_track_load_metadata_ma_decoder(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock, void *context)
+static mhfs_cl_error mhfs_cl_track_load_metadata_ma_decoder(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const mhfs_cl_track_on_metablock on_metablock, void *context)
 {
     // open the decoder
-    mhfs_cl_track_error retval = mhfs_cl_track_open_ma_decoder(pTrack, &pReturnData->needed_offset);
-    if(retval != MHFS_CL_TRACK_SUCCESS)
+    mhfs_cl_error retval = mhfs_cl_track_open_ma_decoder(pTrack, &pReturnData->needed_offset);
+    if(retval != MHFS_CL_SUCCESS)
     {
         return retval;
     }
@@ -1116,7 +1114,7 @@ static mhfs_cl_track_error mhfs_cl_track_load_metadata_ma_decoder(mhfs_cl_track 
         on_metablock(context, MHFS_CL_TRACK_M_AUDIOINFO, &pTrack->meta);
     }
 
-    if(retval == MHFS_CL_TRACK_SUCCESS)
+    if(retval == MHFS_CL_SUCCESS)
     {
         pTrack->meta_initialized = true;
     }
@@ -1177,13 +1175,13 @@ static inline ma_encoding_format mhfs_cl_guess_codec(const uint8_t *id, const ch
 
 typedef struct {
     bool initialized;
-    mhfs_cl_track_error res;
+    mhfs_cl_error res;
     uint32_t neededOffset;
 } mhfs_cl_track_io_error;
 
-static inline void mhfs_cl_track_io_error_update(mhfs_cl_track_io_error *ioError, const mhfs_cl_track_error res, const uint32_t neededOffset)
+static inline void mhfs_cl_track_io_error_update(mhfs_cl_track_io_error *ioError, const mhfs_cl_error res, const uint32_t neededOffset)
 {
-    if(res != MHFS_CL_TRACK_NEED_MORE_DATA) return;
+    if(res != MHFS_CL_NEED_MORE_DATA) return;
     if(!ioError->initialized)
     {
         ioError->initialized = true;
@@ -1192,7 +1190,7 @@ static inline void mhfs_cl_track_io_error_update(mhfs_cl_track_io_error *ioError
     }
 }
 
-mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const char *mime, const char *fullfilename, const uint64_t totalPCMFrameCount, const mhfs_cl_track_on_metablock on_metablock, void *context)
+mhfs_cl_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_track_return_data *pReturnData, const char *mime, const char *fullfilename, const uint64_t totalPCMFrameCount, const mhfs_cl_track_on_metablock on_metablock, void *context)
 {
     mhfs_cl_track_return_data rd;
     if(pReturnData == NULL) pReturnData = &rd;
@@ -1205,7 +1203,7 @@ mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_t
         const blockvf_error idError = blockvf_read_view(&pTrack->vf, 4, &id, &pReturnData->needed_offset);
         if(idError != BLOCKVF_SUCCESS)
         {
-            return mhfs_cl_track_error_from_blockvf_error(idError);
+            return mhfs_cl_error_from_blockvf_error(idError);
         }
         MHFSCLTR_PRINT("uMagic %X %X %X %X @ 0x%X\n", id[0], id[1], id[2], id[3], pTrack->vf.fileoffset-4);
         if(memcmp(id, "ID3", 3) != 0) break;
@@ -1213,14 +1211,14 @@ mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_t
         uint16_t id3version;
         uint8_t flags;
         uint32_t tagSize;
-        const mhfs_cl_track_error parseError = mhfs_cl_parse_id3_header_after_magic(&pTrack->vf, &pReturnData->needed_offset, &id3version, &flags, &tagSize);
-        if(parseError != MHFS_CL_TRACK_SUCCESS)
+        const mhfs_cl_error parseError = mhfs_cl_parse_id3_header_after_magic(&pTrack->vf, &pReturnData->needed_offset, &id3version, &flags, &tagSize);
+        if(parseError != MHFS_CL_SUCCESS)
         {
             return parseError;
         }
         if(BLOCKVF_SUCCESS != blockvf_seek(&pTrack->vf, tagSize, blockvf_seek_origin_current))
         {
-            return MHFS_CL_TRACK_GENERIC_ERROR;
+            return MHFS_CL_ERROR;
         }
     }
     pTrack->afterID3Offset = pTrack->vf.fileoffset - 4;
@@ -1262,8 +1260,8 @@ mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_t
         mhfs_cl_track_return_data temprd;
         if(pTrack->decoderConfig.encodingFormat == ma_encoding_format_flac)
         {
-            const mhfs_cl_track_error retval = mhfs_cl_track_load_metadata_flac(pTrack, &temprd, on_metablock, context);
-            if(retval == MHFS_CL_TRACK_SUCCESS)
+            const mhfs_cl_error retval = mhfs_cl_track_load_metadata_flac(pTrack, &temprd, on_metablock, context);
+            if(retval == MHFS_CL_SUCCESS)
             {
                 return retval;
             }
@@ -1271,8 +1269,8 @@ mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_t
         }
         else if(pTrack->decoderConfig.encodingFormat == ma_encoding_format_wav)
         {
-            const mhfs_cl_track_error retval = mhfs_cl_track_load_metadata_wav(pTrack, &temprd, on_metablock, context);
-            if(retval == MHFS_CL_TRACK_SUCCESS)
+            const mhfs_cl_error retval = mhfs_cl_track_load_metadata_wav(pTrack, &temprd, on_metablock, context);
+            if(retval == MHFS_CL_SUCCESS)
             {
                 return retval;
             }
@@ -1280,8 +1278,8 @@ mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_t
         }
         else if(pTrack->decoderConfig.encodingFormat == ma_encoding_format_mp3)
         {
-            const mhfs_cl_track_error retval = mhfs_cl_track_load_metadata_mp3(pTrack, &temprd, on_metablock, context);
-            if(retval == MHFS_CL_TRACK_SUCCESS)
+            const mhfs_cl_error retval = mhfs_cl_track_load_metadata_mp3(pTrack, &temprd, on_metablock, context);
+            if(retval == MHFS_CL_SUCCESS)
             {
                 return retval;
             }
@@ -1289,8 +1287,8 @@ mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_t
         }
 
         // try loading via ma_decoder
-        const mhfs_cl_track_error retval = mhfs_cl_track_load_metadata_ma_decoder(pTrack, &temprd, on_metablock, context);
-        if(retval == MHFS_CL_TRACK_SUCCESS)
+        const mhfs_cl_error retval = mhfs_cl_track_load_metadata_ma_decoder(pTrack, &temprd, on_metablock, context);
+        if(retval == MHFS_CL_SUCCESS)
         {
             return retval;
         }
@@ -1303,25 +1301,25 @@ mhfs_cl_track_error mhfs_cl_track_load_metadata(mhfs_cl_track *pTrack, mhfs_cl_t
         pReturnData->needed_offset = ioError.neededOffset;
         return ioError.res;
     }
-    return MHFS_CL_TRACK_GENERIC_ERROR;
+    return MHFS_CL_ERROR;
 }
 
-mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *outFloat, mhfs_cl_track_return_data *pReturnData)
+mhfs_cl_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *outFloat, mhfs_cl_track_return_data *pReturnData)
 {
     mhfs_cl_track_return_data rd;
     if(pReturnData == NULL) pReturnData = &rd;
-    mhfs_cl_track_error retval = MHFS_CL_TRACK_SUCCESS;
+    mhfs_cl_error retval = MHFS_CL_SUCCESS;
 
     // initialize the decoder if necessary
     if(!pTrack->meta_initialized)
     {
         MHFSCLTR_PRINT("metadata is somehow not initialized\n");
-        return MHFS_CL_TRACK_GENERIC_ERROR;
+        return MHFS_CL_ERROR;
     }
     if(!pTrack->dec_initialized)
     {
         retval = mhfs_cl_track_open_ma_decoder(pTrack, &pReturnData->needed_offset);
-        if(retval != MHFS_CL_TRACK_SUCCESS) return retval;
+        if(retval != MHFS_CL_SUCCESS) return retval;
     }
 
     // seek to sample
@@ -1329,8 +1327,8 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
     const uint32_t currentPCMFrame32 = 0xFFFFFFFF;
     mhfs_cl_track_blockvf_ma_decoder_call_before(pTrack, true);
     const ma_result seekRes = ma_decoder_seek_to_pcm_frame(&pTrack->decoder, pTrack->currentFrame);
-    const mhfs_cl_track_error seekBlockRes = mhfs_cl_track_blockvf_ma_decoder_call_after(pTrack, true, &pReturnData->needed_offset);
-    if(seekBlockRes != MHFS_CL_TRACK_SUCCESS)
+    const mhfs_cl_error seekBlockRes = mhfs_cl_track_blockvf_ma_decoder_call_after(pTrack, true, &pReturnData->needed_offset);
+    if(seekBlockRes != MHFS_CL_SUCCESS)
     {
         MHFSCLTR_PRINT("%s: failed seek_to_pcm_frame NOT OK current: %u desired: %u\n", __func__, currentPCMFrame32, pTrack->currentFrame);
         return seekBlockRes;
@@ -1338,7 +1336,7 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
     if(seekRes != MA_SUCCESS)
     {
         MHFSCLTR_PRINT("%s: seek failed current: %u desired: %u ma_result %d\n", __func__, currentPCMFrame32, pTrack->currentFrame, seekRes);
-        retval = MHFS_CL_TRACK_GENERIC_ERROR;
+        retval = MHFS_CL_ERROR;
         goto mhfs_cl_track_read_pcm_frames_f32_FAIL;
     }
 
@@ -1351,8 +1349,8 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
         // decode to pcm
         mhfs_cl_track_blockvf_ma_decoder_call_before(pTrack, true);
         ma_result decRes = ma_decoder_read_pcm_frames(&pTrack->decoder, outFloat, toread, &frames_decoded);
-        const mhfs_cl_track_error decBlockRes = mhfs_cl_track_blockvf_ma_decoder_call_after(pTrack, true, &pReturnData->needed_offset);
-        if(decBlockRes != MHFS_CL_TRACK_SUCCESS)
+        const mhfs_cl_error decBlockRes = mhfs_cl_track_blockvf_ma_decoder_call_after(pTrack, true, &pReturnData->needed_offset);
+        if(decBlockRes != MHFS_CL_SUCCESS)
         {
             MHFSCLTR_PRINT("mhfs_cl_track_read_pcm_frames_f32_mem: failed read_pcm_frames_f32\n");
             return decBlockRes;
@@ -1360,7 +1358,7 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
         if(decRes != MA_SUCCESS)
         {
             MHFSCLTR_PRINT("mhfs_cl_track_read_pcm_frames_f32_mem: failed read_pcm_frames_f32(decode), ma_result %d\n", decRes);
-            retval = MHFS_CL_TRACK_GENERIC_ERROR;
+            retval = MHFS_CL_ERROR;
             if(decRes == MA_AT_END)
             {
                 MHFSCLTR_PRINT("MA_AT_END\n"); // not a real error
@@ -1376,7 +1374,7 @@ mhfs_cl_track_error mhfs_cl_track_read_pcm_frames_f32(mhfs_cl_track *pTrack, con
 
     MHFSCLTR_PRINT("returning from pTrack->currentFrame: %u, totalFrames %"PRIu64" frames_decoded %"PRIu64" desired %u\n", pTrack->currentFrame, pTrack->meta.totalPCMFrameCount, frames_decoded, desired_pcm_frames);
     pReturnData->frames_read = frames_decoded;
-    return MHFS_CL_TRACK_SUCCESS;
+    return MHFS_CL_SUCCESS;
 
 mhfs_cl_track_read_pcm_frames_f32_FAIL:
     if(pTrack->dec_initialized)

@@ -1,4 +1,16 @@
-#pragma once
+#ifndef mhfs_cl_decoder_h
+#define mhfs_cl_decoder_h
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#define LIBEXPORT EMSCRIPTEN_KEEPALIVE
+#else
+#define LIBEXPORT
+#endif
+#include "miniaudio.h"
+
+#include "mhfs_cl.h"
+
 typedef struct {
     unsigned outputSampleRate;
     unsigned outputChannels;
@@ -10,22 +22,17 @@ typedef struct {
     float32_t interleavedData[];
 } mhfs_cl_decoder;
 
-#ifdef __EMSCRIPTEN__
-#include <emscripten.h>
-#define LIBEXPORT EMSCRIPTEN_KEEPALIVE
-#else
-#define LIBEXPORT
-#endif
-
-
 LIBEXPORT mhfs_cl_decoder *mhfs_cl_decoder_open(const unsigned outputSampleRate, const unsigned outputChannels, const unsigned deinterleave_max_pcm_frames);
-LIBEXPORT mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(mhfs_cl_decoder *mhfs_d, mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *outFloat[], mhfs_cl_track_return_data *pReturnData);
+LIBEXPORT mhfs_cl_error mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(mhfs_cl_decoder *mhfs_d, mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *outFloat[], mhfs_cl_track_return_data *pReturnData);
 LIBEXPORT void mhfs_cl_decoder_close(mhfs_cl_decoder *mhfs_d);
 LIBEXPORT void mhfs_cl_decoder_flush(mhfs_cl_decoder *mhfs_d);
+#endif /* mhfs_cl_decoder_h */
 
 #if defined(MHFSCLDECODER_IMPLEMENTATION)
 #ifndef mhfs_cl_decoder_c
 #define mhfs_cl_decoder_c
+
+#include "mhfs_cl_track.h"
 
 #ifndef MHFSCLDEC_PRINT_ON
     #define MHFSCLDEC_PRINT_ON 0
@@ -68,14 +75,14 @@ void mhfs_cl_decoder_flush(mhfs_cl_decoder *mhfs_d)
     }
 }
 
-mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32(mhfs_cl_decoder *mhfs_d, mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *outFloat, mhfs_cl_track_return_data *pReturnData)
+mhfs_cl_error mhfs_cl_decoder_read_pcm_frames_f32(mhfs_cl_decoder *mhfs_d, mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *outFloat, mhfs_cl_track_return_data *pReturnData)
 {
     // open the decoder if needed
     if(!pTrack->dec_initialized)
     {
         MHFSCLDEC_PRINT("force open ma_decoder (not initialized)\n");
-        const mhfs_cl_track_error openCode = mhfs_cl_track_read_pcm_frames_f32(pTrack, 0, NULL, pReturnData);
-        if(openCode != MHFS_CL_TRACK_SUCCESS)
+        const mhfs_cl_error openCode = mhfs_cl_track_read_pcm_frames_f32(pTrack, 0, NULL, pReturnData);
+        if(openCode != MHFS_CL_SUCCESS)
         {
             return openCode;
         }
@@ -100,7 +107,7 @@ mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32(mhfs_cl_decoder *mhfs_d,
             if(ma_data_converter_init(&config, NULL, &mhfs_d->madc) != MA_SUCCESS)
             {
                 MHFSCLDEC_PRINT("failed to init data converter\n");
-                return MHFS_CL_TRACK_GENERIC_ERROR;
+                return MHFS_CL_ERROR;
             }
             mhfs_d->has_madc = true;
             MHFSCLDEC_PRINT("success init data converter\n"); 
@@ -110,7 +117,7 @@ mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32(mhfs_cl_decoder *mhfs_d,
             if(ma_data_converter_set_rate(&mhfs_d->madc, pTrack->meta.sampleRate, mhfs_d->outputSampleRate) != MA_SUCCESS)
             {
                 MHFSCLDEC_PRINT("failed to change data converter samplerate\n");
-                return MHFS_CL_TRACK_GENERIC_ERROR;
+                return MHFS_CL_ERROR;
             }
         }
 
@@ -119,7 +126,7 @@ mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32(mhfs_cl_decoder *mhfs_d,
         if(ma_data_converter_get_required_input_frame_count(&mhfs_d->madc, desired_pcm_frames, &dec_frames_req) != MA_SUCCESS)
         {
             MHFSCLDEC_PRINT("failed to get data converter input frame count\n");
-            return MHFS_CL_TRACK_GENERIC_ERROR;
+            return MHFS_CL_ERROR;
         }
         const size_t reqBytes = dec_frames_req * sizeof(float32_t)*pTrack->meta.channels;
         if(reqBytes > mhfs_d->dcTempOutSize)
@@ -128,13 +135,13 @@ mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32(mhfs_cl_decoder *mhfs_d,
             if(tempOut == NULL)
             {
                 MHFSCLDEC_PRINT("realloc failed\n");
-                return MHFS_CL_TRACK_GENERIC_ERROR;
+                return MHFS_CL_ERROR;
             }
             mhfs_d->dcTempOutSize = reqBytes;
             mhfs_d->pDCTempOut = tempOut;
         }
-        const mhfs_cl_track_error readCode = mhfs_cl_track_read_pcm_frames_f32(pTrack, dec_frames_req, mhfs_d->pDCTempOut, pReturnData);
-        if((readCode != MHFS_CL_TRACK_SUCCESS) || (pReturnData->frames_read == 0))
+        const mhfs_cl_error readCode = mhfs_cl_track_read_pcm_frames_f32(pTrack, dec_frames_req, mhfs_d->pDCTempOut, pReturnData);
+        if((readCode != MHFS_CL_SUCCESS) || (pReturnData->frames_read == 0))
         {
             return readCode;
         }
@@ -146,22 +153,22 @@ mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32(mhfs_cl_decoder *mhfs_d,
         if(result != MA_SUCCESS)
         {
             MHFSCLDEC_PRINT("resample failed\n");
-            return MHFS_CL_TRACK_GENERIC_ERROR;
+            return MHFS_CL_ERROR;
         }
         pReturnData->frames_read = frameCountOut;
-        return MHFS_CL_TRACK_SUCCESS;
+        return MHFS_CL_SUCCESS;
     }
 }
 
-mhfs_cl_track_error mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(mhfs_cl_decoder *mhfs_d, mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *outFloat[], mhfs_cl_track_return_data *pReturnData)
+mhfs_cl_error mhfs_cl_decoder_read_pcm_frames_f32_deinterleaved(mhfs_cl_decoder *mhfs_d, mhfs_cl_track *pTrack, const uint32_t desired_pcm_frames, float32_t *outFloat[], mhfs_cl_track_return_data *pReturnData)
 {
     if(desired_pcm_frames > mhfs_d->interleaveData_pcm_frames)
     {
         MHFSCLDEC_PRINT("%s: Not enough space to deinterleave internally\n", __func__);
-        return MHFS_CL_TRACK_GENERIC_ERROR;
+        return MHFS_CL_ERROR;
     }
-    const mhfs_cl_track_error code = mhfs_cl_decoder_read_pcm_frames_f32(mhfs_d, pTrack, desired_pcm_frames, mhfs_d->interleavedData, pReturnData);
-    if(code == MHFS_CL_TRACK_SUCCESS)
+    const mhfs_cl_error code = mhfs_cl_decoder_read_pcm_frames_f32(mhfs_d, pTrack, desired_pcm_frames, mhfs_d->interleavedData, pReturnData);
+    if(code == MHFS_CL_SUCCESS)
     {
         for(unsigned i = 0; i < pReturnData->frames_read; i++)
         {

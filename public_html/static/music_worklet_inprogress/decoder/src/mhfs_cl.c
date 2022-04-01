@@ -1,6 +1,4 @@
-#include <stdio.h>
-#include <stdbool.h>
-#include <inttypes.h>
+// #define the implementations
 
 #define DRFLAC_IMPLEMENTATION
 #include "dr_flac.h"
@@ -10,6 +8,9 @@
 
 #define BLOCKVF_IMPLEMENTATION
 #include "blockvf.h"
+
+#define MHFSCL_IMPLEMENTATION
+#include "mhfs_cl.h"
 
 #define MHFSCLTRACK_IMPLEMENTATION
 #include "mhfs_cl_track.h"
