@@ -278,14 +278,7 @@ const UpdateTrackImage = function(track) {
                 console.log('UpdateTrackImage set artview');
                 artviewimg.src = newurl;
             }
-            if ('mediaSession' in navigator) {
-                if(gt.mediametadata) {
-                    gt.mediametadata.artwork = [
-                        { src : newurl }
-                    ];
-                    navigator.mediaSession.metadata = new MediaMetadata(gt.mediametadata);
-                }
-            }
+            UpdateMediaSessionMetadata(gt);
         }
         else if(gt === GuiNextTrack) {
             boxelm = nexttxt;
@@ -329,35 +322,37 @@ const SetPlayTrack = function(track, isLoading) {
         playtxt.getElementsByClassName("trackmetadata")[0].textContent = trackname;
     }
     GuiCurrentTrackWasLoading = isLoading;
-    if (track.mediametadata && ('mediaSession' in navigator)) {
-        track.mediametadata.artwork = [
-            { src : MHFSPLAYER.getarturl(track)}
-        ];
-        navigator.mediaSession.metadata = new MediaMetadata(track.mediametadata);
-        navigator.mediaSession.setPositionState( {
-            duration : MHFSPLAYER.AudioQueue[0].track.duration,
-            playbackRate : 1,
-            position : MHFSPLAYER.tracktime() || 0
-        });
-    }
 }
 
 const SetSeekbarValue = function(seconds) {
     seekbar.value = seconds;           
 }
 
+// we need the silent audio for the mediaSession api to work
+const silentaudio = document.getElementById("silentaudio");
+
 const onACStateUpdate = function(playerstate) {
     if(playerstate === "suspended") {
         ppbtn.textContent = "PLAY";
-        document.getElementById("silentaudio").pause();
+        silentaudio.pause();
         navigator.mediaSession.playbackState = 'paused';
     }
     else if(playerstate === "running"){
         ppbtn.textContent = "PAUSE";
-        document.getElementById("silentaudio").play();
+        silentaudio.play();
         navigator.mediaSession.playbackState = 'playing';
     }
 }
+
+const UpdateMediaSessionMetadata = function(track) {
+    if('mediaSession' in navigator) {
+        const metadata = track.mediametadata || { title : track.trackname };
+        metadata.artwork = [
+            { src : MHFSPLAYER.getarturl(track)}
+        ];
+        navigator.mediaSession.metadata = new MediaMetadata(metadata);
+    }
+};
 
 let DRAWUPDATE;
 const onQueueUpdate = function(update) {
@@ -365,6 +360,17 @@ const onQueueUpdate = function(update) {
     // if a track ended, the manual seekbar movement is invalid
     if(update.trackended) {
         SBAR_UPDATING = 0;
+    }
+
+    // we need the media session api to update even when graphics aren't active
+    if ('mediaSession' in navigator) {
+        const track = update.track;
+        UpdateMediaSessionMetadata(track);
+        navigator.mediaSession.setPositionState( {
+            duration : track.duration,
+            playbackRate : 1,
+            position : MHFSPLAYER.tracktime() || 0
+        });
     }
 };
 
