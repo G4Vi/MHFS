@@ -290,6 +290,13 @@ const MHFSCLTrackOnMeta = function(mhfscltrackid, blockType, pBlock) {
             const [key, value] = strcomment.split('=', 2);
             mhfscltrack.tags[key] = value;
         } while(1);
+        if(mhfscltrack.tags['TITLE'] && mhfscltrack.tags['ARTIST'] && mhfscltrack.tags['ALBUM'] ) {
+            mhfscltrack.mediametadata = {
+                'title' : mhfscltrack.tags['TITLE'],
+                'artist' : mhfscltrack.tags['ARTIST'],
+                'album' : mhfscltrack.tags['ALBUM']
+            };
+        }
     }
     else if(blockType === MHFSCL.MHFS_CL_TRACK_M_PICTURE) {
         const picture = MHFSCL.mhfs_cl_track_meta_picture.from(pBlock);
@@ -569,6 +576,9 @@ const MHFSCLDecoder = async function(outputSampleRate, outputChannelCount) {
             that.track.seekSecs(starttime);
         }
         intrack.duration = that.track.duration;
+        if(that.track.mediametadata) {
+            intrack.mediametadata = that.track.mediametadata;
+        }
 
         if(signal.aborted) {
             console.log('');
