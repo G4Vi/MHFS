@@ -759,7 +759,7 @@ const MHFSPlayer = async function(opt) {
     };
 
     that.tracktime = function() {
-        return that.ac.currentTime-that.AudioQueue[0].starttime;
+        return that.AudioQueue[0] ? that.ac.currentTime-that.AudioQueue[0].starttime : 0;
     };   
 
     that.queuetrack = async function(trackname) {

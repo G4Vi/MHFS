@@ -242,14 +242,34 @@ const TrackHTML = function(track, isLoading) {
         });
         trackdiv.appendChild(artelm);
     }
-    let trackname = track ? track.trackname : '';
-    if(isLoading) {
-        trackname += ' {LOADING}';
-    }
     const metadiv = document.createElement("div");
-    metadiv.setAttribute('class', 'trackmetadata')
-    const textnode = document.createTextNode(trackname);
-    metadiv.appendChild(textnode)
+    metadiv.setAttribute('class', 'trackmetadata');
+    //if(track && track.mediametadata) {
+    //    const title = document.createElement("p");
+    //    const ttitle = (!isLoading) ? track.mediametadata.title : track.mediametadata.title + ' {LOADING}';
+    //    title.textContent = ttitle;
+    //    metadiv.appendChild(title);
+    //    metadiv.appendChild(document.createElement("br"));
+    //    metadiv.appendChild(document.createElement("br"));
+    //    const artist = document.createElement("p");
+    //    artist.textContent = track.mediametadata.artist;
+    //    metadiv.appendChild(artist);
+    //    metadiv.appendChild(document.createElement("br"));
+    //    metadiv.appendChild(document.createElement("br"));
+    //    const album = document.createElement("p");
+    //    album.textContent = track.mediametadata.album;
+    //    metadiv.appendChild(album);
+    //}
+    //else
+    {
+        let trackname = track ? track.trackname : '';
+        if(isLoading) {
+            trackname += ' {LOADING}';
+        }
+        const textnode = document.createTextNode(trackname);
+        metadiv.appendChild(textnode)
+    }
+
     trackdiv.appendChild(metadiv);
     return trackdiv;
 }
@@ -354,6 +374,9 @@ const UpdateMediaSessionMetadata = function(track) {
     }
 };
 
+const pagetitle = document.getElementsByTagName('title')[0];
+const basetitle = pagetitle.textContent;
+
 let DRAWUPDATE;
 const onQueueUpdate = function(update) {
     DRAWUPDATE = update;
@@ -366,11 +389,20 @@ const onQueueUpdate = function(update) {
     if ('mediaSession' in navigator) {
         const track = update.track;
         UpdateMediaSessionMetadata(track);
-        navigator.mediaSession.setPositionState( {
-            duration : track.duration,
-            playbackRate : 1,
-            position : MHFSPLAYER.tracktime() || 0
-        });
+        if(track.duration) {
+            navigator.mediaSession.setPositionState( {
+                duration : track.duration,
+                playbackRate : 1,
+                position : MHFSPLAYER.tracktime() || 0
+            });
+        }
+    }
+    if(update.trackstate !== 'ended') {
+        const tracktitle = update.track.mediametadata ? update.track.mediametadata.artist + ' - ' + update.track.mediametadata.title : update.track.trackname;
+        pagetitle.textContent = tracktitle + ' - MHFS';
+    }
+    else {
+        pagetitle.textContent = basetitle;
     }
 };
 
@@ -438,11 +470,7 @@ if ('mediaSession' in navigator) {
     });
     navigator.mediaSession.setActionHandler('seekforward', function(details) {
         if(MHFSPLAYER.isplaying()) {
-            let seektime = MHFSPLAYER.tracktime() + (details.seekOffset || 10);
-            if(seektime >= MHFSPLAYER.AudioQueue[0].duration) {
-                seektime = max(0, seektime-1);
-            }
-            MHFSPLAYER.seek(seektime);
+            MHFSPLAYER.seek(MHFSPLAYER.tracktime() + (details.seekOffset || 10));
         }
     });
     navigator.mediaSession.setActionHandler('seekbackward', function(details) {
@@ -644,11 +672,13 @@ const GraphicsLoop = function() {
         SetCurtimeText(curTime);
         SetSeekbarValue(curTime);
         if ('mediaSession' in navigator) {
-            navigator.mediaSession.setPositionState( {
-                duration : MHFSPLAYER.AudioQueue[0].track.duration,
-                playbackRate : 1,
-                position : curTime
-            });
+            if(GuiCurrentTrack && GuiCurrentTrack.duration) {
+                navigator.mediaSession.setPositionState( {
+                    duration : GuiCurrentTrack.duration,
+                    playbackRate : 1,
+                    position : curTime
+                });
+            }
         }
     }    
     window.requestAnimationFrame(GraphicsLoop);
