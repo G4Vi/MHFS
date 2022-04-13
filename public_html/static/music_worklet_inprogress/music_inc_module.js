@@ -684,6 +684,13 @@ const GraphicsLoop = function() {
     window.requestAnimationFrame(GraphicsLoop);
 };
 window.requestAnimationFrame(GraphicsLoop);
+
+const params = (new URL(document.location)).searchParams;
+const tracks = params.getAll('ptrack');
+if(tracks.length) {
+    MHFSPLAYER.queuetracks(tracks);
+}
+
 })();
 
 /*

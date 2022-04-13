@@ -856,7 +856,15 @@ package HTTP::BS::Server::Client::Request {
                 foreach my $pair (@qsPairs) {
                     my($key, $value) = split('=', $pair);
                     if(defined $value) {
-                        $qsStruct{$key} = uri_unescape($value);
+                        if(!defined $qsStruct{$key}) {
+                            $qsStruct{$key} = uri_unescape($value);
+                        }
+                        else {
+                            if(ref($qsStruct{$key}) ne 'ARRAY') {
+                                $qsStruct{$key} = [$qsStruct{$key}];
+                            };
+                            push @{$qsStruct{$key}}, uri_unescape($value);
+                        }
                     }
                 }
 
@@ -1153,7 +1161,16 @@ package HTTP::BS::Server::Client::Request {
         if($qs) {
             $url .= '?';
             foreach my $key (keys %{$qs}) {
-                $url .= uri_escape($key).'='.uri_escape($qs->{$key}) . '&';
+                my @values;
+                if(ref($qs->{$key}) ne 'ARRAY') {
+                    push @values, $qs->{$key};
+                }
+                else {
+                    @values = @{$qs->{$key}};
+                }
+                foreach my $value (@values) {
+                    $url .= uri_escape($key).'='.uri_escape($value) . '&';
+                }
             }
             chop $url;
         }
@@ -2899,8 +2916,9 @@ package MusicLibrary {
         }
 
         # route
+        my $qs = defined($request->{'qs'}{'ptrack'}) ? {'ptrack' => $request->{'qs'}{'ptrack'}} : undef;
         if($fmt eq 'worklet') {
-            return $request->SendRedirectRawURL(307, 'static/music_worklet_inprogress/');
+            return $request->SendRedirect(307, 'static/music_worklet_inprogress/', $qs);
         }
         elsif($fmt eq 'musicdbjson') {
             return $request->SendBytes('application/json', $self->{'musicdbjson'});
@@ -2912,7 +2930,7 @@ package MusicLibrary {
             return $request->SendBytes("text/html; charset=utf-8", $self->{'html_gapless'});
         }
         elsif($fmt eq 'musicinc') {
-            return $request->SendRedirectRawURL(307, 'static/music_inc/');
+            return $request->SendRedirect(307, 'static/music_inc/', $qs);
         }
         elsif($fmt eq 'legacy') {
             say "MusicLibrary: legacy";
@@ -6848,6 +6866,8 @@ sub rtxmlrpc {
     my ($evp, $params, $cb) = @_;
     my $process;
     my @cmd = ('rtxmlrpc', @$params, '--config-dir', $SETTINGS->{'CFGDIR'} . '/.pyroscope/');
+    print "$_ " foreach @cmd;
+    print "\n";
     $process    = HTTP::BS::Server::Process->new_output_process($evp, \@cmd, sub {
         my ($output, $error) = @_;
         chomp $output;
@@ -7047,18 +7067,35 @@ sub torrent_file_information {
         $output = undef;
     }
 
-    my @pairs = split( /\]\n\[/, $output);
+    # pase the name and size arrays
     my %files;
-    foreach my $pair (@pairs) {
-        #say "pair: $pair";
-        my ($file, $size) = $pair =~ /\[?'(.+)',\n?\s(\d+)/mg;
-        #say "file $file size $size";
+    my @lines = split(/\n/, $output);
+    while(1) {
+        my $line = shift @lines;
+        last if(!defined $line);
+        if(substr($line, 0, 1) ne '[') {
+            say "fail parse";
+            $cb->(undef);
+            return;
+        }
+        while(substr($line, -1) ne ']') {
+            my $newline = shift @lines;
+            if(!defined $newline) {
+                say "fail parse";
+                $cb->(undef);
+                return;
+            }
+            $line .= $newline;
+        }
+        my ($file, $size) = $line =~ /^\[.(.+).,\s(\d+)\]$/;
         if((! defined $file) || (!defined $size)) {
+            say "fail parse";
             $cb->(undef);
             return;
         }
         $files{$file} = {'size' => $size};
     }
+
     my @fkeys = (keys %files);
     if(@fkeys == 1) {
         my $key = $fkeys[0];
@@ -7093,14 +7130,13 @@ sub is_video {
 # is supported by mhfs music
 sub is_mhfs_music_playable {
     my ($name) = @_;
-    my ($ext) = $name =~ /\.(flac)$/i;
-    return $ext;
+    return $name =~ /\.(?:flac|mp3|wav)$/i;
 }
 
 sub play_in_browser_link {
-    my ($file, $torrent_path) = @_;
-    return '<a href="video?name=' . $torrent_path . '&fmt=hls">HLS (Watch in browser)</a>' if(is_video($file));
-    return '<a href="music?ptrack=' . $torrent_path . '">Play in MHFS Music</a>' if(is_mhfs_music_playable($file));
+    my ($file, $urlfile) = @_;
+    return '<a href="video?name=' . $urlfile . '&fmt=hls">HLS (Watch in browser)</a>' if(is_video($file));
+    return '<a href="music?ptrack=' . $urlfile . '">Play in MHFS Music</a>' if(is_mhfs_music_playable($file));
     return 'N/A';
 }
 
@@ -7210,10 +7246,11 @@ sub torrent {
             $buf .= '<thead><tr><th>File</th><th>Size</th><th>DL</th><th>Play in browser</th></tr></thead>';
             $buf .= '<tbody';
             foreach my $file (@files) {
-                my $torrent_path = uri_escape($file);
-                my $link = '<a href="get_video?name=' . $torrent_path . '&fmt=noconv">DL</a>';
-                my $playlink = play_in_browser_link($file, $torrent_path);
-                $buf .= "<tr><td>$torrent_path</td><td>" . get_SI_size($tfi->{$file}{'size'}) . "</td><td>$link</td>";
+                my $htmlfile = ${escape_html($file)};
+                my $urlfile = uri_escape($file);
+                my $link = '<a href="get_video?name=' . $urlfile . '&fmt=noconv">DL</a>';
+                my $playlink = play_in_browser_link($file, $urlfile);
+                $buf .= "<tr><td>$htmlfile</td><td>" . get_SI_size($tfi->{$file}{'size'}) . "</td><td>$link</td>";
                 $buf .= "<td>$playlink</td>" if(!defined($qs->{'playinbrowser'}) || ($qs->{'playinbrowser'} == 1));
                 $buf .= "</tr>";
             }
