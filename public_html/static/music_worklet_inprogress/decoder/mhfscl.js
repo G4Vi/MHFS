@@ -575,17 +575,15 @@ const MHFSCLDecoder = async function(outputSampleRate, outputChannelCount) {
         if(doseek) {
             that.track.seekSecs(starttime);
         }
-        intrack.duration = that.track.duration;
-        if(that.track.mediametadata) {
-            intrack.mediametadata = that.track.mediametadata;
-        }
 
         if(signal.aborted) {
             console.log('');
             await that.track.close();
             that.track = null;
             throw("abort after open track success");
-        }       
+        }
+
+        return { duration : that.track.duration, mediametadata : that.track.mediametadata };
     };
 	
 	that.seek_input_pcm_frames = async function(pcmFrameIndex) {

@@ -231,37 +231,39 @@ const CreateImageViewer = function(title, imageURL) {
 const TrackMetadata = function(track, isLoading){
     const metadiv = document.createElement("div");
     metadiv.setAttribute('class', 'trackmetadata');
-    if(track && track.mediametadata) {
-        const ttitle = (!isLoading) ? track.mediametadata.title : track.mediametadata.title + ' {LOADING}';
+    if(track) {
+        const mmd = MHFSPLAYER.getmediametadata(track);
+        const ttitle = (!isLoading) ? mmd.title : mmd.title + ' {LOADING}';
         const vdiv = document.createElement('div');
         vdiv.setAttribute('class', 'trackmetadatainner');
 
-        const tspan = document.createElement('span');
-        tspan.setAttribute('class', 'trackmetadatatrackname');
-        tspan.textContent = ttitle;
-        vdiv.appendChild(tspan);
+        if(mmd.artist && mmd.album) {
+            const tspan = document.createElement('span');
+            tspan.setAttribute('class', 'trackmetadatatrackname');
+            tspan.textContent = ttitle;
+            vdiv.appendChild(tspan);
 
-        for( const item of [track.mediametadata.artist, track.mediametadata.album]) {
-            const span = document.createElement('span');
-            span.textContent = item;
-            vdiv.appendChild(span);
+            for( const item of [mmd.artist, mmd.album]) {
+                const span = document.createElement('span');
+                span.textContent = item;
+                vdiv.appendChild(span);
+            }
         }
+        else {
+            const textnode = document.createTextNode(ttitle);
+            vdiv.appendChild(textnode);
+        }
+
         metadiv.appendChild(vdiv);
     }
     else
     {
-        let trackname = '';
-        if(track) {
-            trackname = track.trackname
-            if(isLoading) {
-                trackname += ' {LOADING}';
-            }
-        }
-        const textnode = document.createTextNode(trackname);
-        const vdiv = document.createElement('div');
-        vdiv.setAttribute('class', 'trackmetadatainner');
-        vdiv.appendChild(textnode);
-        metadiv.appendChild(vdiv);
+        //let trackname = '';
+        //const textnode = document.createTextNode(trackname);
+        //const vdiv = document.createElement('div');
+        //vdiv.setAttribute('class', 'trackmetadatainner');
+        //vdiv.appendChild(textnode);
+        //metadiv.appendChild(vdiv);
     }
     return metadiv;
 };
@@ -276,7 +278,7 @@ const TrackHTML = function(track, isLoading) {
         artelm.setAttribute('src', MHFSPLAYER.getarturl(track));
         // Open the image viewer if the art is clicked
         artelm.addEventListener('click', function(ev) {
-            CreateImageViewer(track.trackname, MHFSPLAYER.getarturl(track));
+            CreateImageViewer(track.md.trackname, MHFSPLAYER.getarturl(track));
         });
         trackdiv.appendChild(artelm);
     }
@@ -375,7 +377,8 @@ const onACStateUpdate = function(playerstate) {
 
 const UpdateMediaSessionMetadata = function(track) {
     if('mediaSession' in navigator) {
-        const metadata = track.mediametadata || { title : track.trackname };
+        const mmd = MHFSPLAYER.getmediametadata(track);
+        const metadata = { ...mmd };
         metadata.artwork = [
             { src : MHFSPLAYER.getarturl(track)}
         ];
@@ -398,16 +401,17 @@ const onQueueUpdate = function(update) {
     if ('mediaSession' in navigator) {
         const track = update.track;
         UpdateMediaSessionMetadata(track);
-        if(track.duration) {
+        if(track.md.duration) {
             navigator.mediaSession.setPositionState( {
-                duration : track.duration,
+                duration : track.md.duration,
                 playbackRate : 1,
                 position : MHFSPLAYER.tracktime() || 0
             });
         }
     }
     if(update.trackstate !== 'ended') {
-        const tracktitle = update.track.mediametadata ? update.track.mediametadata.artist + ' - ' + update.track.mediametadata.title : update.track.trackname;
+        const mmd = MHFSPLAYER.getmediametadata(update.track);
+        const tracktitle = mmd.artist ? (mmd.artist + ' - ' + mmd.title) : mmd.title;
         pagetitle.textContent = tracktitle + ' - MHFS';
     }
     else {
@@ -656,7 +660,7 @@ dbarea.addEventListener('click', function (e) {
 const GraphicsLoop = function() {
     if(DRAWUPDATE) {
         const track = DRAWUPDATE.track;
-        const duration =  track.duration || 0;
+        const duration =  track.md.duration || 0;
         seekbar.max = duration;
         SetEndtimeText(duration);
         SetPrevTrack(track.prev);
@@ -681,9 +685,9 @@ const GraphicsLoop = function() {
         SetCurtimeText(curTime);
         SetSeekbarValue(curTime);
         if ('mediaSession' in navigator) {
-            if(GuiCurrentTrack && GuiCurrentTrack.duration) {
+            if(GuiCurrentTrack?.md.duration) {
                 navigator.mediaSession.setPositionState( {
-                    duration : GuiCurrentTrack.duration,
+                    duration : GuiCurrentTrack.md.duration,
                     playbackRate : 1,
                     position : curTime
                 });
@@ -711,11 +715,11 @@ const _BuildPTrack = function() {
     if (USESEGMENTS) PTrackUrlParams.append('segments', USESEGMENTS);
     if (USEINCREMENTAL) PTrackUrlParams.append('inc', USEINCREMENTAL);
     Tracks.forEach(function (track) {
-        PTrackUrlParams.append('ptrack', track.trackname);
+        PTrackUrlParams.append('ptrack', track.md.trackname);
     });
     
    for(let track = MHFSPLAYER.Tracks_HEAD; track; track = track.next) {
-    PTrackUrlParams.append('ptrack', track.trackname);
+    PTrackUrlParams.append('ptrack', track.md.trackname);
 }
 }
 

@@ -161,7 +161,7 @@ const MHFSPlayer = async function(opt) {
     that.gui = opt.gui;
 
     that.artDB = ArtDB();
-    that.artmap = {};
+    that.trackdb = {};
     that.guiarturl = {};
     that.foldermap = FolderMap();
 
@@ -170,15 +170,15 @@ const MHFSPlayer = async function(opt) {
 
     const SetTrackArt = function(track, url) {
         // update the foldermap so we can guess the art for other tracks in the folder / album
-        that.foldermap.AddArtIfNotExists(track.trackname, url);
-        // set this as definite art for track.trackname
-        that.artmap[track.trackname] = url;
+        that.foldermap.AddArtIfNotExists(track.md.trackname, url);
+        // set this as definite art for trackname
+        track.md.artbloburl = url;
         // gui needs to reload track art urls
         that.gui.UpdateTrackImage(track);
     };
 
     const LoadTrackArt = function(track, dectrack) {
-        if(! that.artmap[track.trackname]) {
+        if(! track.md.artbloburl) {
             let urlToSet;
             // first try loading the art directly from the file
             const embeddedart = dectrack._openPictureIfExists();
@@ -187,7 +187,7 @@ const MHFSPlayer = async function(opt) {
             }
             else {
                 // try using the gui's art locater. We cache it all as blobs to avoid lookups
-                const url = that.gui.getarturl(track.trackname);
+                const url = that.gui.getarturl(track.md.trackname);
                 if(!that.guiarturl[url]) {
                     (async function() {
                         const fetchResponse = await fetch(url);
@@ -487,7 +487,11 @@ const MHFSPlayer = async function(opt) {
             that.AudioQueue.push(pbtrack)
             time = 0;
             try {
-                await decoder.openTrack(mysignal, track, start_output_time);
+                const md = await decoder.openTrack(mysignal, track.md, start_output_time);
+                if(md) {
+                    track.md.duration ??= md.duration;
+                    track.md.mediametadata ??= md.mediametadata;
+                }
             }
             catch(error) {
                 pbtrack.startedLoading = undefined;
@@ -582,7 +586,8 @@ const MHFSPlayer = async function(opt) {
     that.USERMUTEX = new Mutex();
 
     const Track = function(trackname) {
-        return {'trackname' : trackname, 'url' : that.gui.geturl(trackname)};
+        that.trackdb[trackname] ??= {'trackname' : trackname, 'url' : that.gui.geturl(trackname)}
+        return { md : that.trackdb[trackname]};
     };
 
     that._queuetracks = function(tracknames, after) {
@@ -812,7 +817,11 @@ const MHFSPlayer = async function(opt) {
 
     that.getarturl = function(track) {
         // already determined art > already download art from the gui mapped to the same url > art mapped to the same folder path > the default CD image (embedded below)
-        return that.artmap[track.trackname] || that.guiarturl[that.gui.getarturl(track.trackname)] || that.foldermap.GetArt(track.trackname) || that.cdimage;
+        return track.md.artbloburl || that.guiarturl[that.gui.getarturl(track.md.trackname)] || that.foldermap.GetArt(track.md.trackname) || that.cdimage;
+    };
+
+    that.getmediametadata = function(track) {
+        return track.md.mediametadata ?? { title : track.md.trackname };
     };
     
     // start the audio pump
