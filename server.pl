@@ -2715,7 +2715,6 @@ package MusicLibrary {
 
             $res .= $toappend;
             substr($octets, 0, $toremove, '');
-            say "unicode fixup";
         }
 
         return $res;

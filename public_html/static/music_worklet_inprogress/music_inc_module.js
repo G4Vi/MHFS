@@ -228,6 +228,44 @@ const CreateImageViewer = function(title, imageURL) {
     WM.CreateMovableWindow("Image View - " + title, imgelm);
 };
 
+const TrackMetadata = function(track, isLoading){
+    const metadiv = document.createElement("div");
+    metadiv.setAttribute('class', 'trackmetadata');
+    if(track && track.mediametadata) {
+        const ttitle = (!isLoading) ? track.mediametadata.title : track.mediametadata.title + ' {LOADING}';
+        const vdiv = document.createElement('div');
+        vdiv.setAttribute('class', 'trackmetadatainner');
+
+        const tspan = document.createElement('span');
+        tspan.setAttribute('class', 'trackmetadatatrackname');
+        tspan.textContent = ttitle;
+        vdiv.appendChild(tspan);
+
+        for( const item of [track.mediametadata.artist, track.mediametadata.album]) {
+            const span = document.createElement('span');
+            span.textContent = item;
+            vdiv.appendChild(span);
+        }
+        metadiv.appendChild(vdiv);
+    }
+    else
+    {
+        let trackname = '';
+        if(track) {
+            trackname = track.trackname
+            if(isLoading) {
+                trackname += ' {LOADING}';
+            }
+        }
+        const textnode = document.createTextNode(trackname);
+        const vdiv = document.createElement('div');
+        vdiv.setAttribute('class', 'trackmetadatainner');
+        vdiv.appendChild(textnode);
+        metadiv.appendChild(vdiv);
+    }
+    return metadiv;
+};
+
 const TrackHTML = function(track, isLoading) {
     const trackdiv = document.createElement("div");
     trackdiv.setAttribute('class', 'trackdiv');
@@ -242,35 +280,8 @@ const TrackHTML = function(track, isLoading) {
         });
         trackdiv.appendChild(artelm);
     }
-    const metadiv = document.createElement("div");
-    metadiv.setAttribute('class', 'trackmetadata');
-    //if(track && track.mediametadata) {
-    //    const title = document.createElement("p");
-    //    const ttitle = (!isLoading) ? track.mediametadata.title : track.mediametadata.title + ' {LOADING}';
-    //    title.textContent = ttitle;
-    //    metadiv.appendChild(title);
-    //    metadiv.appendChild(document.createElement("br"));
-    //    metadiv.appendChild(document.createElement("br"));
-    //    const artist = document.createElement("p");
-    //    artist.textContent = track.mediametadata.artist;
-    //    metadiv.appendChild(artist);
-    //    metadiv.appendChild(document.createElement("br"));
-    //    metadiv.appendChild(document.createElement("br"));
-    //    const album = document.createElement("p");
-    //    album.textContent = track.mediametadata.album;
-    //    metadiv.appendChild(album);
-    //}
-    //else
-    {
-        let trackname = track ? track.trackname : '';
-        if(isLoading) {
-            trackname += ' {LOADING}';
-        }
-        const textnode = document.createTextNode(trackname);
-        metadiv.appendChild(textnode)
-    }
 
-    trackdiv.appendChild(metadiv);
+    trackdiv.appendChild(TrackMetadata(track, isLoading));
     return trackdiv;
 }
 
@@ -335,11 +346,9 @@ const SetPlayTrack = function(track, isLoading) {
         }
     }
     else if(isLoading !== GuiCurrentTrackWasLoading) {
-        let trackname = track ? track.trackname : '';
-        if(isLoading) {
-            trackname += ' {LOADING}';
-        }
-        playtxt.getElementsByClassName("trackmetadata")[0].textContent = trackname;
+        const tdiv = playtxt.getElementsByClassName('trackdiv')[0];
+        const tmeta = tdiv.getElementsByClassName('trackmetadata')[0];
+        tdiv.replaceChild(TrackMetadata(track, isLoading), tmeta);
     }
     GuiCurrentTrackWasLoading = isLoading;
 }

@@ -209,12 +209,22 @@ body {
 
 .trackmetadata {
     display: flex;
-    align-items: center;
+    /*align-items: center;*/
     padding-left: 5px;
     height: 100%;
     white-space: normal;
     text-overflow: ellipsis;
     overflow: hidden;
+}
+
+.trackmetadatainner {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-evenly;
+}
+
+.trackmetadatatrackname {
+    font-weight: bold;
 }
 
 /* Then the controls */

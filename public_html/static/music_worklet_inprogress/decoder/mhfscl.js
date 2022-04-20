@@ -288,7 +288,7 @@ const MHFSCLTrackOnMeta = function(mhfscltrackid, blockType, pBlock) {
             const strcomment = MHFSCL.Module.UTF8ToString(comment.get('comment'), comment.get('commentSize'));
             console.log('comment: ' + strcomment);
             const [key, value] = strcomment.split('=', 2);
-            mhfscltrack.tags[key] = value;
+            mhfscltrack.tags[key.toUpperCase()] = value;
         } while(1);
         if(mhfscltrack.tags['TITLE'] && mhfscltrack.tags['ARTIST'] && mhfscltrack.tags['ALBUM'] ) {
             mhfscltrack.mediametadata = {
