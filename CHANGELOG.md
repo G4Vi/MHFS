@@ -1,6 +1,6 @@
 # MHFS Changelog
 
-## [Unreleased](https://github.com/G4Vi/MHFS/compare/v0.1.0...dev)
+## [0.2.0](https://github.com/G4Vi/MHFS/compare/v0.1.0...v0.2.0) - 2022-04-21
 ### AudioWorklet Player
 #### Added
 - WAV and MP3 streaming, decoding, and playing
