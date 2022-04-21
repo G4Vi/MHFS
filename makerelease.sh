@@ -5,7 +5,7 @@ set -o pipefail
 
 cd /tmp
 
-git clone https://github.com/G4Vi/MHFS.git --depth 1
+git clone https://github.com/G4Vi/MHFS.git --recursive --depth 1
 
 cd MHFS
 
