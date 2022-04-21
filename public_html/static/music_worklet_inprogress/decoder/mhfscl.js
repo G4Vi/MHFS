@@ -410,7 +410,9 @@ const MHFSCLTrack = async function(gsignal, theURL, DLMGR) {
         const firstreq = await that._downloadChunk(start, gsignal);
         const mime = firstreq.headers['Content-Type'] || '';
         pMime = MHFSCL.Module.allocateUTF8(mime);
-        const totalPCMFrames = firstreq.headers['X-MHFS-totalPCMFrameCount'] || 0;
+        const totalPCMFrames = BigInt(firstreq.headers['X-MHFS-totalPCMFrameCount'] || 0);
+        const totalPCMFramesLo = Number(totalPCMFrames & BigInt(0xFFFFFFFF));
+        const totalPCMFramesHi = Number((totalPCMFrames >> BigInt(32)) & BigInt(0xFFFFFFFF));
         MHFSCL.Module._mhfs_cl_track_init(that.ptr, that.CHUNKSIZE);
         that.initialized = true;
         that._storeChunk(firstreq, start);
@@ -418,7 +420,7 @@ const MHFSCLTrack = async function(gsignal, theURL, DLMGR) {
         // load enough of the track that the metadata loads
         for(;;) {
             that.picture = null;
-            const code = MHFSCL.Module._mhfs_cl_track_load_metadata(that.ptr, rd.ptr, pMime, pFullFilename, totalPCMFrames & 0xFFFFFFFF, (totalPCMFrames >> 32) & 0xFFFFFFFF, MHFSCL.pMHFSCLTrackOnMeta, thatid);
+            const code = MHFSCL.Module._mhfs_cl_track_load_metadata(that.ptr, rd.ptr, pMime, pFullFilename, totalPCMFramesLo, totalPCMFramesHi, MHFSCL.pMHFSCLTrackOnMeta, thatid);
             if(code === MHFSCL.MHFS_CL_SUCCESS) {
                 break;
             }
