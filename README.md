@@ -1,23 +1,25 @@
 # MHFS - Media HTTP File Server
 #### Stream your own music and video library via your browser and standard media players.
 - HTTP/1.1 server [keepalive, byte serving, chunked encoding, and more]
+- Gapless streaming web audio player using AudioWorklet and [miniaudio](https://raw.githubusercontent.com/mackron/miniaudio/master/miniaudio.h) with fallback players for incompatible browsers
 - server-side audio and video transcoding
-- Gapless streaming web audio player using AudioWorklet and [dr_flac](https://github.com/mackron/dr_libs/blob/master/dr_flac.h) with fallback players for older browsers
 - Kodi open directory interface for playing from kodi as http source [video only currently]
-- M3U8 playlist interface for easy streaming in video players such as vlc
+- M3U8 playlist interface for easy streaming in video players such as VLC
 - [Incomplete] web video players to stream your movies and tv shows in the browser
 - automatic media library scanning
 - `youtube-dl` web interface
+
+![screenshot of MHFS Music](MHFS_music_2022_04-21_smaller.png)
 
 ## Setup
 
 ### Download MHFS
 
-Download from [releases](https://github.com/G4Vi/MHFS/releases) (compiled wasm included) and extract.<br>
+Download from [releases](https://github.com/G4Vi/MHFS/releases) (compiled Wasm included) and extract.<br>
 or<br>
-Clone `git clone https://github.com/G4Vi/MHFS.git` (emscripten required to build web audio player wasm).
+Clone `git clone https://github.com/G4Vi/MHFS.git` (emscripten required to build web audio player Wasm).
 
-Both options require a c compiler to build perl XS modules and `tarsize`.
+Both options optionally require a c compiler to build perl XS modules and `tarsize`.
 
 ### Setup perl
 Installing packages under system perl is not recommended. `local::lib` still uses system perl, but allows libraries to be installed seperately. The instructions here will use `local::lib`, but `perlbrew` can be used instead to install with it's own  perl.
@@ -75,9 +77,9 @@ Install from your package manager i.e <code>apt-get install libflac-dev</code>.
 
 ### Compile C code
 
-`make XS tarsize` - If you downloaded a release tarball as the wasm is already compiled.
+`make XS tarsize` - If you downloaded a release tarball as the Wasm is already compiled.
 
-`make -j4` - To build everything including the wasm for the web audio players. [emscripten required] [Highly recommended if you cloned]
+`make -j4` - To build everything including the Wasm for the web audio players. [emscripten required] [Highly recommended if you cloned]
 
 `make` targets:
 - `XS` module - [Optional] used for server-side decoding and encoding [libflac with headers required]
@@ -196,15 +198,19 @@ Navigate to the url, by default `http://127.0.0.1:8080/` you are presented with 
 
 The music player is by default accessed with `/music`.
 
-#### music players
+#### Music players
 
-`/static/music_worklet_inprogress` The main audio player. Unfortunately Linux has poor support for `audio worklet` and older browsers have no support for it, so older versions of the music player are included.
+`/music?fmt=worklet` - `AudioWorklet` based player.
+- Gapless streaming of FLAC, WAV, and MP3 without needing server-side decoding support
+- Shows embedded or file based cover art.
+- Shows metadata (Trackname, Artist, and Album) instead of file path.
+- Keyboard based controls and MediaSession support for media key usage.
 
-`/music?fmt=legacy` minimal js, uses html audio tag
+`/music?fmt=legacy` - Legacy browser player. Uses html audio tag to load and play audio.
 
-`/music` on linux, gapless player, requests flac segments of a track from `MHFS` and uses `AudioBufferSourceNode`
+`/music?fmt=gapless` - Gapless player. Uses server-side audio segmenting to allow gapless streaming with `AudioBufferSourceNode`s without downloading the whole track first.
 
-`/static/music_inc/` similar to the gapless player, but doesn't buffer the whole track ahead of time.
+`/music?fmt=musicinc` - Incremental gapless player. Like the gapless player, but only buffers a fixed amount ahead instead of buffering the whole track.
 
 #### API
 `/music` Request a music player or the music library in a variety of formats. See `MusicLibrary::SendLibrary`.
@@ -217,7 +223,7 @@ The music player is by default accessed with `/music`.
 
 The video player is accessed with `/video`.
 
-For convenience `M3U` playlist files are provided to ease streaming outside of the browser in software such as vlc. Note, this may only work well on LAN.
+For convenience `M3U` playlist files are provided to ease streaming outside of the browser in software such as VLC. Note, this may only work well on LAN.
 
 #### Kodi / XBMC
 
@@ -229,7 +235,7 @@ The video subsystem is accessible via http sources in kodi. MHFS attempts to pro
 
 ## Development Info
 
-emscripten is required to build wasm.  A full build is done with `make -j4`. A build without the XS extension can be done with `make -j4 noxs`
+emscripten is required to build Wasm.  A full build is done with `make -j4`. A build without the XS extension can be done with `make -j4 noxs`
 
 `./debug.pl` is provided to kill instances of MHFS, build MHFS [including emscripten and XS], and launch `server.pl`.
 

@@ -2692,14 +2692,32 @@ package MusicLibrary {
         # deduce the format if not provided
         my $fmt = $request->{'qs'}{'fmt'};
         if(! $fmt) {
-            if($request->{'qs'}{'segments'} || ($request->{'header'}{'User-Agent'} =~ /Linux/)) {
-                $fmt = 'gapless';
-                if($request->{'header'}{'User-Agent'} =~ /Chrome\/([^\.]+)/) {
-                    $fmt = 'worklet' if($1 >= 93);
+            $fmt = 'worklet';
+            my $fallback = 'gapless';
+            if($request->{'header'}{'User-Agent'} =~ /Chrome\/([^\.]+)/) {
+                my $ver = $1;
+                # SharedArrayBuffer support with spectre/meltdown fixes was added in 68
+                # AudioWorklet on linux had awful glitching until somewhere in 92 https://bugs.chromium.org/p/chromium/issues/detail?id=825823
+                if($ver < 93) {
+                    if(($ver < 68) || ($request->{'header'}{'User-Agent'} =~ /Linux/)) {
+                        $fmt = $fallback;
+                    }
+                }
+            }
+            elsif($request->{'header'}{'User-Agent'} =~ /Firefox\/([^\.]+)/) {
+                my $ver = $1;
+                # SharedArrayBuffer support with spectre/meltdown fixes was added in 79
+                if($ver < 79) {
+                    $fmt = $fallback;
                 }
             }
             else {
-                $fmt = 'worklet';
+                # Hope for the best, assume worklet works
+            }
+
+            # leave this here for now to not break the segment based players
+            if($request->{'qs'}{'segments'}) {
+                $fmt = $fallback;
             }
         }
 

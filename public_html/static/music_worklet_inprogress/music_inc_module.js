@@ -402,11 +402,14 @@ const onQueueUpdate = function(update) {
         const track = update.track;
         UpdateMediaSessionMetadata(track);
         if(track.md.duration) {
-            navigator.mediaSession.setPositionState( {
-                duration : track.md.duration,
-                playbackRate : 1,
-                position : MHFSPLAYER.tracktime() || 0
-            });
+            const tt = MHFSPLAYER.tracktime() || 0;
+            if(tt <= track.md.duration) {
+                navigator.mediaSession.setPositionState( {
+                    duration : track.md.duration,
+                    playbackRate : 1,
+                    position : tt
+                });
+            }
         }
     }
     if(update.trackstate !== 'ended') {
@@ -686,11 +689,13 @@ const GraphicsLoop = function() {
         SetSeekbarValue(curTime);
         if ('mediaSession' in navigator) {
             if(GuiCurrentTrack?.md.duration) {
-                navigator.mediaSession.setPositionState( {
-                    duration : GuiCurrentTrack.md.duration,
-                    playbackRate : 1,
-                    position : curTime
-                });
+                if(curTime <= GuiCurrentTrack.md.duration) {
+                    navigator.mediaSession.setPositionState( {
+                        duration : GuiCurrentTrack.md.duration,
+                        playbackRate : 1,
+                        position : curTime
+                    });
+                }
             }
         }
     }    
