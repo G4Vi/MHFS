@@ -1,4 +1,9 @@
 #!/usr/bin/perl
+# Media HTTP File Server
+
+# load this conditionally as it will faile if syscall.ph doesn't exist
+BEGIN {
+if( eval {
 package EventLoop::Poll::Linux::Timer {
     use strict; use warnings;
     use IO::Poll qw(POLLIN POLLOUT POLLHUP);
@@ -79,10 +84,17 @@ package EventLoop::Poll::Linux::Timer {
 
 1;
 };
+}) {
+    our $HAS_EventLoop_Poll_Linux_Timer = 1;
+}
+else {
+    our $HAS_EventLoop_Poll_Linux_Timer = 0;
+}
+}
 
 # You must provide event handlers for the events you are listening for
 # return undef to have them removed from poll's structures
-package EventLoop::Poll {
+package EventLoop::Poll::Base {
     use strict; use warnings;
     use feature 'say';
     use POSIX ":sys_wait_h";
@@ -93,8 +105,8 @@ package EventLoop::Poll {
     use Devel::Peek;
     #use Devel::Refcount qw( refcount );
 
-    our $POLLRDHUP = 0;
-    our $ALWAYSMASK = ($POLLRDHUP | POLLHUP);
+    use constant POLLRDHUP => 0;
+    use constant ALWAYSMASK => (POLLRDHUP | POLLHUP);
 
     sub new {
         my ($class) = @_;
@@ -236,7 +248,7 @@ package EventLoop::Poll {
                     }
                 }
 
-                if($revents & (POLLHUP | $POLLRDHUP )) {
+                if($revents & (POLLHUP | POLLRDHUP )) {
                     say "Hangup $handle, before ". scalar ( $self->{'poll'}->handles);
                     $obj->onHangUp();
                     $self->remove($handle);
@@ -281,64 +293,85 @@ package EventLoop::Poll {
         }
     }
 
+    1;
+}
+
+package EventLoop::Poll::Linux {
+    use strict; use warnings;
+    use feature 'say';
+    use parent -norequire, 'EventLoop::Poll::Base';
+    sub new {
+        my $class = shift;
+        my $self = $class->SUPER::new(@_);
+        $self->{'evp_timer'} = EventLoop::Poll::Linux::Timer->new($self);
+        return $self;
+    };
+
+    sub add_timer {
+        my ($self, $start) = @_;
+        shift @_;
+        if($self->SUPER::add_timer(@_) == 0) {
+            say "add_timer, updating linux timer to $start";
+            $self->{'evp_timer'}->settime_linux($start, 0);
+        }
+    };
+
+    sub requeue_timers {
+        my $self = shift @_;
+        $self->SUPER::requeue_timers(@_);
+        my ($timers, $current_time) = @_;
+        if(@{$self->{'timers'}}) {
+            my $start = $self->{'timers'}[0]{'desired'} - $current_time;
+            say "requeue_timers, updating linux timer to $start";
+            $self->{'evp_timer'}->settime_linux($start, 0);
+        }
+    };
+
+    sub run {
+        my ($self, $loop_interval) = @_;
+        $loop_interval //= -1;
+        my $poll = $self->{'poll'};
+        for(;;)
+        {
+            print "do_poll LINUX_X86_64 $$";
+            if($self->{'timers'}) {
+                say " timers " . scalar(@{$self->{'timers'}}) . ' handles ' . scalar($self->{'poll'}->handles());
+            }
+            else {
+                print "\n";
+            }
+
+            $self->SUPER::do_poll($loop_interval, $poll);
+        }
+    };
+    1;
+}
+
+package EventLoop::Poll {
+    use strict; use warnings;
+    use feature 'say';
     BEGIN {
-        use Config;
-        say $Config{archname};
-        if(index($Config{archname}, 'x86_64-linux') != -1) {
-        #if(0) {
-            say "LINUX_X86_64: enabling timerfd support";
-            my $new_ = \&new;
-            *new = sub {
-                my $self = $new_->(@_);
-                $self->{'evp_timer'} = EventLoop::Poll::Linux::Timer->new($self);
-                return $self;
-            };
-
-            my $add_timer_ = \&add_timer;
-            *add_timer = sub {
-                my ($self, $start) = @_;
-                if(&$add_timer_ == 0) {
-                    say "add_timer, updating linux timer to $start";
-                    $self->{'evp_timer'}->settime_linux($start, 0);
-                }
-            };
-
-            my $requeue_timers_ = \&requeue_timers;
-            *requeue_timers = sub {
-                $requeue_timers_->(@_);
-                my ($self, $timers, $current_time) = @_;
-                if(@{$self->{'timers'}}) {
-                    my $start = $self->{'timers'}[0]{'desired'} - $current_time;
-                    say "requeue_timers, updating linux timer to $start";
-                    $self->{'evp_timer'}->settime_linux($start, 0);
-                }
-            };
-
-            *run = sub {
-                my ($self, $loop_interval) = @_;
-                $loop_interval //= -1;
-                my $poll = $self->{'poll'};
-                for(;;)
-                {
-                    print "do_poll LINUX_X86_64 $$";
-                    if($self->{'timers'}) {
-                        say " timers " . scalar(@{$self->{'timers'}}) . ' handles ' . scalar($self->{'poll'}->handles());
-                    }
-                    else {
-                        print "\n";
-                    }
-
-                    do_poll($self, $loop_interval, $poll);
-                }
-            };
-
+    use Config;
+    say 'archname: '. $Config{archname};
+    my $isLoaded;
+    if(index($Config{archname}, 'x86_64-linux') != -1) {
+        if(! $main::HAS_EventLoop_Poll_Linux_Timer) {
+            warn "EventLoop::Poll: Failed to load EventLoop::Poll::Linux::Timer NOT enabling timerfd support!";
         }
         else {
-            say "Not LINUX_X86_64, no timerfd support";
+            say "EventLoop::Poll: enabling timerfd support";
+            $isLoaded = 1;
+            eval "use parent -norequire, 'EventLoop::Poll::Linux'";
         }
     }
-
-    1;
+    else {
+        say "EventLoop::Poll no timerfd support for ".$Config{archname};
+    }
+    if(! $isLoaded) {
+        eval "use parent -norequire, 'EventLoop::Poll::Base'";
+    }
+    }
+1;
 }
 
 # bs = byte serving?
@@ -793,7 +826,7 @@ package HTTP::BS::Server::Client::Request {
     BEGIN {
         if( ! (eval "use JSON; 1")) {
             eval "use JSON::PP; 1" or die "No implementation of JSON available, see doc/dependencies.txt";
-            warn "Using PurePerl version of JSON (JSON::PP), see doc/dependencies.txt about installing faster version";
+            warn __PACKAGE__.": Using PurePerl version of JSON (JSON::PP), see doc/dependencies.txt about installing faster version";
         }
     }
 
@@ -806,7 +839,7 @@ package HTTP::BS::Server::Client::Request {
         $self{'outheaders'}{'X-MHFS-CONN-ID'} = $client->{'outheaders'}{'X-MHFS-CONN-ID'};
         $self{'rl'} = 0;
         # we want the request
-        $client->SetEvents(POLLIN | $EventLoop::Poll::ALWAYSMASK );
+        $client->SetEvents(POLLIN | EventLoop::Poll->ALWAYSMASK );
         $self{'recvrequesttimerid'} = $client->AddClientCloseTimer($client->{'server'}{'settings'}{'recvrequestimeout'}, $client->{'CONN-ID'});
         return \%self;
     }
@@ -925,7 +958,7 @@ package HTTP::BS::Server::Client::Request {
             $self->{'header'}{'_RangeEnd'} = ($2 ne  '') ? $2 : undef;
         }
         $self->{'on_read_ready'} = undef;
-        $self->{'client'}->SetEvents($EventLoop::Poll::ALWAYSMASK );
+        $self->{'client'}->SetEvents(EventLoop::Poll->ALWAYSMASK );
         $self->{'client'}->KillClientCloseTimer($self->{'recvrequesttimerid'});
         $self->{'recvrequesttimerid'} = undef;
 
@@ -974,7 +1007,7 @@ package HTTP::BS::Server::Client::Request {
         }
 
         $self->{'response'} = $fileitem;
-        $self->{'client'}->SetEvents(POLLOUT | $EventLoop::Poll::ALWAYSMASK );
+        $self->{'client'}->SetEvents(POLLOUT | EventLoop::Poll->ALWAYSMASK );
     }
 
     sub _SendDataItem {
@@ -1499,7 +1532,7 @@ package HTTP::BS::Server::Client::Request {
     sub PUTBuf_old {
         my ($self, $handler) = @_;
         if(length($self->{'client'}{'inbuf'}) < $self->{'header'}{'Content-Length'}) {
-            $self->{'client'}->SetEvents(POLLIN | $EventLoop::Poll::ALWAYSMASK );
+            $self->{'client'}->SetEvents(POLLIN | EventLoop::Poll->ALWAYSMASK );
         }
         my $sdata;
         $self->{'on_read_ready'} = sub {
@@ -1534,12 +1567,12 @@ package HTTP::BS::Server::Client::Request {
         my ($self, $handler) = @_;
         if($self->{'header'}{'Content-Length'} > 20000000) {
             say "PUTBuf too big";
-            $self->{'client'}->SetEvents(POLLIN | $EventLoop::Poll::ALWAYSMASK );
+            $self->{'client'}->SetEvents(POLLIN | EventLoop::Poll->ALWAYSMASK );
             $self->{'on_read_ready'} = sub { return undef };
             return;
         }
         if(length($self->{'client'}{'inbuf'}) < $self->{'header'}{'Content-Length'}) {
-            $self->{'client'}->SetEvents(POLLIN | $EventLoop::Poll::ALWAYSMASK );
+            $self->{'client'}->SetEvents(POLLIN | EventLoop::Poll->ALWAYSMASK );
         }
         $self->{'on_read_ready'} = sub {
             my $contentlength = $self->{'header'}{'Content-Length'};
@@ -2087,21 +2120,21 @@ package HTTP::BS::Server::Process {
         }
         if($fddispatch->{'STDIN'}) {
             $self->{'fd'}{'stdin'} = HTTP::BS::Server::FD::Writer->new($self, $in, $fddispatch->{'STDIN'});
-            $evp->set($in, $self->{'fd'}{'stdin'}, POLLOUT | $EventLoop::Poll::ALWAYSMASK);
+            $evp->set($in, $self->{'fd'}{'stdin'}, POLLOUT | EventLoop::Poll->ALWAYSMASK);
         }
         else {
             $self->{'fd'}{'stdin'}{'fd'} = $in;
         }
         if($fddispatch->{'STDOUT'}) {
             $self->{'fd'}{'stdout'} = HTTP::BS::Server::FD::Reader->new($self, $out, $fddispatch->{'STDOUT'});
-            $evp->set($out, $self->{'fd'}{'stdout'}, POLLIN | $EventLoop::Poll::ALWAYSMASK);
+            $evp->set($out, $self->{'fd'}{'stdout'}, POLLIN | EventLoop::Poll->ALWAYSMASK());
         }
         else {
             $self->{'fd'}{'stdout'}{'fd'} = $out;
         }
         if($fddispatch->{'STDERR'}) {
             $self->{'fd'}{'stderr'} = HTTP::BS::Server::FD::Reader->new($self, $err, $fddispatch->{'STDERR'});
-            $evp->set($err, $self->{'fd'}{'stderr'}, POLLIN | $EventLoop::Poll::ALWAYSMASK);
+            $evp->set($err, $self->{'fd'}{'stderr'}, POLLIN | EventLoop::Poll->ALWAYSMASK);
         }
         else {
             $self->{'fd'}{'stderr'}{'fd'} = $err;
@@ -2136,12 +2169,12 @@ package HTTP::BS::Server::Process {
 
     sub stopSTDOUT {
         my ($self) = @_;
-        $self->{'evp'}->set($self->{'fd'}{'stdout'}{'fd'}, $self->{'fd'}{'stdout'}, $EventLoop::Poll::ALWAYSMASK);
+        $self->{'evp'}->set($self->{'fd'}{'stdout'}{'fd'}, $self->{'fd'}{'stdout'}, EventLoop::Poll->ALWAYSMASK);
     }
 
     sub resumeSTDOUT {
         my ($self) = @_;
-        $self->{'evp'}->set($self->{'fd'}{'stdout'}{'fd'}, $self->{'fd'}{'stdout'}, POLLIN | $EventLoop::Poll::ALWAYSMASK);
+        $self->{'evp'}->set($self->{'fd'}{'stdout'}{'fd'}, $self->{'fd'}{'stdout'}, POLLIN | EventLoop::Poll->ALWAYSMASK);
     }
 
     sub new {
@@ -3891,6 +3924,11 @@ package App::MHFS; #Media Http File Server
 use version; our $VERSION = version->declare("v0.1.0");
 unless (caller) {
 use strict; use warnings;
+no warnings "portable";
+BEGIN {
+    use Config;
+    die('Integers are too small!') if($Config{ivsize} < 8);
+}
 use feature 'say';
 use feature 'state';
 use Data::Dumper;
@@ -3904,7 +3942,7 @@ use Fcntl qw(:seek :mode);
 BEGIN {
     if( ! (eval "use JSON; 1")) {
         eval "use JSON::PP; 1" or die "No implementation of JSON available, see doc/dependencies.txt";
-        warn "Using PurePerl version of JSON (JSON::PP), see doc/dependencies.txt about installing faster version";
+        warn __PACKAGE__.": Using PurePerl version of JSON (JSON::PP), see doc/dependencies.txt about installing faster version";
     }
 }
 sub uniq (@) {
@@ -5993,7 +6031,6 @@ sub matroska_get_gop {
     my $blocktime;
     while(1) {
         $block = matroska_get_track_block($matroska, $tid);
-        $blocktime;
         if($block) {
             $blocktime = matroska_calc_block_fullts($matroska, $block);
             if($blocktime > $timeinseconds) {
@@ -6076,7 +6113,6 @@ sub matroska_seek_track {
     my $blockframe;
     while(1) {
         $block = matroska_get_track_block($matroska, $tid);
-        $blockframe;
         if($block) {
             $blockframe = matroska_block_calc_frame($matroska, $block, $samplerate, $pcmFrameLen);
             if($blockframe > $pcmFrameIndex) {
