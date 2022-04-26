@@ -1,0 +1,18 @@
+use alienfile;
+use Data::Dumper;
+probe sub { 'share' };
+
+share {
+    start_url '../tarsize/';
+    plugin 'Download' => (
+       
+    );
+     prefer sub {
+            print Dumper($_[0]) . "\n";
+        };
+    #plugin 'Fetch::LocalDir';
+    plugin 'Build::Make' => 'gmake';
+    build [
+        ['${make}', 'tarsize']
+    ],
+}
