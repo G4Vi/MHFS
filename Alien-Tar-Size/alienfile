@@ -3,7 +3,7 @@ use alienfile;
 probe sub { 'share' };
 
 share {
-    start_url '../tarsize/';
+    start_url 'tarsize/';
     plugin 'Fetch::LocalDir';
     plugin 'Extract::Directory';
     plugin 'Build::Make' => 'gmake';

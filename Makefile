@@ -15,11 +15,11 @@ clean: XS_clean music_worklet_clean music_inc_clean tarsize_clean
 
 .PHONY: tarsize
 tarsize:
-	$(MAKE) -C tarsize
+	cd Alien-Tar-Size && perl Makefile.PL && make
 
 .PHONY: tarsize_clean
 tarsize_clean:
-	$(MAKE) -C tarsize clean
+	cd Alien-Tar-Size; make clean; rm Makefile.old
 
 .PHONY: XS
 XS:

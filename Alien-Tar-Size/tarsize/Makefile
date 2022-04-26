@@ -4,15 +4,12 @@ OPTIMIZE:=-O2
 LDFLAGS=-shared
 LDLIBS=-ldl
 
-all: tarsize.so tarpart.so
+all: tarsize.so
 
 tarsize.so: tarsize.c
 	$(CC) $(CFLAGS) $(OPTIMIZE) $(LDFLAGS) $(LDLIBS) -o $@ $^
 
-tarpart.so: tarpart.c
-	$(CC) $(CFLAGS) $(OPTIMIZE) $(LDFLAGS) $(LDLIBS) -o $@ $^
-
 clean:
-	rm -f tarsize.so tarpart.so
+	rm -f tarsize.so
 
 .PHONY: clean all
