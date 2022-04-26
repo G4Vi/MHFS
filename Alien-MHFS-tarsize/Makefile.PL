@@ -53,3 +53,6 @@ delete $WriteMakefileArgs{LICENSE}
     unless eval { ExtUtils::MakeMaker->VERSION('6.31'); 1 };
 
 WriteMakefile(%WriteMakefileArgs);
+sub MY::postamble {
+  $abmm->mm_postamble;
+}

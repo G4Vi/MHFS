@@ -823,10 +823,21 @@ package HTTP::BS::Server::Client::Request {
     use constant {
         MAX_REQUEST_SIZE => 8192,
     };
+    use FindBin;
+    use File::Spec;
     BEGIN {
         if( ! (eval "use JSON; 1")) {
             eval "use JSON::PP; 1" or die "No implementation of JSON available, see doc/dependencies.txt";
             warn __PACKAGE__.": Using PurePerl version of JSON (JSON::PP), see doc/dependencies.txt about installing faster version";
+        }
+    }
+
+    # Optional dependency, MHFS::Alien::tarsize
+    use lib File::Spec->catdir($FindBin::Bin, 'Alien-MHFS-tarsize', 'blib', 'lib');
+    BEGIN {
+        use constant HAS_Alien_MHFS_tarsize => (eval "use Alien::MHFS::tarsize; 1");
+        if(! HAS_Alien_MHFS_tarsize) {
+            warn "Alien::MHFS::tarsize is not available";
         }
     }
 
@@ -1450,7 +1461,19 @@ package HTTP::BS::Server::Client::Request {
 
     sub SendAsTar {
         my ($self, $requestfile) = @_;
-        say "tarsize $requestfile";
+
+        if(!HAS_Alien_MHFS_tarsize) {
+            warn("Cannot send tar without Alien::MHFS::tarsize");
+            $self->Send404();
+            return;
+        }
+        my ($libtarsize) = Alien::MHFS::tarsize->dynamic_libs;
+        if(!$libtarsize) {
+            warn("Cannot find libtarsize");
+            $self->Send404();
+            return;
+        }
+
         # HACK, use LD_PRELOAD to hook tar to calculate the size quickly
         my @tarcmd = ('tar', '-C', dirname($requestfile), basename($requestfile), '-c', '--owner=0', '--group=0');
         $self->{'process'} =  HTTP::BS::Server::Process->new(\@tarcmd, $self->{'client'}{'server'}{'evp'}, {
@@ -1479,7 +1502,7 @@ package HTTP::BS::Server::Client::Request {
         },
         undef, # fd settings
         {
-            'LD_PRELOAD' => $self->{'client'}{'server'}{'settings'}{'APPDIR'}.'/tarsize/tarsize.so'
+            'LD_PRELOAD' => $libtarsize
         });
     }
 

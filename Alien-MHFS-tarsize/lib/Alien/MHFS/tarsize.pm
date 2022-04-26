@@ -3,6 +3,7 @@ package Alien::MHFS::tarsize;
 use 5.006;
 use strict;
 use warnings;
+use parent qw( Alien::Base );
 
 =head1 NAME
 

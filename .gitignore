@@ -19,3 +19,10 @@ XS/pm_to_blib
 bin/youtube-dl
 tarsize/*.so
 .vscode
+Alien-MHFS-tarsize/MYMETA.json
+Alien-MHFS-tarsize/MYMETA.yml
+Alien-MHFS-tarsize/Makefile
+Alien-MHFS-tarsize/Makefile.old
+Alien-MHFS-tarsize/_alien
+Alien-MHFS-tarsize/blib
+Alien-MHFS-tarsize/pm_to_blib
