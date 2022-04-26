@@ -50,7 +50,7 @@ TODO: {
     "placeholder date/time"       => qr(Date/time)
   );
 
-  module_boilerplate_ok('lib/Alien/MHFS/tarsize.pm');
+  module_boilerplate_ok('lib/Alien/Tar/Size.pm');
 
 
 }

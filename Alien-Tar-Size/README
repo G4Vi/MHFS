@@ -1,4 +1,4 @@
-Alien-MHFS-tarsize
+Alien-Tar-Size
 
 The README is used to introduce the module and provide instructions on
 how to install the module, any machine dependencies it may have (for
@@ -26,18 +26,18 @@ SUPPORT AND DOCUMENTATION
 After installing, you can find documentation for this module with the
 perldoc command.
 
-    perldoc Alien::MHFS::tarsize
+    perldoc Alien::Tar::Size
 
 You can also look for information at:
 
     RT, CPAN's request tracker (report bugs here)
-        https://rt.cpan.org/NoAuth/Bugs.html?Dist=Alien-MHFS-tarsize
+        https://rt.cpan.org/NoAuth/Bugs.html?Dist=Alien-Tar-Size
 
     CPAN Ratings
-        https://cpanratings.perl.org/d/Alien-MHFS-tarsize
+        https://cpanratings.perl.org/d/Alien-Tar-Size
 
     Search CPAN
-        https://metacpan.org/release/Alien-MHFS-tarsize
+        https://metacpan.org/release/Alien-Tar-Size
 
 
 LICENSE AND COPYRIGHT

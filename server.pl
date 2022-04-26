@@ -832,12 +832,12 @@ package HTTP::BS::Server::Client::Request {
         }
     }
 
-    # Optional dependency, MHFS::Alien::tarsize
-    use lib File::Spec->catdir($FindBin::Bin, 'Alien-MHFS-tarsize', 'blib', 'lib');
+    # Optional dependency, Alien::Tar::Size
+    use lib File::Spec->catdir($FindBin::Bin, 'Alien-Tar-Size', 'blib', 'lib');
     BEGIN {
-        use constant HAS_Alien_MHFS_tarsize => (eval "use Alien::MHFS::tarsize; 1");
-        if(! HAS_Alien_MHFS_tarsize) {
-            warn "Alien::MHFS::tarsize is not available";
+        use constant HAS_Alien_Tar_Size => (eval "use Alien::Tar::Size; 1");
+        if(! HAS_Alien_Tar_Size) {
+            warn "Alien::Tar::Size is not available";
         }
     }
 
@@ -1462,12 +1462,12 @@ package HTTP::BS::Server::Client::Request {
     sub SendAsTar {
         my ($self, $requestfile) = @_;
 
-        if(!HAS_Alien_MHFS_tarsize) {
-            warn("Cannot send tar without Alien::MHFS::tarsize");
+        if(!HAS_Alien_Tar_Size) {
+            warn("Cannot send tar without Alien::Tar::Size");
             $self->Send404();
             return;
         }
-        my ($libtarsize) = Alien::MHFS::tarsize->dynamic_libs;
+        my ($libtarsize) = Alien::Tar::Size->dynamic_libs;
         if(!$libtarsize) {
             warn("Cannot find libtarsize");
             $self->Send404();

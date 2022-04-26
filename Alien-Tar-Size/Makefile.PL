@@ -8,11 +8,11 @@ my $abmm = Alien::Build::MM->new;
 
 my %WriteMakefileArgs = (
     $abmm->mm_args (
-    DISTNAME         => 'Alien-MHFS-tarsize',
-    NAME             => 'Alien::MHFS::tarsize',
-    AUTHOR           => q{Gavin Hayes <hayesgav@gmail.com>},
-    VERSION_FROM     => 'lib/Alien/MHFS/tarsize.pm',
-    ABSTRACT_FROM    => 'lib/Alien/MHFS/tarsize.pm',
+    DISTNAME         => 'Alien-Tar-Size',
+    NAME             => 'Alien::Tar::Size',
+    AUTHOR           => q{Gavin Hayes <TODO@invalid.invalid>},
+    VERSION_FROM     => 'lib/Alien/Tar/Size.pm',
+    ABSTRACT_FROM    => 'lib/Alien/Tar/Size.pm',
     LICENSE          => 'artistic_2',
     MIN_PERL_VERSION => '5.006',
     CONFIGURE_REQUIRES => {
@@ -31,7 +31,7 @@ my %WriteMakefileArgs = (
         'Alien::Base' => 0,
     },
     dist  => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
-    clean => { FILES => 'Alien-MHFS-tarsize-*' },
+    clean => { FILES => 'Alien-Tar-Size-*' },
 ));
 
 # Compatibility with old versions of ExtUtils::MakeMaker
