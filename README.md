@@ -61,19 +61,7 @@ or<br>
 [Optional] Install `youtube-dl` to the MHFS bin dir `cd MHFS/bin && wget https://yt-dl.org/downloads/latest/youtube-dl && chmod +x youtube-dl`
 - used for Youtube subsystem
 
-<details>
-<summary>[Optional] Install libflac with headers [needed for server-side audio decoding and encoding] </summary> 
-<details>
-<summary>Build and install libflac inside MHFS::XS</summary>
-Download, configure, and make it:<br>
-
-`mkdir -p XS/thirdparty && cd XS/thirdparty && wget http://downloads.xiph.org/releases/flac/flac-1.3.3.tar.xz`<br>
-
-`tar xvf flac-1.3.3.tar.xz && cd flac-1.3.3 && ./configure --enable-ogg=no && make`
-</details>
-OR<br>
-Install from your package manager i.e <code>apt-get install libflac-dev</code>.
-</details>
+[Optional] Install libFLAC with headers. i.e. `apt-get install libflac-dev`. libFLAC is required to build the XS module [needed for server-side audio decoding and encoding]. `Alien::libFLAC` will download and build libFLAC from source if not found.
 
 ### Compile C code
 

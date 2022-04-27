@@ -19,10 +19,10 @@ XS/pm_to_blib
 bin/youtube-dl
 Alien-Tar-Size/tarsize/*.so
 .vscode
-Alien-Tar-Size/MYMETA.json
-Alien-Tar-Size/MYMETA.yml
-Alien-Tar-Size/Makefile
-Alien-Tar-Size/Makefile.old
-Alien-Tar-Size/_alien
-Alien-Tar-Size/blib
-Alien-Tar-Size/pm_to_blib
+Alien-*/MYMETA.json
+Alien-*/MYMETA.yml
+Alien-*/Makefile
+Alien-*/Makefile.old
+Alien-*/_alien
+Alien-*/blib
+Alien-*/pm_to_blib
