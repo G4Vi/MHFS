@@ -5,11 +5,21 @@
 
 #include "ppport.h"
 #include <stdint.h>
+
+#include "FLAC/stream_encoder.h"
+
+#define MINIAUDIO_IMPLEMENTATION
+#include "miniaudio/miniaudio.h"
+
+// verify dr_flac is included, or attempt to include it
+#if !defined(dr_flac_h) || !defined(dr_flac_c)
+#if defined(dr_flac_h) || defined(dr_flac_c)
+#error "miniaudio only partially declared and defined dr_flac"
+#endif
+#pragma message("miniaudio did not declare dr_flac, attempting to include")
 #define DR_FLAC_IMPLEMENTATION
 #include "dr_flac.h"
-#include "FLAC/stream_encoder.h"
-#define MINIAUDIO_IMPLEMENTATION
-#include "../miniaudio/miniaudio.h"
+#endif
 
 typedef void *(* malloc_ptr) (size_t);
 typedef void  (* free_ptr)   (void*);

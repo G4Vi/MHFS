@@ -1,5 +1,5 @@
 [submodule "miniaudio"]
-	path = miniaudio
+	path = XS/miniaudio
 	url = https://github.com/mackron/miniaudio
 [submodule "public_html/static/music_worklet_inprogress/decoder/deps/miniaudio"]
 	path = public_html/static/music_worklet_inprogress/decoder/deps/miniaudio
