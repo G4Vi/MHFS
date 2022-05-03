@@ -11,5 +11,6 @@ my %stuff = Alien::Base::Wrapper->new('Alien::libFLAC')->mm_args2(
     ABSTRACT_FROM     => 'lib/MHFS/XS.pm', # retrieve abstract from module
     AUTHOR            => 'G4Vi',
     LICENSE           => 'gpl_2',
+    CCFLAGS           => '-Wall -std=c11'
 );
 WriteMakefile(%stuff);

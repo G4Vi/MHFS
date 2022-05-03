@@ -21,11 +21,11 @@ share {
         $build->runtime_prop->{$_} = "-L@{[ $build->runtime_prop->{prefix} ]}/lib -lFLAC " for qw( libs libs_static );
     };
     plugin 'Gather::IsolateDynamic';
+};
 
-    sys {
-        gather sub {
-            my($build) = @_;
-            $build->runtime_prop->{$_} = '-l:libFLAC.a' for qw( libs libs_static );
-        };
+sys {
+    gather sub {
+        my($build) = @_;
+        $build->runtime_prop->{$_} = '-lFLAC' for qw( libs );
     };
-}
+};
