@@ -26,3 +26,4 @@ Alien-*/Makefile.old
 Alien-*/_alien
 Alien-*/blib
 Alien-*/pm_to_blib
+*.dummy

@@ -39,19 +39,19 @@ tarsize_clean: Alien-Tar-Size_clean
 Alien-libFLAC/Makefile: Alien-libFLAC/Makefile.PL Alien-libFLAC/alienfile
 	cd Alien-libFLAC && perl Makefile.PL
 
-Alien-libFLAC/blib/lib/Alien/libFLAC.pm: Alien-libFLAC/Makefile Alien-libFLAC/lib/Alien/libFLAC.pm
+#       HACK, only build Alien-libFLAC if it's deps changed so we don't constantly rebuild the XS module
+Alien-libFLAC.dummy: Alien-libFLAC/Makefile Alien-libFLAC/lib/Alien/libFLAC.pm
 	$(MAKE) -C Alien-libFLAC
-
-.PHONY: Alien-libFLAC
-Alien-libFLAC: Alien-libFLAC/blib/lib/Alien/libFLAC.pm
+	touch Alien-libFLAC.dummy
 
 .PHONY: Alien-libFLAC_clean
 Alien-libFLAC_clean:
 	$(MAKE) -C Alien-libFLAC clean || [ ! -f Alien-libFLAC/Makefile ]
 	rm Alien-libFLAC/Makefile.old || [ ! -f Alien-libFLAC/Makefile.old ]
+	rm Alien-libFLAC.dummy || [ ! -f Alien-libFLAC.dummy ]
 
 #   XS extension module
-XS/Makefile: XS/Makefile.PL Alien-libFLAC/blib/lib/Alien/libFLAC.pm
+XS/Makefile: XS/Makefile.PL Alien-libFLAC.dummy
 	cd XS && perl -I ../Alien-libFLAC/blib/lib Makefile.PL
 
 .PHONY: XS
