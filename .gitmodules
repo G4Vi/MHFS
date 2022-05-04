@@ -1,4 +1,4 @@
-[submodule "miniaudio"]
+[submodule "XS/miniaudio"]
 	path = XS/miniaudio
 	url = https://github.com/G4Vi/miniaudio
 [submodule "public_html/static/music_worklet_inprogress/decoder/deps/miniaudio"]
