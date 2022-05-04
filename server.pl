@@ -3575,35 +3575,45 @@ package Youtube {
         $self->{'VIDEOFORMATS'} = {'yt' => {'lock' => 1, 'ext' => 'yt', 'plugin' => $self}};
 
         my $pstart = 'plugin(' . ref($self) . '): ';
-        my $mhfsytdl = $settings->{'BINDIR'} . '/youtube-dl';
-        if(-e $mhfsytdl) {
-            say  $pstart . "Using MHFS youtube-dl. Attempting update";
-            if(fork() == 0)
-            {
-                system "$mhfsytdl", "-U";
-                exit 0;
-            }
 
-            #if(system("$mhfsytdl --help > /dev/null") != 0) {
-            #    say $pstart . "youtube-dl binary is invalid. plugin load failed";
-            #    return undef;
-            #}
-            $self->{'youtube-dl'} = $mhfsytdl;
-            $settings->{'youtube-dl'} = $mhfsytdl;
+        # check for youtube-dl and install if not specified
+        my $youtubedl = $settings->{'Youtube'}{'youtube-dl'};
+        my $installed;
+        if(!$youtubedl) {
+            my $mhfsytdl = $settings->{'GENERIC_TMPDIR'}.'/youtube-dl';
+            if(! -e $mhfsytdl) {
+                say "$pstart Attempting to download youtube-dl";
+                if(system('curl', '-L', 'https://yt-dl.org/downloads/latest/youtube-dl', '-o', $mhfsytdl) != 0) {
+                    say $pstart . "Failed to download youtube-dl. plugin load failed";
+                    return undef;
+                }
+                if(system('chmod', 'a+rx', $mhfsytdl) != 0) {
+                    say $pstart . "Failed to set youtube-dl permissions. plugin load failed";
+                    return undef;
+                }
+                $installed = 1;
+                say "$pstart youtube-dl successfully installed!";
+            }
+            $youtubedl = $mhfsytdl;
         }
-        elsif(system('youtube-dl --help > /dev/null') == 0){
-            say $pstart . "Using system youtube-dl";
-            $self->{'youtube-dl'} = 'youtube-dl';
-            $settings->{'youtube-dl'} = 'youtube-dl';
-        }
-        else {
+        elsif( ! -e $youtubedl) {
             say $pstart . "youtube-dl not found. plugin load failed";
             return undef;
+        }
+        $self->{'youtube-dl'} = $youtubedl;
+
+        # update if we didn't just install
+        if(! $installed) {
+            say  $pstart . "Attempting to update youtube-dl";
+            if(fork() == 0)
+            {
+                system "$youtubedl", "-U";
+                exit 0;
+            }
         }
 
         return $self;
     }
-
 
     1;
 }
@@ -3871,6 +3881,7 @@ package MHFS::Settings {
         }
         $SETTINGS->{'VIDEO_TMPDIR'} ||= $tmpdir.'/video';
         $SETTINGS->{'MUSIC_TMPDIR'} ||= $tmpdir.'/music';
+        $SETTINGS->{'GENERIC_TMPDIR'} ||= $tmpdir.'/tmp';
         $SETTINGS->{'MEDIALIBRARIES'}{'movies'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/movies",
         $SETTINGS->{'MEDIALIBRARIES'}{'tv'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/tv",
         $SETTINGS->{'MEDIALIBRARIES'}{'music'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/music",
@@ -3966,6 +3977,9 @@ my $SETTINGS = MHFS::Settings::load(abs_path(__FILE__));
 
 my %RESOURCES; # Caching of resources
 
+# make the temp dirs
+make_path($SETTINGS->{'VIDEO_TMPDIR'}, $SETTINGS->{'MUSIC_TMPDIR'}, $SETTINGS->{'RUNTIME_DIR'}, $SETTINGS->{'GENERIC_TMPDIR'});
+
 # load plugins
 my @plugins;
 {
@@ -3978,9 +3992,6 @@ my @plugins;
         push @plugins, $loaded;
     }
 }
-
-# make the temp dirs
-make_path($SETTINGS->{'VIDEO_TMPDIR'}, $SETTINGS->{'MUSIC_TMPDIR'}, $SETTINGS->{'RUNTIME_DIR'});
 
 # get_video formats
 my %VIDEOFORMATS = (

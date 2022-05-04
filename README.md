@@ -58,9 +58,6 @@ or<br>
 - `ffmpeg` is used for transcoding in the MusicLibrary subsystem and for videos in the video subsystem.
 - `sox` is used for resampling in the MusicLibrary subsystem
 
-[Optional] Install `youtube-dl` to the MHFS bin dir `cd MHFS/bin && wget https://yt-dl.org/downloads/latest/youtube-dl && chmod +x youtube-dl`
-- used for Youtube subsystem
-
 [Optional] Install libFLAC with headers. i.e. `apt-get install libflac-dev`. libFLAC is required to build the XS module [needed for server-side audio decoding and encoding]. `Alien::libFLAC` will download and build libFLAC from source if not found.
 
 ### Compile C code
@@ -158,7 +155,7 @@ use `perl Makefile.PL --bootstrap=/home/mhfs/perl5` for the local lib build comm
 Run MHFS, move config under `mhfs` user, and configure as needed.
 `perl server.pl`, Control-C. `mkdir -p /home/mhfs/.config && mv ~/.config/mhfs /home/mhfs/.config`
 
-Allow MHFS to write temp files and update youtube-dl. `# chown -R mhfs:nogroup /home/mhfs/MHFS/public_html/tmp /home/mhfs/MHFS/bin/youtube-dl`
+Allow MHFS to write temp files `# chown -R mhfs:nogroup /home/mhfs/MHFS/public_html/tmp`
 
 Switch to the mhfs user: `su - mhfs -s /bin/bash`. Run mhfs: `perl server.pl`.  Verify it works in a browser.
 
