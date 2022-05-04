@@ -509,7 +509,7 @@ package HTTP::BS::Server::Util {
     use POSIX ();
     use Cwd qw(abs_path getcwd);
     use Encode qw(decode encode);
-    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'shell_stdout', 'shell_escape', 'ssh_stdout', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME');
+    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'shell_escape', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME');
     # single threaded locks
     sub LOCK_GET_LOCKDATA {
         my ($filename) = @_;
@@ -650,24 +650,6 @@ package HTTP::BS::Server::Util {
         my $funcname = shift;
         return \&{$funcname} if defined &{$funcname};
         return;
-    }
-
-    sub shell_stdout {
-        return do {
-        local $/ = undef;
-        print "shell_stdout (BLOCKING): ";
-        print "$_ " foreach @_;
-        print "\n";
-        my $pid = open(my $cmdh, '-|', @_);
-        $pid or die("shell_stdout $!");
-        say "PID $pid shell_stdout";
-        <$cmdh>;
-        }
-    }
-
-    sub ssh_stdout {
-        my $source = shift;
-        return shell_stdout('ssh', $source->{'userhost'}, '-p', $source->{'port'}, @_);
     }
 
     sub pid_running {
@@ -2619,24 +2601,6 @@ package MusicLibrary {
        }
     }
 
-    sub BuildRemoteLibrary {
-        my ($self, $source) = @_;
-        return undef if($source->{'type'} ne 'ssh');
-        my $aslibrary = $self->{'settings'}{'BINDIR'} . '/aslibrary.pl';
-        my $userhost = $source->{'userhost'};
-        my $port = $source->{'port'};
-        my $folder = $source->{'folder'};
-
-        my $buf = shell_stdout('ssh', $userhost, '-p', $port, $source->{'aslibrary.pl'}, $source->{'server.pl'}, $folder);
-        if(! $buf) {
-            say "failed to read";
-            return undef;
-        }
-        write_file('music.db', $buf);
-        my $lib = retrieve('music.db');
-        return $lib;
-    }
-
     sub ToHTML {
         my ($files, $where) = @_;
         $where //= '';
@@ -2936,7 +2900,7 @@ package MusicLibrary {
         }
 
         my $evp = $request->{'client'}{'server'}{'evp'};
-        my $tmpfileloc = $request->{'client'}{'server'}{'settings'}{'TMPDIR'} . '/';
+        my $tmpfileloc = $request->{'client'}{'server'}{'settings'}{'MUSIC_TMPDIR'} . '/';
         my $nameloc = $request->{'localtrack'}{'nameloc'};
         $tmpfileloc .= $nameloc if($nameloc);
         my $filebase = $request->{'localtrack'}{'basename'};
@@ -3084,22 +3048,8 @@ package MusicLibrary {
                 say "MusicLibrary: done building music " . clock_gettime(CLOCK_MONOTONIC);
             }
             elsif($source->{'type'} eq 'ssh') {
-                $lib = $self->BuildRemoteLibrary($source);
             }
             elsif($source->{'type'} eq 'mhfs') {
-                $source->{'type'} = 'ssh';
-                $lib = $self->BuildRemoteLibrary($source);
-                if(!$source->{'httphost'}) {
-                    $source->{'httphost'} =  ssh_stdout($source, 'dig', '@resolver1.opendns.com', 'ANY', 'myip.opendns.com', '+short');
-                    if(!  $source->{'httphost'}) {
-                        $lib = undef;
-                    }
-                    else {
-                        chop $source->{'httphost'};
-                        $source->{'httpport'} //= 8000;
-                    }
-                }
-                say "MHFS host at " . $source->{'httphost'} . ':' . $source->{'httpport'} if($source->{'httphost'});
             }
             if($lib) {
                 $source->{'lib'} = $lib;
@@ -3826,8 +3776,8 @@ package MHFS::Settings {
         my $SCRIPTDIR = dirname($scriptpath);
         my $APPDIR = $SCRIPTDIR;
 
-        # set the settings dir to the first that exists of $XDG_DATA_DIRS/mhfs
-        # if none exist and $APPDIR/.conf use that, otherwise use $XDG_CONFIG_HOME
+        # set the settings dir to the first that exists of $XDG_CONFIG_HOME and $XDG_CONFIG_DIRS
+        # if none exist and $APPDIR/.conf use that
         # https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
         my $XDG_CONFIG_HOME = $ENV{'XDG_CONFIG_HOME'} || ($ENV{'HOME'} . '/.config');
         my @configdirs = ($XDG_CONFIG_HOME);
@@ -3909,8 +3859,18 @@ package MHFS::Settings {
             $SETTINGS->{'DOCUMENTROOT'} = "$APPDIR/public_html";
         }
         $SETTINGS->{'XSEND'} //= 0;
-        $SETTINGS->{'TMPDIR'} ||= $SETTINGS->{'DOCUMENTROOT'} . '/tmp';
-        $SETTINGS->{'VIDEO_TMPDIR'} ||= $SETTINGS->{'TMPDIR'};
+        my $tmpdir = $SETTINGS->{'TMPDIR'} || ($ENV{'XDG_CACHE_HOME'} || ($ENV{'HOME'} . '/.cache')) . '/mhfs';
+        delete $SETTINGS->{'TMPDIR'}; # Use specific temp dir instead
+        if(!$SETTINGS->{'RUNTIME_DIR'} ) {
+            my $RUNTIMEDIR = $ENV{'XDG_RUNTIME_DIR'};
+            if(! $RUNTIMEDIR ) {
+                $RUNTIMEDIR = $tmpdir;
+                warn("XDG_RUNTIME_DIR not defined!, using $RUNTIMEDIR instead");
+            }
+            $SETTINGS->{'RUNTIME_DIR'} = $RUNTIMEDIR.'/mhfs';
+        }
+        $SETTINGS->{'VIDEO_TMPDIR'} ||= $tmpdir.'/video';
+        $SETTINGS->{'MUSIC_TMPDIR'} ||= $tmpdir.'/music';
         $SETTINGS->{'MEDIALIBRARIES'}{'movies'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/movies",
         $SETTINGS->{'MEDIALIBRARIES'}{'tv'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/tv",
         $SETTINGS->{'MEDIALIBRARIES'}{'music'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/music",
@@ -4020,14 +3980,14 @@ my @plugins;
 }
 
 # make the temp dirs
-make_path($SETTINGS->{'TMPDIR'}, $SETTINGS->{'VIDEO_TMPDIR'});
+make_path($SETTINGS->{'VIDEO_TMPDIR'}, $SETTINGS->{'MUSIC_TMPDIR'}, $SETTINGS->{'RUNTIME_DIR'});
 
 # get_video formats
 my %VIDEOFORMATS = (
             'hlsold' => {'lock' => 0, 'create_cmd' => "ffmpeg -i '%s' -codec:v copy -bsf:v h264_mp4toannexb -strict experimental -acodec aac -f ssegment -segment_list '%s' -segment_list_flags +live -segment_time 10 '%s%%03d.ts'",  'create_cmd_args' => ['requestfile', 'outpathext', 'outpath'], 'ext' => 'm3u8',
             'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/hls_player.html'},
 
-            'hls' => {'lock' => 0, 'create_cmd' => ['ffmpeg', '-i', '$video{"src_file"}{"filepath"}', '-codec:v', 'libx264', '-strict', 'experimental', '-codec:a', 'aac', '-ac', '2', '-f', 'hls', '-hls_time', '5', '-hls_list_size', '0',  '-hls_segment_filename', '$video{"out_location"} . "/" . $video{"out_base"} . "%04d.ts"', '-master_pl_name', '$video{"out_base"} . ".m3u8"', '$video{"out_filepath"} . "_v"'], 'ext' => 'm3u8', 'desired_audio' => 'aac',
+            'hls' => {'lock' => 0, 'create_cmd' => ['ffmpeg', '-i', '$video{"src_file"}{"filepath"}', '-codec:v', 'libx264', '-strict', 'experimental', '-codec:a', 'aac', '-ac', '2', '-f', 'hls', '-hls_base_url', '$video{"out_location_url"}', '-hls_time', '5', '-hls_list_size', '0',  '-hls_segment_filename', '$video{"out_location"} . "/" . $video{"out_base"} . "%04d.ts"', '-master_pl_name', '$video{"out_base"} . ".m3u8"', '$video{"out_filepath"} . "_v"'], 'ext' => 'm3u8', 'desired_audio' => 'aac',
             'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/hls_player.html'},
 
             'dash' => {'lock' => 0, 'create_cmd' => #['ffmpeg', '-i', '$video{"src_file"}{"filepath"}', '-codec:v', 'copy', '-strict', 'experimental', '-codec:a', 'aac', '-ac', '2', '-map', 'v:0', '-map', 'a:0',  '-f', 'dash',  '$video{"out_filepath"}', '-flush_packets', '1', '-map', '0:2', '-f', 'webvtt', '$video{"out_filepath"} . ".vtt"']
@@ -4676,7 +4636,7 @@ sub hls_audio_get_decode_sample_range {
 sub hls_audio_m3u8 {
     my ($request, $fileinfo) = @_;
     $request->{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
-    #my $pdir = $request->{'client'}{'server'}{'settings'}{'TMPDIR'} . '/'.$fileinfo->{'tmpname'};
+    #my $pdir = $request->{'client'}{'server'}{'settings'}{'VIDEO_TMPDIR'} . '/'.$fileinfo->{'tmpname'};
     #my $pfile = $pdir.'/audio.m3u8';
     #say "pfile $pfile";
     #if(! -f $pfile) {
@@ -5053,6 +5013,17 @@ sub get_video {
     $qs->{'fmt'} //= 'noconv';
     my %video = ('out_fmt' => video_get_format($qs->{'fmt'}));
     if(defined($qs->{'name'})) {
+        if($qs->{'fmt'} eq 'tmpdir') {
+            my $location = $SETTINGS->{'VIDEO_TMPDIR'};
+            my $filename = $qs->{'name'};
+            my $absolute = abs_path("$location/$filename");
+            if(!$absolute || ($absolute !~ /^$location/) || (! -e $absolute)) {
+                $request->Send404;
+                return undef;
+            }
+            $request->SendFile($absolute);
+            return 1;
+        }
         if($video{'src_file'} = video_file_lookup($qs->{'name'})) {
         }
         elsif($video{'src_file'} = media_file_search($qs->{'name'})) {
@@ -5116,6 +5087,7 @@ sub get_video {
     my $fmt = $video{'out_fmt'};
     $video{'out_location'} = $SETTINGS->{'VIDEO_TMPDIR'} . '/' . $video{'out_base'};
     $video{'out_filepath'} = $video{'out_location'} . '/' . $video{'out_base'} . '.' . $VIDEOFORMATS{$video{'out_fmt'}}{'ext'};
+    $video{'out_location_url'} = 'get_video?fmt=tmpdir&name='.$video{'out_base'}.'%2F';
 
     # Serve it up if it has been created
     if(-e $video{'out_filepath'}) {
@@ -6620,9 +6592,10 @@ sub video_hls_write_master_playlist {
     my $subm3u;
     my $newm3ucontent = '';
     foreach my $line (split("\n", $m3ucontent)) {
+        # master playlist doesn't get written with base url ...
         if($line =~ /^(.+)\.m3u8_v$/) {
-            $subm3u = "tmp/$1/$1";
-             $line = $subm3u . '.m3u8_v';
+            $subm3u = "get_video?fmt=tmpdir&name=" . uri_escape("$1/$1");
+            $line = $subm3u . '.m3u8_v';
         }
         $newm3ucontent .= $line . "\n";
     }
