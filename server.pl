@@ -3882,6 +3882,7 @@ package MHFS::Settings {
         $SETTINGS->{'VIDEO_TMPDIR'} ||= $tmpdir.'/video';
         $SETTINGS->{'MUSIC_TMPDIR'} ||= $tmpdir.'/music';
         $SETTINGS->{'GENERIC_TMPDIR'} ||= $tmpdir.'/tmp';
+        $SETTINGS->{'SECRET_TMPDIR'} ||= $tmpdir.'/secret';
         $SETTINGS->{'MEDIALIBRARIES'}{'movies'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/movies",
         $SETTINGS->{'MEDIALIBRARIES'}{'tv'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/tv",
         $SETTINGS->{'MEDIALIBRARIES'}{'music'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/music",
@@ -3979,6 +3980,7 @@ my %RESOURCES; # Caching of resources
 
 # make the temp dirs
 make_path($SETTINGS->{'VIDEO_TMPDIR'}, $SETTINGS->{'MUSIC_TMPDIR'}, $SETTINGS->{'RUNTIME_DIR'}, $SETTINGS->{'GENERIC_TMPDIR'});
+make_path($SETTINGS->{'SECRET_TMPDIR'}, {chmod => 0600});
 
 # load plugins
 my @plugins;
@@ -6680,7 +6682,7 @@ sub GetResource {
 sub ptp_request {
     my ($evp, $url, $handler, $tried_login) = @_;
     my $atbuf;
-    my $ptpdir = $SETTINGS->{'RUNTIME_DIR'}.'/ptp';
+    my $ptpdir = $SETTINGS->{'SECRET_TMPDIR'}.'/ptp';
     make_path($ptpdir);
     my $cookie = $ptpdir . '/cookie';
     my @cmd = ('curl', '-s', '-v', '-b', $cookie, '-c', $cookie, $SETTINGS->{'PTP'}{'url'}.'/' . $url);
@@ -6700,7 +6702,7 @@ sub ptp_request {
             }
             $tried_login = 1;
             my $postdata = 'username=' . $SETTINGS->{'PTP'}{'username'} . '&password=' . $SETTINGS->{'PTP'}{'password'} . '&passkey=' . $SETTINGS->{'PTP'}{'passkey'};
-            my $ptpdir = $SETTINGS->{'RUNTIME_DIR'}.'/ptp';
+            my $ptpdir = $SETTINGS->{'SECRET_TMPDIR'}.'/ptp';
             make_path($ptpdir);
             my $cookie = $ptpdir . '/cookie';
             my @logincmd = ('curl', '-s', '-v', '-b', $cookie, '-c', $cookie, '-d', $postdata, $SETTINGS->{'PTP'}{'url'}.'/ajax.php?action=login');
@@ -6782,6 +6784,16 @@ sub torrent_load_verbose {
     });
 }
 
+sub torrent_load_raw_verbose {
+    my ($evp, $b64, $callback) = @_;
+    rtxmlrpc($evp, ['load.raw_verbose', '', $b64], sub {
+        my ($output) = @_;
+        if($output =~ /ERROR/) {
+            $output = undef;
+        }
+        $callback->($output);
+    });
+}
 
 sub torrent_d_directory_set {
     my ($evp, $infohash, $directory, $callback) = @_;
@@ -6994,6 +7006,38 @@ sub play_in_browser_link {
     return 'N/A';
 }
 
+sub encode_base64 ($;$) {
+    if ($] >= 5.006) {
+        require bytes;
+        if (bytes::length($_[0]) > length($_[0]) ||
+            ($] >= 5.008 && $_[0] =~ /[^\0-\xFF]/))
+        {
+            require Carp;
+            Carp::croak("The Base64 encoding is only defined for bytes");
+        }
+    }
+
+    use integer;
+
+    my $eol = $_[1];
+    $eol = "\n" unless defined $eol;
+
+    my $res = pack("u", $_[0]);
+    # Remove first character of each line, remove newlines
+    $res =~ s/^.//mg;
+    $res =~ s/\n//g;
+
+    $res =~ tr|` -_|AA-Za-z0-9+/|;               # `# help emacs
+    # fix padding at the end
+    my $padding = (3 - length($_[0]) % 3) % 3;
+    $res =~ s/.{$padding}$/'=' x $padding/e if $padding;
+    # break encoded string into lines of no more than 76 characters each
+    if (length $eol) {
+        $res =~ s/(.{1,76})/$1$eol/g;
+    }
+    return $res;
+}
+
 sub torrent_on_contents {
     my ($evp, $request, $result, $tname, $saveto) = @_;
     if(! $result) {
@@ -7014,14 +7058,21 @@ sub torrent_on_contents {
         if(! defined $bytes_done) {
         # load, set directory, and download it (race condition)
         # 02/05/2020 what race condition?
-            torrent_load_verbose($evp, $tname, sub {
+            #torrent_load_verbose($evp, $tname, sub {
+            #if(! defined $_[0]) {
+            #    $request->Send404;
+            #    unlink($tname);
+            #    return;
+            #}
+#
+            #torrent_d_delete_tied($evp, $asciihash, sub {
+            my $b64 = encode_base64($result);
+            torrent_load_raw_verbose($evp, $b64, sub {
             if(! defined $_[0]) {
                 $request->Send404;
                 unlink($tname);
                 return;
             }
-
-            torrent_d_delete_tied($evp, $asciihash, sub {
             unlink($tname);
             if(! defined $_[0]) { $request->Send404; return;}
 
@@ -7033,7 +7084,9 @@ sub torrent_on_contents {
 
             say 'downloading ' . $asciihash;
             $request->SendRedirectRawURL(301, 'torrent?infohash=' . $asciihash);
-            })})})});
+            })})
+            #})
+            });
         }
         else {
         # set the priority and download
