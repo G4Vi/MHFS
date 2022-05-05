@@ -6680,7 +6680,10 @@ sub GetResource {
 sub ptp_request {
     my ($evp, $url, $handler, $tried_login) = @_;
     my $atbuf;
-    my @cmd = ('curl', '-s', '-v', '-b', '/tmp/ptp', '-c', '/tmp/ptp', $SETTINGS->{'PTP'}{'url'}.'/' . $url);
+    my $ptpdir = $SETTINGS->{'RUNTIME_DIR'}.'/ptp';
+    make_path($ptpdir);
+    my $cookie = $ptpdir . '/cookie';
+    my @cmd = ('curl', '-s', '-v', '-b', $cookie, '-c', $cookie, $SETTINGS->{'PTP'}{'url'}.'/' . $url);
 
     my $process;
     $process    = HTTP::BS::Server::Process->new_output_process($evp, \@cmd, sub {
@@ -6697,7 +6700,10 @@ sub ptp_request {
             }
             $tried_login = 1;
             my $postdata = 'username=' . $SETTINGS->{'PTP'}{'username'} . '&password=' . $SETTINGS->{'PTP'}{'password'} . '&passkey=' . $SETTINGS->{'PTP'}{'passkey'};
-            my @logincmd = ('curl', '-s', '-v', '-b', '/tmp/ptp', '-c', '/tmp/ptp', '-d', $postdata, $SETTINGS->{'PTP'}{'url'}.'/ajax.php?action=login');
+            my $ptpdir = $SETTINGS->{'RUNTIME_DIR'}.'/ptp';
+            make_path($ptpdir);
+            my $cookie = $ptpdir . '/cookie';
+            my @logincmd = ('curl', '-s', '-v', '-b', $cookie, '-c', $cookie, '-d', $postdata, $SETTINGS->{'PTP'}{'url'}.'/ajax.php?action=login');
             $process = HTTP::BS::Server::Process->new_output_process($evp, \@logincmd, sub {
                  my ($output, $error) = @_;
                  # todo error handling
@@ -7115,7 +7121,9 @@ sub torrent {
     elsif(defined $qs->{'ptpid'}) {
         ptp_request($evp, 'torrents.php?action=download&id=' . $qs->{'ptpid'}, sub {
             my ($result) = @_;
-            my $tname = '/tmp/ptp_' . $qs->{'ptpid'} . '.torrent';
+            my $ptpdir = $SETTINGS->{'RUNTIME_DIR'}.'/ptp';
+            make_path($ptpdir);
+            my $tname = "$ptpdir/ptp_" . $qs->{'ptpid'} . '.torrent';
             torrent_on_contents($evp, $request, $result, $tname, $SETTINGS->{'MEDIALIBRARIES'}{'movies'});
         });
     }
