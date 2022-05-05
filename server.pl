@@ -2321,6 +2321,25 @@ package HTTP::BS::Server::Process {
         });
     }
 
+    sub new_io_process {
+        my ($class, $evp, $cmd, $handler, $inputdata) = @_;
+        my $ctx = {
+            'at_exit' => sub {
+                my ($context) = @_;
+                say 'run handler';
+                $handler->($context->{'stdout'}, $context->{'stderr'});
+            }
+        };
+        if(defined $inputdata) {
+            $ctx->{'curbuf'} = $inputdata;
+            $ctx->{'input'} = sub {
+                say "all written";
+                return undef;
+            };
+        }
+        return new_cmd_process($class, $evp, $cmd, $ctx);
+    }
+
     # launch a process without a new exe with poll handlers
     sub _new_child {
         my ($mpa, $prochandlers, $handlesettings) = @_;
@@ -3896,6 +3915,8 @@ package MHFS::Settings {
         $SETTINGS->{'recvrequestimeout'} ||= $SETTINGS->{'TIMEOUT'};
         # maximum time allowed between sends
         $SETTINGS->{'sendresponsetimeout'} ||= $SETTINGS->{'TIMEOUT'};
+
+        $SETTINGS->{'Torrent'}{'pyroscope'} ||= $ENV{'HOME'} .'/.local/pyroscope';
 
         if( ! defined $SETTINGS->{'MusicLibrary'}) {
             my $folder = $SETTINGS->{'DOCUMENTROOT'} . "/media/music";
@@ -6719,17 +6740,17 @@ sub ptp_request {
 }
 
 sub rtxmlrpc {
-    my ($evp, $params, $cb) = @_;
+    my ($evp, $params, $cb, $inputdata) = @_;
     my $process;
     my @cmd = ('rtxmlrpc', @$params, '--config-dir', $SETTINGS->{'CFGDIR'} . '/.pyroscope/');
     print "$_ " foreach @cmd;
     print "\n";
-    $process    = HTTP::BS::Server::Process->new_output_process($evp, \@cmd, sub {
+    $process    = HTTP::BS::Server::Process->new_io_process($evp, \@cmd, sub {
         my ($output, $error) = @_;
         chomp $output;
         #say 'rtxmlrpc output: ' . $output;
         $cb->($output);
-    });
+    }, $inputdata);
     return $process;
 }
 
@@ -6746,9 +6767,39 @@ sub lstor {
     return $process;
 }
 
+
+sub torrent_file_hash_pyroscope {
+my $pyroscope_get_info_hash = <<'END_pyroscope_get_info_hash';
+__requires__ = 'pyrocore'
+import re
+import sys
+
+from pyrobase import bencode
+from pyrocore.util import fmt, metafile
+
+if __name__ == '__main__':
+    raw_data = sys.stdin.read()
+    data = bencode.bdecode(raw_data)
+    if raw_data != bencode.bencode(data):
+        raise ValueError("Bad bencoded data - dict keys out of order?")
+    print metafile.info_hash(data)
+END_pyroscope_get_info_hash
+    my ($evp, $torrent_data, $cb) = @_;
+    my $python2 = $SETTINGS->{'Torrent'}{'pyroscope'}.'/bin/python2';
+    my $process;
+    my @cmd = ($python2, '-c', $pyroscope_get_info_hash);
+    print "$_ " foreach @cmd;
+    print "\n";
+    $process    = HTTP::BS::Server::Process->new_io_process($evp, \@cmd, sub {
+        my ($output, $error) = @_;
+        chomp $output;
+        $cb->($output);
+    }, $torrent_data);
+    return $process;
+}
+
 sub torrent_file_hash {
-    my ($evp, $file, $cb) = @_;
-    lstor($evp, ['-o', '__hash__', $file], $cb);
+    goto &torrent_file_hash_pyroscope;
 }
 
 sub torrent_d_bytes_done {
@@ -6785,14 +6836,14 @@ sub torrent_load_verbose {
 }
 
 sub torrent_load_raw_verbose {
-    my ($evp, $b64, $callback) = @_;
-    rtxmlrpc($evp, ['load.raw_verbose', '', $b64], sub {
+    my ($evp, $data, $callback) = @_;
+    rtxmlrpc($evp, ['load.raw_verbose', '', '@-'], sub {
         my ($output) = @_;
         if($output =~ /ERROR/) {
             $output = undef;
         }
         $callback->($output);
-    });
+    }, $data);
 }
 
 sub torrent_d_directory_set {
@@ -7006,48 +7057,15 @@ sub play_in_browser_link {
     return 'N/A';
 }
 
-sub encode_base64 ($;$) {
-    if ($] >= 5.006) {
-        require bytes;
-        if (bytes::length($_[0]) > length($_[0]) ||
-            ($] >= 5.008 && $_[0] =~ /[^\0-\xFF]/))
-        {
-            require Carp;
-            Carp::croak("The Base64 encoding is only defined for bytes");
-        }
-    }
-
-    use integer;
-
-    my $eol = $_[1];
-    $eol = "\n" unless defined $eol;
-
-    my $res = pack("u", $_[0]);
-    # Remove first character of each line, remove newlines
-    $res =~ s/^.//mg;
-    $res =~ s/\n//g;
-
-    $res =~ tr|` -_|AA-Za-z0-9+/|;               # `# help emacs
-    # fix padding at the end
-    my $padding = (3 - length($_[0]) % 3) % 3;
-    $res =~ s/.{$padding}$/'=' x $padding/e if $padding;
-    # break encoded string into lines of no more than 76 characters each
-    if (length $eol) {
-        $res =~ s/(.{1,76})/$1$eol/g;
-    }
-    return $res;
-}
-
 sub torrent_on_contents {
-    my ($evp, $request, $result, $tname, $saveto) = @_;
+    my ($evp, $request, $result, $saveto) = @_;
     if(! $result) {
         say "failed to dl torrent";
         $request->Send404;
         return;
     }
     else {
-        write_file($tname, $result);
-        torrent_file_hash($evp, $tname, sub {
+        torrent_file_hash($evp, $result, sub {
         # error handling bad hashes?
         my ($asciihash) = @_;
         say 'infohash ' . $asciihash;
@@ -7056,24 +7074,9 @@ sub torrent_on_contents {
         torrent_d_bytes_done($evp, $asciihash, sub {
         my ($bytes_done) = @_;
         if(! defined $bytes_done) {
-        # load, set directory, and download it (race condition)
-        # 02/05/2020 what race condition?
-            #torrent_load_verbose($evp, $tname, sub {
-            #if(! defined $_[0]) {
-            #    $request->Send404;
-            #    unlink($tname);
-            #    return;
-            #}
-#
-            #torrent_d_delete_tied($evp, $asciihash, sub {
-            my $b64 = encode_base64($result);
-            torrent_load_raw_verbose($evp, $b64, sub {
-            if(! defined $_[0]) {
-                $request->Send404;
-                unlink($tname);
-                return;
-            }
-            unlink($tname);
+            # load, set directory, and download it (race condition)
+            # 02/05/2020 what race condition?
+            torrent_load_raw_verbose($evp, $result, sub {
             if(! defined $_[0]) { $request->Send404; return;}
 
             torrent_d_directory_set($evp, $asciihash, $saveto, sub {
@@ -7084,9 +7087,7 @@ sub torrent_on_contents {
 
             say 'downloading ' . $asciihash;
             $request->SendRedirectRawURL(301, 'torrent?infohash=' . $asciihash);
-            })})
-            #})
-            });
+            })})});
         }
         else {
         # set the priority and download
@@ -7174,10 +7175,7 @@ sub torrent {
     elsif(defined $qs->{'ptpid'}) {
         ptp_request($evp, 'torrents.php?action=download&id=' . $qs->{'ptpid'}, sub {
             my ($result) = @_;
-            my $ptpdir = $SETTINGS->{'RUNTIME_DIR'}.'/ptp';
-            make_path($ptpdir);
-            my $tname = "$ptpdir/ptp_" . $qs->{'ptpid'} . '.torrent';
-            torrent_on_contents($evp, $request, $result, $tname, $SETTINGS->{'MEDIALIBRARIES'}{'movies'});
+            torrent_on_contents($evp, $request, $result, $SETTINGS->{'MEDIALIBRARIES'}{'movies'});
         });
     }
     elsif(defined $qs->{'list'}) {
