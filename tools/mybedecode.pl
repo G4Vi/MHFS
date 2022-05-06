@@ -18,164 +18,173 @@ sub read_file {
     };
 }
 
-my @typestack;
-my $istring = '';
-my $lastbstring;
+use constant {
+    BDEC_DICT              => 1 << 0,
+    BDEC_LIST              => 1 << 1,
+
+    BDEC_END_OK_ALWAYS     => 1 << 2,
+    BDEC_END_OK_SOMETIMES  => 1 << 3,
+
+    BDEC_GET_VAL_ALWAYS    => 1 << 4,
+    BDEC_GET_VAL_SOMETIMES => 1 << 5
+};
+
+use constant BDEC_END_OK => (BDEC_END_OK_ALWAYS | BDEC_END_OK_SOMETIMES);
+use constant BDEC_GET_VAL     => (BDEC_GET_VAL_ALWAYS | BDEC_GET_VAL_SOMETIMES);
+use constant BDEC_DICT_TOGGLE => BDEC_END_OK_SOMETIMES | BDEC_GET_VAL_SOMETIMES;
+
+use constant BDEC_DICT_GET_KEY => BDEC_DICT | BDEC_END_OK_SOMETIMES;
+use constant BDEC_DICT_GET_VAL => BDEC_DICT | BDEC_GET_VAL_SOMETIMES;
+use constant BDEC_LIST_GET_VAL => BDEC_LIST | BDEC_END_OK_ALWAYS | BDEC_GET_VAL_ALWAYS;
+
+my @statestack = (BDEC_DICT_GET_KEY);
 my $foffset = 0;
 my $infostart;
 my $infoend;
-my $infodepth;
-
-sub indentedprint {
-    my $message = ( ' ' x (scalar(@typestack) * 4)) . $_[0];
-    say $message;
+my $isinfo;
+my @data;
+my @itemstack = (\@data);
+sub itemstack_additem {
+    my ($itemstack, $curstate, $item) = @_;
+    if(($curstate == BDEC_DICT_GET_KEY) || ($curstate == BDEC_LIST_GET_VAL)) {
+        push @{$itemstack->[-1]}, $item;
+    }
+    elsif($curstate == BDEC_DICT_GET_VAL) {
+        $itemstack->[-1][-1]{'value'} = $item->{'value'};
+        $itemstack->[-1][-1]{'foffset'} = $item->{'foffset'};
+    }
 }
 
+sub itemstack_pop {
+    my ($itemstack, $curstate, $item) = @_;
+    pop @{$itemstack->[-1]}
+}
 
+# DICT KEY -> push [key, undef] to parent array
+# set current item to [1]
+
+# VALUE
+# add to parent: if parent is dict key set parent[1] to []
+# if parent is list, push to list
+
+# DICT => create array, add to parent, set current item
+
+# INT => parse INT
+
+# LIST => create array, add to parent
+
+#{
+#    [dict, [
+#        [dictentry, [key, value]]
+
+#]]
+
+#]
+#}
+
+
+
+
+
+
+
+sub indentedprint {
+    my $message = ( ' ' x (scalar(@statestack) * 4)) . $_[0];
+    say $message;
+}
 my $contents = read_file($ARGV[0]);
+
+# finally parse
+if((length($contents) == 0) || (substr($contents, $foffset++, 1) ne 'd')) {
+    say 'invalid file';
+    exit 0;
+}
+indentedprint('dict start');
 while(1) {
-    if($foffset == length($contents)) {
-        if(@typestack) {
-            indentedprint("Unexpected eof");
-        }
-        last;
-    }
-    my $typeid = substr($contents, $foffset++, 1);
-    my $curtype = $typestack[-1];
-    if($curtype) {
-        if($curtype eq 'i') {
-            if($typeid ne 'e'){
-                $istring .= $typeid;
-                next;
-            }
-            else {
-                if($istring =~ /^(-?[0-9]+)$/) {
-                    indentedprint("integer $1");
-                    $istring = '';
-                }
-                else {
-                    indentedprint("invalid integer: $istring");
-                    last;
-                }
-            }
-        }
-        if($typeid eq 'e') {
-            my $popped = pop @typestack;
-            indentedprint("leave $popped");
-            if($infodepth && (scalar(@typestack) < $infodepth)) {
-                $infodepth = 0;
-                $infoend = $foffset;
+    indentedprint('state ' . $statestack[-1]);
+    my $char = substr($contents, $foffset++, 1);
+    my $curstate = $statestack[-1];
+    if($curstate & BDEC_END_OK) {
+        if($char eq 'e') {
+            pop @statestack;
+            indentedprint((($curstate & BDEC_DICT) ? 'dict' : 'list') . ' end');
+            if(scalar(@statestack) == 0) {
+                last;
             }
             next;
         }
     }
-    if(($typeid eq 'd') ||  ($typeid eq 'l') || ($typeid eq 'i')){
-        indentedprint("enter $typeid");
-        push @typestack, $typeid;
-        if($lastbstring eq 'info') {
-            $infostart = $foffset-1;
-            $infodepth = scalar(@typestack);
+    # Change the next dictionary operation (at this level) between GET_KEY and GET_VAL (if it's a dictionary)
+    $statestack[-1] ^= BDEC_DICT_TOGGLE;
+    if($curstate & BDEC_GET_VAL) {
+        if($char eq 'd') {
+            indentedprint('dict start');
+            push @statestack, BDEC_DICT_GET_KEY;
+            next;
+        }
+        elsif($char eq 'i') {
+            my $intstr;
+            $char = substr($contents, $foffset++, 1);
+            if(($char eq '-') || ($char eq '0'))  {
+                $intstr .= $char;
+                $char = substr($contents, $foffset++, 1);
+            }
+            my $cval = ord($char);
+            if(($cval < ord('1')) || ($cval > ord('9'))) {
+                indentedprint(__LINE__ .' unexpected char '.$char);
+                last;
+            }
+            $intstr .= $char;
+            while(1) {
+                $char = substr($contents, $foffset++, 1);
+                my $cval = ord($char);
+                if(($cval < ord('0')) || ($cval > ord('9'))) {
+                    if($char ne 'e') {
+                        indentedprint(__LINE__ .'unexpected char');
+                        exit 0;
+                    }
+                    indentedprint('int ' . $intstr);
+                    last;
+                }
+                $intstr .= $char;
+            }
+            next;
+        }
+        elsif($char eq 'l') {
+            indentedprint('list start');
+            push @statestack, BDEC_LIST_GET_VAL;
+            next;
+        }
+    }
+
+    my $curbstr;
+    if($char eq '0') {
+        $curbstr .= $char;
+        $char = substr($contents, $foffset++, 1);
+        if($char ne ':') {
+            indentedprint(__LINE__ .'unexpected char');
+            last;
         }
     }
     else {
-        my $bstringcolon = index($contents, ':', $foffset);
-        if($bstringcolon == -1) {
-            indentedprint("invalid bstring " . (length($contents) - $foffset));
-            last;
-        }
-        my $rdcount = ($bstringcolon-$foffset);
-        my $bstringlen = $typeid .= substr($contents, $foffset, $rdcount);
-        $foffset += $rdcount;
-        my $ilen;
-        if($bstringlen =~ /^([0-9]+)$/) {
-            $ilen = $1;
-            indentedprint("integer $1");
-        }
-        else {
-            indentedprint("invalid bstring integer $bstringlen");
-            last;
-        }
-        substr($contents, $foffset++, 1) eq ':' or die("vadreading");
-        if(length($contents) < $ilen) {
-            indentedprint("unexpected eof in bstring");
-            last;
-        }
-        my $bstring = substr($contents, $foffset, $ilen);
-        $foffset += $ilen;
-        indentedprint("bstring $bstring");
-        $lastbstring = $bstring;
-    }
-}
-
-use constant {
-    BDEC_SCAN       = 1 << 0,
-    BDEC_DICT_KEY   = 1 << 1,
-    BDEC_DICT_VAL   = 1 << 2,
-    BDEC_BSTR_INT   = 1 << 3,
-    BDEC_LIST       = 1 << 4,
-    BDEC_INT_SIGN   = 1 << 5,
-    BDEC_INT_ZERO   = 1 << 6,
-    BDEC_INT_NORMAL = 1 << 7
-
-};
-my @statestack = (BDEC_SCAN);
-my $curbstr;
-while(1) {
-    if($foffset == length($contents)) {
-        if($statestack[-1] != BDEC_SCAN) {
-            indentedprint("Unexpected eof");
-        }
-        last;
-    }
-    my $char = substr($contents, $foffset++, 1);
-    if($statestack[-1] == BDEC_SCAN) {
-        if($char ne 'd') {
-            indentedprint("Expected dictionary");
-            last;
-        }
-        indentedprint('dict start');
-        push @statestack, BDEC_DICT_KEY;
-    }
-    elsif($statestack[-1] == BDEC_DICT_KEY) {
-        if($char ne 'e') {
+        while(1) {
             my $cval = ord($char);
             if(($cval < ord('0')) || ($cval > ord('9'))) {
-                indentedprint('unexpected char');
-                last;
-            }
-            $curbstr = $char;
-            push @statestack, BDEC_BSTR_INT;
-        }
-        else {
-            pop @statestack;
-            indentedprint('dict end');
-        }
-    }
-    elsif($statestack[-1] == BDEC_BSTR_INT) {
-        if($char ne ':') {
-            my $cval = ord($char);
-            if(($cval < ord('0')) || ($cval > ord('9'))) {
-                indentedprint('unexpected char');
+                if(($char ne ':') || (length($curbstr) == 0)) {
+                    indentedprint(__LINE__ .'unexpected char '.$char);
+                    exit 0;
+                }
+                my $toprint = ('bstr '.$curbstr.' ') . (($curbstr < 100) ? substr($contents, $foffset, $curbstr) : '');
+                indentedprint($toprint);
+                $foffset += $curbstr;
                 last;
             }
             $curbstr .= $char;
-        }
-        else {
-            pop @statestack;
-            $foffset += $curbstr;
-            $curbstr = '';
-            $statestack[-1] = BDEC_DICT_VAL;
+            $char = substr($contents, $foffset++, 1);
         }
     }
-    elsif($statestack[-1] == BDEC_DICT_VAL) {
-        if($char eq 'd') {
-            indentedprint('dict start');
-            push @statestack, BDEC_DICT_KEY;
-        }
-        
 
-    }
+
 }
-
 
 say "infooffset $infostart length " . ($infoend - $infostart);
