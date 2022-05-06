@@ -32,7 +32,6 @@ sub indentedprint {
 }
 
 
-
 my $contents = read_file($ARGV[0]);
 while(1) {
     if($foffset == length($contents)) {
@@ -107,5 +106,76 @@ while(1) {
         $lastbstring = $bstring;
     }
 }
+
+use constant {
+    BDEC_SCAN       = 1 << 0,
+    BDEC_DICT_KEY   = 1 << 1,
+    BDEC_DICT_VAL   = 1 << 2,
+    BDEC_BSTR_INT   = 1 << 3,
+    BDEC_LIST       = 1 << 4,
+    BDEC_INT_SIGN   = 1 << 5,
+    BDEC_INT_ZERO   = 1 << 6,
+    BDEC_INT_NORMAL = 1 << 7
+
+};
+my @statestack = (BDEC_SCAN);
+my $curbstr;
+while(1) {
+    if($foffset == length($contents)) {
+        if($statestack[-1] != BDEC_SCAN) {
+            indentedprint("Unexpected eof");
+        }
+        last;
+    }
+    my $char = substr($contents, $foffset++, 1);
+    if($statestack[-1] == BDEC_SCAN) {
+        if($char ne 'd') {
+            indentedprint("Expected dictionary");
+            last;
+        }
+        indentedprint('dict start');
+        push @statestack, BDEC_DICT_KEY;
+    }
+    elsif($statestack[-1] == BDEC_DICT_KEY) {
+        if($char ne 'e') {
+            my $cval = ord($char);
+            if(($cval < ord('0')) || ($cval > ord('9'))) {
+                indentedprint('unexpected char');
+                last;
+            }
+            $curbstr = $char;
+            push @statestack, BDEC_BSTR_INT;
+        }
+        else {
+            pop @statestack;
+            indentedprint('dict end');
+        }
+    }
+    elsif($statestack[-1] == BDEC_BSTR_INT) {
+        if($char ne ':') {
+            my $cval = ord($char);
+            if(($cval < ord('0')) || ($cval > ord('9'))) {
+                indentedprint('unexpected char');
+                last;
+            }
+            $curbstr .= $char;
+        }
+        else {
+            pop @statestack;
+            $foffset += $curbstr;
+            $curbstr = '';
+            $statestack[-1] = BDEC_DICT_VAL;
+        }
+    }
+    elsif($statestack[-1] == BDEC_DICT_VAL) {
+        if($char eq 'd') {
+            indentedprint('dict start');
+            push @statestack, BDEC_DICT_KEY;
+        }
+        
+
+    }
+}
+
 
 say "infooffset $infostart length " . ($infoend - $infostart);
