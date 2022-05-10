@@ -7229,6 +7229,94 @@ sub torrent {
     }
 }
 
+sub tracker_error {
+    my ($message) = @_;
+    return ['d', ['bstr', 'failure reason'], ['bstr', $message]];
+}
+
+my %TORRENTS;
+sub tracker {
+    my ($request) = @_;
+
+
+
+    if(!exists $request->{'qs'}{'info_hash'}) {
+        $request->Send404;
+        return;
+    }
+
+    my $rih = $request->{'qs'}{'info_hash'};
+    my $dictref;
+    my @reqkey = ('port', 'left');
+    while(1) {
+
+        foreach my $key (@reqkey) {
+            if(! exists $request->{'qs'}{$key}) {
+                $dictref = tracker_error("missing $key");
+                last;
+            }
+        }
+        my $port = $request->{'qs'}{'port'};
+        if($port ne unpack('S', pack('S', $port))) {
+            $dictref = tracker_error("bad port");
+            last;
+        }
+        my $left = $request->{'qs'}{'left'};
+        if($left ne unpack('Q', pack('Q', $left))) {
+            $dictref = tracker_error("bad left");
+            last;
+        }
+        if(exists $request->{'qs'}{'compact'} && ($request->{'qs'}{'compact'} eq '0')) {
+            $dictref = tracker_error("Only compact responses supported!");
+            last;
+        }
+
+        if(!exists $TORRENTS{$rih}) {
+            $dictref = tracker_error("The torrent does not exist!");
+            last;
+        }
+
+        my $event = $request->{'qs'}{'event'};
+        if( (! exists $TORRENTS{$rih}{ipport}) &&
+        (! defined $event) || ($event ne 'started')) {
+            $dictref = tracker_error("first announce must include started event");
+            last;
+        }
+
+        if(defined $event) {
+            if($event eq 'started') {
+                $TORRENTS{$rih}{ipport} = {};
+            }
+            elsif($event eq 'stopped') {
+                delete $TORRENTS{$rih}{ipport};
+            }
+            elsif($event eq 'completed') {
+                $TORRENTS{$rih}{ipport}{'completed'} = 1;
+            }
+        }
+
+        my $numwant = $request->{'qs'}{'numwant'};
+        if((! defined $numwant) || ($numwant ne unpack('C', pack('C', $numwant))) || ($numwant > 55)) {
+            $numwant = 50;
+        }
+
+        my @dict = ('dict');
+        push @dict, ['bstr', 'interval'], ['int', 120];
+        push @dict, ['bstr', 'complete'], ['int', 0];
+        push @dict, ['bstr', 'incomplete'], ['int', 0];
+        my $pstr;
+        push @dict, ['bstr', 'peers'], ['bstr', $pstr];
+
+        $dictref = \@dict;
+        last;
+    }
+
+    # bencode
+
+
+    # send
+}
+
 sub player_video_browsemovies {
     my ($request, $buf) = @_;
     my $evp = $request->{'client'}{'server'}{'evp'};
