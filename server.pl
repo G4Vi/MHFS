@@ -493,7 +493,7 @@ package HTTP::BS::Server {
 
         say "-------------------------------------------------";
         say "NEW CONN " . $peerhost . ':' . $peerport;
-        my $cref = HTTP::BS::Server::Client->new($csock, $server, $ah->{'reqhostname'}, $ah->{'absurl'});
+        my $cref = HTTP::BS::Server::Client->new($csock, $server, $ah->{'reqhostname'}, $ah->{'absurl'}, $remoteip);
         return 1;
     }
 
@@ -1630,9 +1630,9 @@ package HTTP::BS::Server::Client {
     $SIG{ __DIE__ } = sub { Carp::confess( @_ ) };
 
     sub new {
-        my ($class, $sock, $server, $reqhostname, $absurl) = @_;
+        my ($class, $sock, $server, $reqhostname, $absurl, $ip) = @_;
         $sock->blocking(0);
-        my %self = ('sock' => $sock, 'server' => $server, 'time' => clock_gettime(CLOCK_MONOTONIC), 'inbuf' => '', 'reqhostname' => $reqhostname, 'absurl' => $absurl);
+        my %self = ('sock' => $sock, 'server' => $server, 'time' => clock_gettime(CLOCK_MONOTONIC), 'inbuf' => '', 'reqhostname' => $reqhostname, 'absurl' => $absurl, 'ip' => $ip);
         $self{'CONN-ID'} = int($self{'time'} * rand()); # insecure uid
         $self{'outheaders'}{'X-MHFS-CONN-ID'} = sprintf("%X", $self{'CONN-ID'});
         bless \%self, $class;
@@ -3997,6 +3997,8 @@ if(scalar(@ARGV) >= 1 ) {
 # load settings
 my $SETTINGS = MHFS::Settings::load(abs_path(__FILE__));
 
+my %TORRENTS = %{$SETTINGS->{'TORRENTS'}};
+
 my %RESOURCES; # Caching of resources
 
 # make the temp dirs
@@ -4096,6 +4098,9 @@ my @routes = (
             }
             $request->Send404;
         }
+    ],
+    [
+        '/torrent/tracker', \&tracker
     ],
     [
         '/torrent', \&torrent
@@ -7229,33 +7234,55 @@ sub torrent {
     }
 }
 
+sub bencode {
+    my ($node) = @_;
+    my @toenc = ($node);
+    my $output;
+
+    while(my $node = shift @toenc) {
+        my $type = $node->[0];
+        if(($type eq 'd') || ($type eq 'l')) {
+            $output .= $type;
+            my @nextitems = @{$node};
+            shift @nextitems;
+            push @nextitems, ['e'];
+            unshift @toenc, @nextitems;
+        }
+        elsif($type eq 'bstr') {
+            $output .= sprintf("%u:%s", length($node->[1]), $node->[1]);
+        }
+        elsif($type eq 'int') {
+            $output .= 'i'.$node->[1].'e';
+        }
+        elsif($type eq 'e') {
+            $output .= 'e';
+        }
+        else {
+            return undef;
+        }
+    }
+
+    return $output;
+}
+
 sub tracker_error {
     my ($message) = @_;
     return ['d', ['bstr', 'failure reason'], ['bstr', $message]];
 }
 
-my %TORRENTS;
 sub tracker {
     my ($request) = @_;
 
-
-
-    if(!exists $request->{'qs'}{'info_hash'}) {
-        $request->Send404;
-        return;
+    # hide the tracker if the required parameters aren't there
+    foreach my $key ('port', 'left', 'info_hash') {
+        if(! exists $request->{'qs'}{$key}) {
+            $request->Send404;
+            return;
+        }
     }
 
-    my $rih = $request->{'qs'}{'info_hash'};
     my $dictref;
-    my @reqkey = ('port', 'left');
     while(1) {
-
-        foreach my $key (@reqkey) {
-            if(! exists $request->{'qs'}{$key}) {
-                $dictref = tracker_error("missing $key");
-                last;
-            }
-        }
         my $port = $request->{'qs'}{'port'};
         if($port ne unpack('S', pack('S', $port))) {
             $dictref = tracker_error("bad port");
@@ -7271,27 +7298,35 @@ sub tracker {
             last;
         }
 
+        my $rih = $request->{'qs'}{'info_hash'};
         if(!exists $TORRENTS{$rih}) {
             $dictref = tracker_error("The torrent does not exist!");
             last;
         }
 
+        my $ip = $request->{'client'}{'ip'};
+        my $ipport = pack('Nn', $ip, $port);
+
         my $event = $request->{'qs'}{'event'};
-        if( (! exists $TORRENTS{$rih}{ipport}) &&
-        (! defined $event) || ($event ne 'started')) {
+        if( (! exists $TORRENTS{$rih}{$ipport}) &&
+        ((! defined $event) || ($event ne 'started'))) {
             $dictref = tracker_error("first announce must include started event");
             last;
         }
 
+        if($left == 0) {
+            $TORRENTS{$rih}{$ipport}{'completed'} = 1;
+        }
+
         if(defined $event) {
             if($event eq 'started') {
-                $TORRENTS{$rih}{ipport} = {};
+                $TORRENTS{$rih}{$ipport} = {'exists' => 1};
             }
             elsif($event eq 'stopped') {
-                delete $TORRENTS{$rih}{ipport};
+                delete $TORRENTS{$rih}{$ipport};
             }
             elsif($event eq 'completed') {
-                $TORRENTS{$rih}{ipport}{'completed'} = 1;
+                #$TORRENTS{$rih}{$ipport}{'completed'} = 1;
             }
         }
 
@@ -7300,21 +7335,42 @@ sub tracker {
             $numwant = 50;
         }
 
-        my @dict = ('dict');
+        my @dict = ('d');
         push @dict, ['bstr', 'interval'], ['int', 120];
-        push @dict, ['bstr', 'complete'], ['int', 0];
-        push @dict, ['bstr', 'incomplete'], ['int', 0];
+        my $complete = 0;
+        my $incomplete = 0;
         my $pstr;
+        my $i = 0;
+        foreach my $peer (keys %{$TORRENTS{$rih}}) {
+            if($TORRENTS{$rih}{$peer}{'completed'}) {
+                $complete++;
+            }
+            else {
+                $incomplete++;
+            }
+            if($i++ < $numwant) {
+                if($peer ne $ipport) {
+                    $pstr .= $peer;
+                }
+            }
+        }
+        #push @dict, ['bstr', 'complete'], ['int', $complete];
+        #push @dict, ['bstr', 'incomplete'], ['int', $incomplete];
         push @dict, ['bstr', 'peers'], ['bstr', $pstr];
 
         $dictref = \@dict;
         last;
     }
 
-    # bencode
-
-
-    # send
+    # bencode and send
+    my $bdata = bencode($dictref);
+    if($bdata) {
+        $request->SendBytes('text/plain', $bdata);
+    }
+    else {
+        say "Critical: Failed to bencode!";
+        $request->Send404;
+    }
 }
 
 sub player_video_browsemovies {
