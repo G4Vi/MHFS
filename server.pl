@@ -6960,7 +6960,7 @@ sub torrent_set_file_priority {
 
 sub torrent_list_torrents {
     my ($evp, $callback) = @_;
-    rtxmlrpc($evp, ['d.multicall2', '', 'default', 'd.name=', 'd.hash=', 'd.size_bytes=', 'd.bytes_done='], sub {
+    rtxmlrpc($evp, ['d.multicall2', '', 'default', 'd.name=', 'd.hash=', 'd.size_bytes=', 'd.bytes_done=', 'd.is_private='], sub {
         my ($output) = @_;
         if($output =~ /ERROR/) {
             $output = undef;
@@ -7191,17 +7191,18 @@ sub torrent {
             my $buf = '<h1>Torrents</h1>';
             $buf  .=  '<h3><a href="video?action=browsemovies">Browse Movies</a> | <a href="video">Video</a> | <a href="music">Music</a></h3>';
             $buf   .= '<table border="1" >';
-            $buf   .= '<thead><tr><th>Name</th><th>Hash</th><th>Size</th><th>Done</th></tr></thead>';
+            $buf   .= '<thead><tr><th>Name</th><th>Hash</th><th>Size</th><th>Done</th><th>Private</th></tr></thead>';
             $buf   .= "<tbody>";
             my $curtor = '';
             while(1) {
-                if($curtor =~ /^\[(u?)['"](.+)['"],\s'(.+)',\s([0-9]+),\s([0-9]+)\]$/) {
+                if($curtor =~ /^\[(u?)['"](.+)['"],\s'(.+)',\s([0-9]+),\s([0-9]+),\s([0-9]+)\]$/) {
                     my %torrent;
                     my $is_unicode = $1;
                     $torrent{'name'} = $2;
                     $torrent{'hash'} = $3;
                     $torrent{'size_bytes'} = $4;
                     $torrent{'bytes_done'} = $5;
+                    $torrent{'private'} = $6;
                     if($is_unicode) {
                         my $escaped_unicode = $torrent{'name'};
                         $torrent{'name'} =~ s/\\u(.{4})/chr(hex($1))/eg;
@@ -7214,7 +7215,7 @@ sub torrent {
                             say 'html escaped ' . $torrent{'name'};
                         }
                     }
-                    $buf .= '<tr><td>' . $torrent{'name'} . '</td><td>' . $torrent{'hash'} . '</td><td>' . $torrent{'size_bytes'} . '</td><td>' . $torrent{'bytes_done'} . '</td></tr>';
+                    $buf .= '<tr><td>' . $torrent{'name'} . '</td><td>' . $torrent{'hash'} . '</td><td>' . $torrent{'size_bytes'} . '</td><td>' . $torrent{'bytes_done'} . '</td><td>' . $torrent{'private'} . '</td></tr>';
                     $curtor = '';
                 }
                 else {
