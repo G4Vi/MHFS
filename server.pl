@@ -448,6 +448,8 @@ package HTTP::BS::Server {
         return \%self;
     }
 
+
+
     sub onReadReady {
         my ($server) = @_;
         #try to create a client
@@ -463,15 +465,12 @@ package HTTP::BS::Server {
             say "server: no peerhost";
             return 1;
         }
-        my @values = $peerhost =~ /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
-        if(scalar(@values) != 4) {
-            say "using 0.0.0.0 as remote ip";
-            @values = (0,0,0,0);
+        my $remoteip = HTTP::BS::Server::Util::ParseIP($peerhost);
+        if(! defined $remoteip) {
+            say "server: error parsing ip";
+            return 1;
         }
-        foreach my $i (0..3) {
-            ($values[$i] >= 0) && ($values[$i] <= 255) or die("Invalid remote ip");
-        }
-        my $remoteip = ($values[0] << 24) | ($values[1] << 16) | ($values[2] << 8) | ($values[3]);
+
         my $ah;
         foreach my $allowedHost (@{$server->{'settings'}{'ARIPHOSTS_PARSED'}}) {
             #say "testing " . $allowedHost->{'ip'};
@@ -783,6 +782,20 @@ package HTTP::BS::Server::Util {
         # default to binary
         return $combined{$ext} // $combined{'bin'};
     }
+
+    sub ParseIP {
+        my ($ipstring) = @_;
+        my @values = $ipstring =~ /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+        if(scalar(@values) != 4) {
+            return undef;
+        }
+        foreach my $i (0..3) {
+            ($values[$i] >= 0) && ($values[$i] <= 255) or return undef;
+        }
+        my $remoteip = ($values[0] << 24) | ($values[1] << 16) | ($values[2] << 8) | ($values[3]);
+        return $remoteip;
+    }
+
     1;
 }
 
@@ -941,6 +954,18 @@ package HTTP::BS::Server::Client::Request {
                 my $printhostname = $self->{'header'}{'Host'} // '';
                 say "Host: $printhostname does not match ". $self->{'client'}{'reqhostname'};
                 return undef;
+            }
+        }
+
+        # assign the requestip
+        $self->{'ip'} = (($self->{'client'}{'ip'} == ((127 << 24) | 1)) && $self->{'header'}{'X-Forwarded-For'}) ? HTTP::BS::Server::Util::ParseIP($self->{'header'}{'X-Forwarded-For'}) : '';
+        $self->{'ip'} ||= $self->{'client'}{'ip'};
+        my $hairpin = $self->{'client'}{'server'}{'settings'}{'HAIRPIN'};
+        my $realip = $self->{'client'}{'server'}{'settings'}{'REALIP'};
+        if($hairpin && $realip) {
+            if($self->{'ip'} == HTTP::BS::Server::Util::ParseIP($hairpin)) {
+                say "HACK for NAT hairpin, overriding ip with REALIP";
+                $self->{'ip'} = HTTP::BS::Server::Util::ParseIP($realip);
             }
         }
 
@@ -7305,7 +7330,7 @@ sub tracker {
             last;
         }
 
-        my $ip = $request->{'client'}{'ip'};
+        my $ip = $request->{'ip'};
         my $ipport = pack('Nn', $ip, $port);
 
         my $event = $request->{'qs'}{'event'};
@@ -7340,7 +7365,7 @@ sub tracker {
         push @dict, ['bstr', 'interval'], ['int', 120];
         my $complete = 0;
         my $incomplete = 0;
-        my $pstr;
+        my $pstr = '';
         my $i = 0;
         foreach my $peer (keys %{$TORRENTS{$rih}}) {
             if($TORRENTS{$rih}{$peer}{'completed'}) {
