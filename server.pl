@@ -3,7 +3,7 @@
 
 # load this conditionally as it will faile if syscall.ph doesn't exist
 BEGIN {
-if( eval {
+use constant HAS_EventLoop_Poll_Linux_Timer => eval {
 package MHFS::EventLoop::Poll::Linux::Timer {
     use strict; use warnings;
     use IO::Poll qw(POLLIN POLLOUT POLLHUP);
@@ -81,16 +81,10 @@ package MHFS::EventLoop::Poll::Linux::Timer {
         $self->{'evp'}->check_timers;
         return 1;
     };
-
 1;
-};
-}) {
-    our $HAS_EventLoop_Poll_Linux_Timer = 1;
-}
-else {
-    our $HAS_EventLoop_Poll_Linux_Timer = 0;
-}
-}
+}  # package
+}; # eval
+}; # BEGIN
 
 # You must provide event handlers for the events you are listening for
 # return undef to have them removed from poll's structures
@@ -355,7 +349,7 @@ package MHFS::EventLoop::Poll {
     say 'archname: '. $Config{archname};
     my $isLoaded;
     if(index($Config{archname}, 'x86_64-linux') != -1) {
-        if(! $main::HAS_EventLoop_Poll_Linux_Timer) {
+        if(! main::HAS_EventLoop_Poll_Linux_Timer) {
             warn "MHFS::EventLoop::Poll: Failed to load MHFS::EventLoop::Poll::Linux::Timer NOT enabling timerfd support!";
         }
         else {
@@ -428,15 +422,15 @@ package MHFS::HTTP::Server {
         foreach my $plugin (@{$plugins}) {
 
             foreach my $timer (@{$plugin->{'timers'}}) {
-                say 'plugin(' . ref($plugin) . '): adding timer';
+                say __PACKAGE__.': adding '.ref($plugin).' timer';
                 $self{'evp'}->add_timer(@{$timer});
             }
             if(my $func = $plugin->{'uploader'}) {
-                say 'plugin(' . ref($plugin) . '): adding uploader';
+                say __PACKAGE__.': adding '. ref($plugin) .' uploader';
                 push (@{$self{'uploaders'}}, $func);
             }
             foreach my $route (@{$plugin->{'routes'}}) {
-                say 'plugin(' . ref($plugin) . '): adding route ' . $route->[0];
+                say __PACKAGE__.': adding ' . ref($plugin) . ' route ' . $route->[0];
                 push @{$self{'routes'}}, $route;
             }
             $plugin->{'server'} = \%self;
@@ -505,7 +499,7 @@ package MHFS::Util {
     use POSIX ();
     use Cwd qw(abs_path getcwd);
     use Encode qw(decode encode);
-    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'shell_escape', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME');
+    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'shell_escape', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME', 'get_printable_utf8');
     # single threaded locks
     sub LOCK_GET_LOCKDATA {
         my ($filename) = @_;
@@ -790,6 +784,101 @@ package MHFS::Util {
             ($values[$i] <= 255) or return undef;
         }
         return ($values[0] << 24) | ($values[1] << 16) | ($values[2] << 8) | ($values[3]);
+    }
+
+    sub surrogatepairtochar {
+        my ($hi, $low) = @_;
+        my $codepoint = 0x10000 + (ord($hi) - 0xD800) * 0x400 + (ord($low) - 0xDC00);
+        return pack('U', $codepoint);
+    }
+
+    sub surrogatecodepointpairtochar {
+        my ($hi, $low) = @_;
+        my $codepoint = 0x10000 + ($hi - 0xD800) * 0x400 + ($low - 0xDC00);
+        return pack('U', $codepoint);
+    }
+
+    # returns the byte length and the codepoint
+    sub peek_utf8_codepoint {
+        my ($octets) = @_;
+        my @rules = (
+            [0xE0, 0xC0, 2], # 2 byte sequence
+            [0xF0, 0xE0, 3], # 3 byte sequence
+            [0XF8, 0xF0, 4]  # 4 byte sequence
+        );
+
+        length($$octets) >= 1 or return undef;
+        my $byte = substr($$octets, 0, 1);
+        my $byteval = ord($byte);
+        my $charlen = 1;
+        foreach my $rule (@rules) {
+            if(($byteval & $rule->[0]) == $rule->[1]) {
+                $charlen = $rule->[2];
+                last;
+            }
+        }
+        length($octets) >= $charlen or return undef;
+        my $char = decode("utf8", substr($$octets, 0, $charlen));
+        if(length($char) > 1) {
+            return {'codepoint' => 0xFFFD, 'bytelength' => 1};
+        }
+        return { 'codepoint' => ord($char), 'bytelength' => $charlen};
+    }
+
+    sub get_printable_utf8 {
+        my ($octets) = @_;
+
+        #my $cp = ((0xF0 & 0x07) << 18) | ((0x9F & 0x3F) << 12) | ((0x8E & 0x3F) << 6) | (0x84 & 0x3F);
+        #say "codepoint $cp";
+#
+        #my @tests = (
+        ##    #(chr(1 << 7) . chr(1 << 7)),
+        ##    #chr(0xED).chr(0xA0).chr(0xBC),
+        ##    #chr(0xED).chr(0xA0).chr(0xBC) . chr(1 << 7) . chr(1 << 7),
+        ##    #chr(0xED).chr(0xED).chr(0xED),
+        ##    chr(0xF0).chr(0xBF).chr(0xBF).chr(0xBF),
+        ##    chr(0xED).chr(0xA0),
+        ##    chr(0xF0).chr(0x9F).chr(0x8E).chr(0x84),
+        ##    chr(0xF0).chr(0x9F).chr(0x8E),
+        #    chr(0xF0).chr(0x9F).chr(0x8E).chr(0x84),
+        #    chr(0xF0).chr(0x9F).chr(0x8E).chr(0x04),
+        #    chr(0x7F),
+        #    chr(0xC1).chr(0x80),
+        #    chr(0xC2).chr(0x80)
+        #);
+##
+        #foreach my $test (@tests) {
+        #    my $unsafedec = decode("utf8", $test, Encode::LEAVE_SRC);
+        #    my $safedec = decode('UTF-8', $test);
+        #    say "udec $unsafedec len ".length($unsafedec)." sdec $safedec len ".length($safedec);
+        #    say "udec codepoint ".ord($unsafedec)." sdec codepoint " . ord($safedec);
+        #}
+        #die;
+
+        my $res;
+        while(length($octets)) {
+            $res .= decode('UTF-8', $octets, Encode::FB_QUIET);
+            last if(!length($octets));
+
+            # by default replace with the replacement char
+            my $chardata = peek_utf8_codepoint(\$octets);
+            my $toappend = chr(0xFFFD);
+            my $toremove = $chardata->{'bytelength'};
+
+            # if we find a surrogate pair, make the actual codepoint
+            if(($chardata->{'bytelength'} == 3) && ($chardata->{'codepoint'}  >= 0xD800) && ($chardata->{'codepoint'} <= 0xDBFF)) {
+                my $secondchar = peek_utf8_codepoint(\substr($octets, 3, 3));
+                if($secondchar && ($secondchar->{'bytelength'} == 3) && ($secondchar->{'codepoint'}  >= 0xDC00) && ($secondchar->{'codepoint'} <= 0xDFFF)) {
+                    $toappend = surrogatecodepointpairtochar($chardata->{'codepoint'}, $secondchar->{'codepoint'});
+                    $toremove += 3;
+                }
+            }
+
+            $res .= $toappend;
+            substr($octets, 0, $toremove, '');
+        }
+
+        return $res;
     }
 
     1;
@@ -1126,7 +1215,7 @@ package MHFS::HTTP::Server::Client::Request {
             $filename = $opt->{'inline'};
         }
         if($filename) {
-            my $sendablebytes = encode('UTF-8', MHFS::Plugin::MusicLibrary::get_printable_utf8($filename));
+            my $sendablebytes = encode('UTF-8', get_printable_utf8($filename));
             $headtext .=   "Content-Disposition: $disposition; filename*=UTF-8''".uri_escape($sendablebytes)."; filename=\"$sendablebytes\"\r\n";
         }
 
@@ -1631,7 +1720,6 @@ package MHFS::HTTP::Server::Client::Request {
         $self->{'on_read_ready'}->();
     }
 
-    # TODO, check plugins for SendOption
     sub SendFile {
         my ($self, $requestfile) = @_;
         foreach my $uploader (@{$self->{'client'}{'server'}{'uploaders'}}) {
@@ -1640,8 +1728,6 @@ package MHFS::HTTP::Server::Client::Request {
         say "SendFile - SendLocalFile $requestfile";
         return $self->SendLocalFile($requestfile);
     }
-
-
 
     1;
 }
@@ -2454,6 +2540,240 @@ package MHFS::Process {
     1;
 }
 
+package MHFS::Settings {
+    use strict; use warnings;
+    use feature 'say';
+    use Scalar::Util qw(reftype);
+    use File::Basename;
+    MHFS::Util->import();
+
+    sub write_settings_file {
+        my ($SETTINGS, $filepath) = @_;
+        my $indentcnst = 4;
+        my $indentspace = '';
+        my $settingscontents = "#!/usr/bin/perl\nuse strict; use warnings;\n\nmy \$SETTINGS = ";
+
+        # we only encode SCALARS. Loop through expanding HASH and ARRAY refs into SCALARS
+        my @values = ($SETTINGS);
+        while(@values) {
+            my $value = shift @values;
+            my $type = reftype($value);
+            say "value: $value type: " . ($type // 'undef');
+            my $raw;
+            my $noindent;
+            if(! defined $type) {
+                if(defined $value) {
+                    # process lead control code if provided
+                    $raw = ($value eq '__raw');
+                    $noindent = ($value eq '__noindent');
+                    if($raw || $noindent) {
+                        $value = shift @values;
+                    }
+                }
+
+                if(! defined $value) {
+                    $raw = 1;
+                    $value = 'undef';
+                    $type = 'SCALAR';
+                }
+                elsif($value eq '__indent-') {
+                    substr($indentspace, -4, 4, '');
+                    # don't actually encode anything
+                    $value = '';
+                    $type = 'NOP';
+                }
+                else {
+                    $type = reftype($value) // 'SCALAR';
+                }
+            }
+
+            say "v2: $value type $type";
+            if($type eq 'NOP') {
+                next;
+            }
+
+            $settingscontents .= $indentspace if(! $noindent);
+            if($type eq 'SCALAR') {
+                # encode the value
+                if(! $raw) {
+                    $value =~ s/'/\\'/g;
+                    $value = "'".$value."'";
+                }
+
+                # add the value to the buffer
+                $settingscontents .= $value;
+                $settingscontents .= ",\n" if(! $raw);
+            }
+            elsif($type eq 'HASH') {
+                $settingscontents .= "{\n";
+                $indentspace .= (' ' x $indentcnst);
+                my @toprepend;
+                foreach my $key (keys %{$value}) {
+                    push @toprepend, '__raw', "'$key' => ", '__noindent', $value->{$key};
+                }
+                push @toprepend, '__indent-', '__raw', "},\n";
+                unshift(@values, @toprepend);
+            }
+            elsif($type eq 'ARRAY') {
+                $settingscontents .= "[\n";
+                $indentspace .= (' ' x $indentcnst);
+                my @toprepend = @{$value};
+                push @toprepend, '__indent-', '__raw', "],\n";
+                unshift(@values, @toprepend);
+            }
+            else {
+                die("Unknown type: $type");
+            }
+        }
+        chop $settingscontents;
+        chop $settingscontents;
+        $settingscontents .= ";\n\n\$SETTINGS;\n";
+        system('mkdir', '-p', dirname($filepath)) == 0 or die("failed to make settings folder");
+        write_file($filepath,  $settingscontents);
+    }
+
+    sub load {
+        my ($scriptpath) = @_;
+        # locate files based on appdir
+        my $SCRIPTDIR = dirname($scriptpath);
+        my $APPDIR = $SCRIPTDIR;
+
+        # set the settings dir to the first that exists of $XDG_CONFIG_HOME and $XDG_CONFIG_DIRS
+        # if none exist and $APPDIR/.conf use that
+        # https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
+        my $XDG_CONFIG_HOME = $ENV{'XDG_CONFIG_HOME'} || ($ENV{'HOME'} . '/.config');
+        my @configdirs = ($XDG_CONFIG_HOME);
+        my $XDG_CONFIG_DIRS = $ENV{'XDG_CONFIG_DIRS'} || '/etc/xdg';
+        push @configdirs, split(':', $XDG_CONFIG_DIRS);
+        my $CFGDIR;
+        foreach my $cfgdir (@configdirs) {
+            if(-d "$cfgdir/mhfs") {
+                $CFGDIR = "$cfgdir/mhfs";
+                last;
+            }
+        }
+        my $appdirconfig = $APPDIR . '/.conf';
+        my $useappdirconfig = -d $appdirconfig;
+        $CFGDIR ||= ($useappdirconfig ? $appdirconfig : ($XDG_CONFIG_HOME.'/mhfs'));
+
+        # load the settings
+        my $SETTINGS_FILE = $CFGDIR . '/settings.pl';
+        my $SETTINGS = do ($SETTINGS_FILE);
+        if(! $SETTINGS) {
+            die "Error parsing settingsfile: $@" if($@);
+            die "Cannot read settingsfile: $!" if(-e $SETTINGS_FILE);
+            warn("No settings file found, using default settings");
+            $SETTINGS = {};
+        }
+        # load defaults for unset values
+        $SETTINGS->{'HOST'} ||= "127.0.0.1";
+        $SETTINGS->{'PORT'} ||= 8000;
+
+        $SETTINGS->{'ALLOWED_REMOTEIP_HOSTS'} ||= [
+            ['127.0.0.1'],
+        ];
+
+        # write the default settings
+        if(! -f $SETTINGS_FILE) {
+            write_settings_file($SETTINGS, $SETTINGS_FILE);
+        }
+
+        # determine the allowed remoteip host combos. only ipv4 now sorry
+        $SETTINGS->{'ARIPHOSTS_PARSED'} = [];
+        foreach my $rule (@{$SETTINGS->{'ALLOWED_REMOTEIP_HOSTS'}}) {
+            # parse IPv4 with optional CIDR
+            $rule->[0] =~ /^([^\/]+)(?:\/(\d{1,2}))?$/ or die("Invalid rule: " . $rule->[0]);
+            my $ipstr = $1; my $cidr = $2 // 32;
+            my $ip = MHFS::Util::ParseIPv4($ipstr);
+            $ip or die("Invalid rule: " . $rule->[0]);
+            $cidr >= 0 && $cidr <= 32  or die("Invalid rule: " . $rule->[0]);
+            my $mask = (0xFFFFFFFF << (32-$cidr)) & 0xFFFFFFFF;
+            say "ip: $ip cidr: $cidr subnetmask $mask";
+            my %ariphost = (
+                'ip' => $ip,
+                'subnetmask' => $mask
+            );
+            # store the server hostname if verification is required for this rule
+            $ariphost{'hostname'} = $rule->[1] if($rule->[1]);
+            # store overriding absurl from this host if provided
+            if($rule->[2]) {
+                my $absurl = $rule->[2];
+                chop $absurl if(index($absurl, '/', length($absurl)-1) != -1);
+                $ariphost{'absurl'} = $absurl;
+            }
+            # store whether to trust connections with this host
+            if($rule->[3] && ($rule->[3] eq 'trusted')) {
+                say "trusted";
+                $ariphost{'trusted'} = 1;
+            }
+            push @{ $SETTINGS->{'ARIPHOSTS_PARSED'}}, \%ariphost;
+        }
+
+        # $APPDIR in $SETTINGS takes precedence over previous value
+        if($SETTINGS->{'APPDIR'}) {
+            if($useappdirconfig && ($APPDIR ne $SETTINGS->{'APPDIR'})) {
+                warn('Using $APPDIR different from config path');
+                warn("was $APPDIR, changing to $SETTINGS->{'APPDIR'}");
+            }
+            $APPDIR = $SETTINGS->{'APPDIR'};
+        }
+        else {
+            $SETTINGS->{'APPDIR'} = $APPDIR;
+        }
+
+
+        if( ! $SETTINGS->{'DOCUMENTROOT'}) {
+            $SETTINGS->{'DOCUMENTROOT'} = "$APPDIR/public_html";
+        }
+        $SETTINGS->{'XSEND'} //= 0;
+        my $tmpdir = $SETTINGS->{'TMPDIR'} || ($ENV{'XDG_CACHE_HOME'} || ($ENV{'HOME'} . '/.cache')) . '/mhfs';
+        delete $SETTINGS->{'TMPDIR'}; # Use specific temp dir instead
+        if(!$SETTINGS->{'RUNTIME_DIR'} ) {
+            my $RUNTIMEDIR = $ENV{'XDG_RUNTIME_DIR'};
+            if(! $RUNTIMEDIR ) {
+                $RUNTIMEDIR = $tmpdir;
+                warn("XDG_RUNTIME_DIR not defined!, using $RUNTIMEDIR instead");
+            }
+            $SETTINGS->{'RUNTIME_DIR'} = $RUNTIMEDIR.'/mhfs';
+        }
+        $SETTINGS->{'VIDEO_TMPDIR'} ||= $tmpdir.'/video';
+        $SETTINGS->{'MUSIC_TMPDIR'} ||= $tmpdir.'/music';
+        $SETTINGS->{'GENERIC_TMPDIR'} ||= $tmpdir.'/tmp';
+        $SETTINGS->{'SECRET_TMPDIR'} ||= $tmpdir.'/secret';
+        $SETTINGS->{'MEDIALIBRARIES'}{'movies'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/movies",
+        $SETTINGS->{'MEDIALIBRARIES'}{'tv'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/tv",
+        $SETTINGS->{'MEDIALIBRARIES'}{'music'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/music",
+        $SETTINGS->{'BINDIR'} ||= $APPDIR . '/bin';
+        $SETTINGS->{'DOCDIR'} ||= $APPDIR . '/doc';
+        $SETTINGS->{'CFGDIR'} ||= $CFGDIR;
+
+        # specify timeouts in seconds
+        $SETTINGS->{'TIMEOUT'} ||= 75;
+        # time to recieve the requestline and headers before closing the conn
+        $SETTINGS->{'recvrequestimeout'} ||= $SETTINGS->{'TIMEOUT'};
+        # maximum time allowed between sends
+        $SETTINGS->{'sendresponsetimeout'} ||= $SETTINGS->{'TIMEOUT'};
+
+        $SETTINGS->{'Torrent'}{'pyroscope'} ||= $ENV{'HOME'} .'/.local/pyroscope';
+
+        if( ! defined $SETTINGS->{'MusicLibrary'}) {
+            my $folder = $SETTINGS->{'DOCUMENTROOT'} . "/media/music";
+            if(-d $folder) {
+                $SETTINGS->{'MusicLibrary'} = {
+                'enabled' => 1,
+                'sources' => [
+                    { 'type' => 'local', 'folder' => $folder},
+                    ]
+                };
+            }
+        }
+
+        return $SETTINGS;
+    }
+
+    1;
+};
+
 package MHFS::Plugin::MusicLibrary {
     use strict; use warnings;
     use feature 'say';
@@ -2470,7 +2790,7 @@ package MHFS::Plugin::MusicLibrary {
     BEGIN {
         if( ! (eval "use JSON; 1")) {
             eval "use JSON::PP; 1" or die "No implementation of JSON available, see doc/dependencies.txt";
-            warn "plugin(MHFS::Plugin::MusicLibrary): Using PurePerl version of JSON (JSON::PP), see doc/dependencies.txt about installing faster version";
+            warn __PACKAGE__.": Using PurePerl version of JSON (JSON::PP), see doc/dependencies.txt about installing faster version";
         }
     }
     use Encode qw(decode encode);
@@ -2491,110 +2811,10 @@ package MHFS::Plugin::MusicLibrary {
     use lib File::Spec->catdir($FindBin::Bin, 'XS', 'blib', 'lib');
     use lib File::Spec->catdir($FindBin::Bin, 'XS', 'blib', 'arch');
     BEGIN {
-        if(! (eval "use MHFS::XS; 1")) {
-            warn "plugin(MHFS::Plugin::MusicLibrary): XS not available";
-            our $HAS_MHFS_XS = 0;
+        use constant HAS_MHFS_XS => (eval "use MHFS::XS; 1");
+        if(! HAS_MHFS_XS) {
+            warn __PACKAGE__.": XS not available";
         }
-        else {
-            our $HAS_MHFS_XS = 1;
-        }
-        #use MHFS::XS;
-        #our $HAS_MHFS_XS = 1;
-    }
-
-    sub surrogatepairtochar {
-        my ($hi, $low) = @_;
-        my $codepoint = 0x10000 + (ord($hi) - 0xD800) * 0x400 + (ord($low) - 0xDC00);
-        return pack('U', $codepoint);
-    }
-
-    sub surrogatecodepointpairtochar {
-        my ($hi, $low) = @_;
-        my $codepoint = 0x10000 + ($hi - 0xD800) * 0x400 + ($low - 0xDC00);
-        return pack('U', $codepoint);
-    }
-
-    # returns the byte length and the codepoint
-    sub peek_utf8_codepoint {
-        my ($octets) = @_;
-        my @rules = (
-            [0xE0, 0xC0, 2], # 2 byte sequence
-            [0xF0, 0xE0, 3], # 3 byte sequence
-            [0XF8, 0xF0, 4]  # 4 byte sequence
-        );
-
-        length($$octets) >= 1 or return undef;
-        my $byte = substr($$octets, 0, 1);
-        my $byteval = ord($byte);
-        my $charlen = 1;
-        foreach my $rule (@rules) {
-            if(($byteval & $rule->[0]) == $rule->[1]) {
-                $charlen = $rule->[2];
-                last;
-            }
-        }
-        length($octets) >= $charlen or return undef;
-        my $char = decode("utf8", substr($$octets, 0, $charlen));
-        if(length($char) > 1) {
-            return {'codepoint' => 0xFFFD, 'bytelength' => 1};
-        }
-        return { 'codepoint' => ord($char), 'bytelength' => $charlen};
-    }
-
-    sub get_printable_utf8 {
-        my ($octets) = @_;
-
-        #my $cp = ((0xF0 & 0x07) << 18) | ((0x9F & 0x3F) << 12) | ((0x8E & 0x3F) << 6) | (0x84 & 0x3F);
-        #say "codepoint $cp";
-#
-        #my @tests = (
-        ##    #(chr(1 << 7) . chr(1 << 7)),
-        ##    #chr(0xED).chr(0xA0).chr(0xBC),
-        ##    #chr(0xED).chr(0xA0).chr(0xBC) . chr(1 << 7) . chr(1 << 7),
-        ##    #chr(0xED).chr(0xED).chr(0xED),
-        ##    chr(0xF0).chr(0xBF).chr(0xBF).chr(0xBF),
-        ##    chr(0xED).chr(0xA0),
-        ##    chr(0xF0).chr(0x9F).chr(0x8E).chr(0x84),
-        ##    chr(0xF0).chr(0x9F).chr(0x8E),
-        #    chr(0xF0).chr(0x9F).chr(0x8E).chr(0x84),
-        #    chr(0xF0).chr(0x9F).chr(0x8E).chr(0x04),
-        #    chr(0x7F),
-        #    chr(0xC1).chr(0x80),
-        #    chr(0xC2).chr(0x80)
-        #);
-##
-        #foreach my $test (@tests) {
-        #    my $unsafedec = decode("utf8", $test, Encode::LEAVE_SRC);
-        #    my $safedec = decode('UTF-8', $test);
-        #    say "udec $unsafedec len ".length($unsafedec)." sdec $safedec len ".length($safedec);
-        #    say "udec codepoint ".ord($unsafedec)." sdec codepoint " . ord($safedec);
-        #}
-        #die;
-
-        my $res;
-        while(length($octets)) {
-            $res .= decode('UTF-8', $octets, Encode::FB_QUIET);
-            last if(!length($octets));
-
-            # by default replace with the replacement char
-            my $chardata = peek_utf8_codepoint(\$octets);
-            my $toappend = chr(0xFFFD);
-            my $toremove = $chardata->{'bytelength'};
-
-            # if we find a surrogate pair, make the actual codepoint
-            if(($chardata->{'bytelength'} == 3) && ($chardata->{'codepoint'}  >= 0xD800) && ($chardata->{'codepoint'} <= 0xDBFF)) {
-                my $secondchar = peek_utf8_codepoint(\substr($octets, 3, 3));
-                if($secondchar && ($secondchar->{'bytelength'} == 3) && ($secondchar->{'codepoint'}  >= 0xDC00) && ($secondchar->{'codepoint'} <= 0xDFFF)) {
-                    $toappend = surrogatecodepointpairtochar($chardata->{'codepoint'}, $secondchar->{'codepoint'});
-                    $toremove += 3;
-                }
-            }
-
-            $res .= $toappend;
-            substr($octets, 0, $toremove, '');
-        }
-
-        return $res;
     }
 
     # read the directory tree from desk and store
@@ -2604,25 +2824,6 @@ package MHFS::Plugin::MusicLibrary {
         my $statinfo = stat($path);
         return undef if(! $statinfo);
         my $basepath = basename($path);
-
-        # determine the UTF-8 name of the file
-        #my $utf8name;
-        #{
-        #local $@;
-        #eval {
-        #    # Fast path, is strict UTF-8
-        #    $utf8name = decode('UTF-8', $basepath, Encode::FB_CROAK | Encode::LEAVE_SRC);
-        #    1;
-        #};
-        #}
-        #if(! $utf8name) {
-        #    say "MHFS::Plugin::MusicLibrary: BuildLibrary slow path decode - " . decode('UTF-8', $basepath);
-        #    my $loose = decode("utf8", $basepath);
-        #    $loose =~ s/([\x{D800}-\x{DBFF}])([\x{DC00}-\x{DFFF}])/surrogatepairtochar($1, $2)/ueg; #uncode, expression replacement, global
-        #    Encode::_utf8_off($loose);
-        #    $utf8name = decode('UTF-8', $loose);
-        #    say "MHFS::Plugin::MusicLibrary: BuildLibrary slow path decode changed to : $utf8name";
-        #}
         my $utf8name = get_printable_utf8($basepath);
 
         if(!S_ISDIR($statinfo->mode)){
@@ -2746,13 +2947,13 @@ package MHFS::Plugin::MusicLibrary {
 
         # maybe not allow everyone to do these commands?
         if($request->{'qs'}{'forcerefresh'}) {
-            say "MHFS::Plugin::MusicLibrary: forcerefresh";
+            say __PACKAGE__.": forcerefresh";
             $self->BuildLibraries();
         }
         elsif($request->{'qs'}{'refresh'}) {
-            say "MHFS::Plugin::MusicLibrary: refresh";
+            say __PACKAGE__.": refresh";
             UpdateLibrariesAsync($self, $request->{'client'}{'server'}{'evp'}, sub {
-                say "MHFS::Plugin::MusicLibrary: refresh done";
+                say __PACKAGE__.": refresh done";
                 $request->{'qs'}{'refresh'} = 0;
                 SendLibrary($self, $request);
             });
@@ -2809,7 +3010,7 @@ package MHFS::Plugin::MusicLibrary {
             return $request->SendRedirect(307, 'static/music_inc/', $qs);
         }
         elsif($fmt eq 'legacy') {
-            say "MHFS::Plugin::MusicLibrary: legacy";
+            say __PACKAGE__.": legacy";
             return $request->SendBytes("text/html; charset=utf-8", $self->{'html'});
         }
         else {
@@ -2823,14 +3024,14 @@ package MHFS::Plugin::MusicLibrary {
     sub SendTrack {
         my ($request, $tosend) = @_;
         if(defined $request->{'qs'}{'part'}) {
-            if(! $MHFS::Plugin::MusicLibrary::HAS_MHFS_XS) {
-                say "MHFS::Plugin::MusicLibrary: route not available without XS";
+            if(! HAS_MHFS_XS) {
+                say __PACKAGE__.": route not available without XS";
                 $request->Send503();
                 return;
             }
 
             if(! $TRACKDURATION{$tosend}) {
-                say "MHFS::Plugin::MusicLibrary: failed to get track duration";
+                say __PACKAGE__.": failed to get track duration";
                 $request->Send503();
                 return;
             }
@@ -2847,8 +3048,8 @@ package MHFS::Plugin::MusicLibrary {
             $request->SendBytes('audio/flac', $res);
         }
         elsif(defined $request->{'qs'}{'fmt'} && ($request->{'qs'}{'fmt'}  eq 'wav')) {
-            if(! $MHFS::Plugin::MusicLibrary::HAS_MHFS_XS) {
-                say "MHFS::Plugin::MusicLibrary: route not available without XS";
+            if(! HAS_MHFS_XS) {
+                say __PACKAGE__.": route not available without XS";
                 $request->Send503();
                 return;
             }
@@ -2888,7 +3089,7 @@ package MHFS::Plugin::MusicLibrary {
             }
             # Send the total pcm frame count for mp3
             elsif(lc(substr($tosend, -4)) eq '.mp3') {
-                if($MHFS::Plugin::MusicLibrary::HAS_MHFS_XS) {
+                if(HAS_MHFS_XS) {
                     if(! $TRACKINFO{$tosend}) {
                         $TRACKINFO{$tosend} = { 'TOTALSAMPLES' => MHFS::XS::get_totalPCMFrameCount($tosend) };
                         say "mp3 totalPCMFrames: " . $TRACKINFO{$tosend}{'TOTALSAMPLES'};
@@ -3093,9 +3294,9 @@ package MHFS::Plugin::MusicLibrary {
         foreach my $source (@{$tocheck}) {
             my $lib;
             if($source->{'type'} eq 'local') {
-                say "MHFS::Plugin::MusicLibrary: building music " . clock_gettime(CLOCK_MONOTONIC);
+                say __PACKAGE__.": building music " . clock_gettime(CLOCK_MONOTONIC);
                 $lib = BuildLibrary($source->{'folder'});
-                say "MHFS::Plugin::MusicLibrary: done building music " . clock_gettime(CLOCK_MONOTONIC);
+                say __PACKAGE__.": done building music " . clock_gettime(CLOCK_MONOTONIC);
             }
             elsif($source->{'type'} eq 'ssh') {
             }
@@ -3190,8 +3391,8 @@ package MHFS::Plugin::MusicLibrary {
     sub SendResources {
         my ($self, $request) = @_;
 
-        if(! $MHFS::Plugin::MusicLibrary::HAS_MHFS_XS) {
-            say "MHFS::Plugin::MusicLibrary: route not available without XS";
+        if(! HAS_MHFS_XS) {
+            say __PACKAGE__.": route not available without XS";
             $request->Send503();
             return;
         }
@@ -3319,13 +3520,13 @@ package MHFS::Plugin::MusicLibrary {
         my ($class, $settings) = @_;
         my $self =  {'settings' => $settings};
         bless $self, $class;
-        my $pstart = 'plugin(' . ref($self) . '): ';
+        my $pstart = __PACKAGE__.":";
 
         # no sources until loaded
         $self->{'sources'} = [];
-        $self->{'html_gapless'} = 'MHFS::Plugin::MusicLibrary not loaded';
-        $self->{'html'} = 'MHFS::Plugin::MusicLibrary not loaded';
-        $self->{'musicdbhtml'} = 'MHFS::Plugin::MusicLibrary not loaded';
+        $self->{'html_gapless'} = __PACKAGE__.' not loaded';
+        $self->{'html'} = __PACKAGE__.' not loaded';
+        $self->{'musicdbhtml'} = __PACKAGE__.' not loaded';
         $self->{'musicdbjson'} = '{}';
 
         my $musicpageroute = sub {
@@ -3357,7 +3558,7 @@ package MHFS::Plugin::MusicLibrary {
             # update the library at start and periodically
             [0, 300, sub {
                 my ($timer, $current_time, $evp) = @_;
-                say "$pstart  library timer";
+                say "$pstart library timer";
                 UpdateLibrariesAsync($self, $evp, sub {
                     say "$pstart library timer done";
                 });
@@ -3384,7 +3585,7 @@ package MHFS::Plugin::Youtube {
     BEGIN {
         if( ! (eval "use JSON; 1")) {
             eval "use JSON::PP; 1" or die "No implementation of JSON available, see doc/dependencies.txt";
-            warn "plugin(MHFS::Plugin::Youtube): Using PurePerl version of JSON (JSON::PP), see doc/dependencies.txt about installing faster version";
+            warn __PACKAGE__.": Using PurePerl version of JSON (JSON::PP), see doc/dependencies.txt about installing faster version";
         }
     }
 
@@ -3624,7 +3825,7 @@ package MHFS::Plugin::Youtube {
         $self->{'minsize'} = '1048576';
         $self->{'VIDEOFORMATS'} = {'yt' => {'lock' => 1, 'ext' => 'yt', 'plugin' => $self}};
 
-        my $pstart = 'plugin(' . ref($self) . '): ';
+        my $pstart = __PACKAGE__.": ";
 
         # check for youtube-dl and install if not specified
         my $youtubedl = $settings->{'Youtube'}{'youtube-dl'};
@@ -3632,7 +3833,7 @@ package MHFS::Plugin::Youtube {
         if(!$youtubedl) {
             my $mhfsytdl = $settings->{'GENERIC_TMPDIR'}.'/youtube-dl';
             if(! -e $mhfsytdl) {
-                say "$pstart Attempting to download youtube-dl";
+                say $pstart."Attempting to download youtube-dl";
                 if(system('curl', '-L', 'https://yt-dl.org/downloads/latest/youtube-dl', '-o', $mhfsytdl) != 0) {
                     say $pstart . "Failed to download youtube-dl. plugin load failed";
                     return undef;
@@ -3642,7 +3843,7 @@ package MHFS::Plugin::Youtube {
                     return undef;
                 }
                 $installed = 1;
-                say "$pstart youtube-dl successfully installed!";
+                say $pstart."youtube-dl successfully installed!";
             }
             $youtubedl = $mhfsytdl;
         }
@@ -3667,240 +3868,6 @@ package MHFS::Plugin::Youtube {
 
     1;
 }
-
-package MHFS::Settings {
-    use strict; use warnings;
-    use feature 'say';
-    use Scalar::Util qw(reftype);
-    use File::Basename;
-    MHFS::Util->import();
-
-    sub write_settings_file {
-        my ($SETTINGS, $filepath) = @_;
-        my $indentcnst = 4;
-        my $indentspace = '';
-        my $settingscontents = "#!/usr/bin/perl\nuse strict; use warnings;\n\nmy \$SETTINGS = ";
-
-        # we only encode SCALARS. Loop through expanding HASH and ARRAY refs into SCALARS
-        my @values = ($SETTINGS);
-        while(@values) {
-            my $value = shift @values;
-            my $type = reftype($value);
-            say "value: $value type: " . ($type // 'undef');
-            my $raw;
-            my $noindent;
-            if(! defined $type) {
-                if(defined $value) {
-                    # process lead control code if provided
-                    $raw = ($value eq '__raw');
-                    $noindent = ($value eq '__noindent');
-                    if($raw || $noindent) {
-                        $value = shift @values;
-                    }
-                }
-
-                if(! defined $value) {
-                    $raw = 1;
-                    $value = 'undef';
-                    $type = 'SCALAR';
-                }
-                elsif($value eq '__indent-') {
-                    substr($indentspace, -4, 4, '');
-                    # don't actually encode anything
-                    $value = '';
-                    $type = 'NOP';
-                }
-                else {
-                    $type = reftype($value) // 'SCALAR';
-                }
-            }
-
-            say "v2: $value type $type";
-            if($type eq 'NOP') {
-                next;
-            }
-
-            $settingscontents .= $indentspace if(! $noindent);
-            if($type eq 'SCALAR') {
-                # encode the value
-                if(! $raw) {
-                    $value =~ s/'/\\'/g;
-                    $value = "'".$value."'";
-                }
-
-                # add the value to the buffer
-                $settingscontents .= $value;
-                $settingscontents .= ",\n" if(! $raw);
-            }
-            elsif($type eq 'HASH') {
-                $settingscontents .= "{\n";
-                $indentspace .= (' ' x $indentcnst);
-                my @toprepend;
-                foreach my $key (keys %{$value}) {
-                    push @toprepend, '__raw', "'$key' => ", '__noindent', $value->{$key};
-                }
-                push @toprepend, '__indent-', '__raw', "},\n";
-                unshift(@values, @toprepend);
-            }
-            elsif($type eq 'ARRAY') {
-                $settingscontents .= "[\n";
-                $indentspace .= (' ' x $indentcnst);
-                my @toprepend = @{$value};
-                push @toprepend, '__indent-', '__raw', "],\n";
-                unshift(@values, @toprepend);
-            }
-            else {
-                die("Unknown type: $type");
-            }
-        }
-        chop $settingscontents;
-        chop $settingscontents;
-        $settingscontents .= ";\n\n\$SETTINGS;\n";
-        system('mkdir', '-p', dirname($filepath)) == 0 or die("failed to make settings folder");
-        write_file($filepath,  $settingscontents);
-    }
-
-    sub load {
-        my ($scriptpath) = @_;
-        # locate files based on appdir
-        my $SCRIPTDIR = dirname($scriptpath);
-        my $APPDIR = $SCRIPTDIR;
-
-        # set the settings dir to the first that exists of $XDG_CONFIG_HOME and $XDG_CONFIG_DIRS
-        # if none exist and $APPDIR/.conf use that
-        # https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
-        my $XDG_CONFIG_HOME = $ENV{'XDG_CONFIG_HOME'} || ($ENV{'HOME'} . '/.config');
-        my @configdirs = ($XDG_CONFIG_HOME);
-        my $XDG_CONFIG_DIRS = $ENV{'XDG_CONFIG_DIRS'} || '/etc/xdg';
-        push @configdirs, split(':', $XDG_CONFIG_DIRS);
-        my $CFGDIR;
-        foreach my $cfgdir (@configdirs) {
-            if(-d "$cfgdir/mhfs") {
-                $CFGDIR = "$cfgdir/mhfs";
-                last;
-            }
-        }
-        my $appdirconfig = $APPDIR . '/.conf';
-        my $useappdirconfig = -d $appdirconfig;
-        $CFGDIR ||= ($useappdirconfig ? $appdirconfig : ($XDG_CONFIG_HOME.'/mhfs'));
-
-        # load the settings
-        my $SETTINGS_FILE = $CFGDIR . '/settings.pl';
-        my $SETTINGS = do ($SETTINGS_FILE);
-        if(! $SETTINGS) {
-            die "Error parsing settingsfile: $@" if($@);
-            die "Cannot read settingsfile: $!" if(-e $SETTINGS_FILE);
-            warn("No settings file found, using default settings");
-            $SETTINGS = {};
-        }
-        # load defaults for unset values
-        $SETTINGS->{'HOST'} ||= "127.0.0.1";
-        $SETTINGS->{'PORT'} ||= 8000;
-
-        $SETTINGS->{'ALLOWED_REMOTEIP_HOSTS'} ||= [
-            ['127.0.0.1'],
-        ];
-
-        # write the default settings
-        if(! -f $SETTINGS_FILE) {
-            write_settings_file($SETTINGS, $SETTINGS_FILE);
-        }
-
-        # determine the allowed remoteip host combos. only ipv4 now sorry
-        $SETTINGS->{'ARIPHOSTS_PARSED'} = [];
-        foreach my $rule (@{$SETTINGS->{'ALLOWED_REMOTEIP_HOSTS'}}) {
-            # parse IPv4 with optional CIDR
-            $rule->[0] =~ /^([^\/]+)(?:\/(\d{1,2}))?$/ or die("Invalid rule: " . $rule->[0]);
-            my $ipstr = $1; my $cidr = $2 // 32;
-            my $ip = MHFS::Util::ParseIPv4($ipstr);
-            $ip or die("Invalid rule: " . $rule->[0]);
-            $cidr >= 0 && $cidr <= 32  or die("Invalid rule: " . $rule->[0]);
-            my $mask = (0xFFFFFFFF << (32-$cidr)) & 0xFFFFFFFF;
-            say "ip: $ip cidr: $cidr subnetmask $mask";
-            my %ariphost = (
-                'ip' => $ip,
-                'subnetmask' => $mask
-            );
-            # store the server hostname if verification is required for this rule
-            $ariphost{'hostname'} = $rule->[1] if($rule->[1]);
-            # store overriding absurl from this host if provided
-            if($rule->[2]) {
-                my $absurl = $rule->[2];
-                chop $absurl if(index($absurl, '/', length($absurl)-1) != -1);
-                $ariphost{'absurl'} = $absurl;
-            }
-            # store whether to trust connections with this host
-            if($rule->[3] && ($rule->[3] eq 'trusted')) {
-                say "trusted";
-                $ariphost{'trusted'} = 1;
-            }
-            push @{ $SETTINGS->{'ARIPHOSTS_PARSED'}}, \%ariphost;
-        }
-
-        # $APPDIR in $SETTINGS takes precedence over previous value
-        if($SETTINGS->{'APPDIR'}) {
-            if($useappdirconfig && ($APPDIR ne $SETTINGS->{'APPDIR'})) {
-                warn('Using $APPDIR different from config path');
-                warn("was $APPDIR, changing to $SETTINGS->{'APPDIR'}");
-            }
-            $APPDIR = $SETTINGS->{'APPDIR'};
-        }
-        else {
-            $SETTINGS->{'APPDIR'} = $APPDIR;
-        }
-
-
-        if( ! $SETTINGS->{'DOCUMENTROOT'}) {
-            $SETTINGS->{'DOCUMENTROOT'} = "$APPDIR/public_html";
-        }
-        $SETTINGS->{'XSEND'} //= 0;
-        my $tmpdir = $SETTINGS->{'TMPDIR'} || ($ENV{'XDG_CACHE_HOME'} || ($ENV{'HOME'} . '/.cache')) . '/mhfs';
-        delete $SETTINGS->{'TMPDIR'}; # Use specific temp dir instead
-        if(!$SETTINGS->{'RUNTIME_DIR'} ) {
-            my $RUNTIMEDIR = $ENV{'XDG_RUNTIME_DIR'};
-            if(! $RUNTIMEDIR ) {
-                $RUNTIMEDIR = $tmpdir;
-                warn("XDG_RUNTIME_DIR not defined!, using $RUNTIMEDIR instead");
-            }
-            $SETTINGS->{'RUNTIME_DIR'} = $RUNTIMEDIR.'/mhfs';
-        }
-        $SETTINGS->{'VIDEO_TMPDIR'} ||= $tmpdir.'/video';
-        $SETTINGS->{'MUSIC_TMPDIR'} ||= $tmpdir.'/music';
-        $SETTINGS->{'GENERIC_TMPDIR'} ||= $tmpdir.'/tmp';
-        $SETTINGS->{'SECRET_TMPDIR'} ||= $tmpdir.'/secret';
-        $SETTINGS->{'MEDIALIBRARIES'}{'movies'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/movies",
-        $SETTINGS->{'MEDIALIBRARIES'}{'tv'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/tv",
-        $SETTINGS->{'MEDIALIBRARIES'}{'music'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/music",
-        $SETTINGS->{'BINDIR'} ||= $APPDIR . '/bin';
-        $SETTINGS->{'DOCDIR'} ||= $APPDIR . '/doc';
-        $SETTINGS->{'CFGDIR'} ||= $CFGDIR;
-
-        # specify timeouts in seconds
-        $SETTINGS->{'TIMEOUT'} ||= 75;
-        # time to recieve the requestline and headers before closing the conn
-        $SETTINGS->{'recvrequestimeout'} ||= $SETTINGS->{'TIMEOUT'};
-        # maximum time allowed between sends
-        $SETTINGS->{'sendresponsetimeout'} ||= $SETTINGS->{'TIMEOUT'};
-
-        $SETTINGS->{'Torrent'}{'pyroscope'} ||= $ENV{'HOME'} .'/.local/pyroscope';
-
-        if( ! defined $SETTINGS->{'MusicLibrary'}) {
-            my $folder = $SETTINGS->{'DOCUMENTROOT'} . "/media/music";
-            if(-d $folder) {
-                $SETTINGS->{'MusicLibrary'} = {
-                'enabled' => 1,
-                'sources' => [
-                    { 'type' => 'local', 'folder' => $folder},
-                    ]
-                };
-            }
-        }
-
-        return $SETTINGS;
-    }
-
-    1;
-};
 
 package App::MHFS; #Media Http File Server
 use version; our $VERSION = version->declare("v0.1.0");
@@ -4018,7 +3985,7 @@ my %VIDEOFORMATS = (
 # get_video formats from plugins
 foreach my $plugin(@plugins) {
     foreach my $videoformat (keys %{$plugin->{'VIDEOFORMATS'}}) {
-        say 'plugin(' . ref($plugin) . '): adding video format ' . $videoformat;
+        say __PACKAGE__.': adding '.ref($plugin).' video format ' . $videoformat;
         $VIDEOFORMATS{$videoformat} = $plugin->{'VIDEOFORMATS'}{$videoformat};
     }
 }
