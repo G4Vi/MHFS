@@ -452,29 +452,27 @@ package HTTP::BS::Server {
 
     sub onReadReady {
         my ($server) = @_;
-        #try to create a client
+        # accept the connection
         my $csock = $server->{'sock'}->accept();
         if(! $csock) {
             say "server: cannot accept client";
             return 1;
         }
 
-        # check the remote ip
+        # gather connection details and verify client host is acceptable
         my $peerhost = $csock->peerhost();
         if(! $peerhost) {
             say "server: no peerhost";
             return 1;
         }
-        my $remoteip = HTTP::BS::Server::Util::ParseIP($peerhost);
-        if(! defined $remoteip) {
+        my $peerip = HTTP::BS::Server::Util::ParseIPv4($peerhost);
+        if(! defined $peerip) {
             say "server: error parsing ip";
             return 1;
         }
-
         my $ah;
         foreach my $allowedHost (@{$server->{'settings'}{'ARIPHOSTS_PARSED'}}) {
-            #say "testing " . $allowedHost->{'ip'};
-            if(($remoteip & $allowedHost->{'subnetmask'}) == $allowedHost->{'ip'}) {
+            if(($peerip & $allowedHost->{'subnetmask'}) == $allowedHost->{'ip'}) {
                 $ah = $allowedHost;
                 last;
             }
@@ -483,16 +481,16 @@ package HTTP::BS::Server {
             say "server: $peerhost not allowed";
             return 1;
         }
-
         my $peerport = $csock->peerport();
         if(! $peerport) {
             say "server: no peerport";
             return 1;
         }
 
+        # finally create the client
         say "-------------------------------------------------";
         say "NEW CONN " . $peerhost . ':' . $peerport;
-        my $cref = HTTP::BS::Server::Client->new($csock, $server, $ah->{'reqhostname'}, $ah->{'absurl'}, $remoteip);
+        my $cref = HTTP::BS::Server::Client->new($csock, $server, $ah, $peerip);
         return 1;
     }
 
@@ -783,17 +781,16 @@ package HTTP::BS::Server::Util {
         return $combined{$ext} // $combined{'bin'};
     }
 
-    sub ParseIP {
+    sub ParseIPv4 {
         my ($ipstring) = @_;
         my @values = $ipstring =~ /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
         if(scalar(@values) != 4) {
             return undef;
         }
         foreach my $i (0..3) {
-            ($values[$i] >= 0) && ($values[$i] <= 255) or return undef;
+            ($values[$i] <= 255) or return undef;
         }
-        my $remoteip = ($values[0] << 24) | ($values[1] << 16) | ($values[2] << 8) | ($values[3]);
-        return $remoteip;
+        return ($values[0] << 24) | ($values[1] << 16) | ($values[2] << 8) | ($values[3]);
     }
 
     1;
@@ -948,18 +945,31 @@ package HTTP::BS::Server::Client::Request {
         # when $ipos is 0 we recieved the end of the headers: \r\n\r\n
 
         # verify correct host is specified when required
-        if($self->{'client'}{'reqhostname'}) {
+        if($self->{'client'}{'serverhostname'}) {
             if((! $self->{'header'}{'Host'}) ||
-            ($self->{'header'}{'Host'} ne $self->{'client'}{'reqhostname'})) {
+            ($self->{'header'}{'Host'} ne $self->{'client'}{'serverhostname'})) {
                 my $printhostname = $self->{'header'}{'Host'} // '';
-                say "Host: $printhostname does not match ". $self->{'client'}{'reqhostname'};
+                say "Host: $printhostname does not match ". $self->{'client'}{'serverhostname'};
                 return undef;
             }
         }
 
-        # assign the requestip
-        $self->{'ip'} = (($self->{'client'}{'ip'} == ((127 << 24) | 1)) && $self->{'header'}{'X-Forwarded-For'}) ? HTTP::BS::Server::Util::ParseIP($self->{'header'}{'X-Forwarded-For'}) : '';
-        $self->{'ip'} ||= $self->{'client'}{'ip'};
+        $self->{'ip'} = $self->{'client'}{'ip'};
+
+        # drops conns for naughty client's using forbidden headers
+        if(!$self->{'client'}{'trusted'}) {
+            my @absolutelyforbidden = ('X-Forwarded-For');
+            foreach my $forbidden (@absolutelyforbidden) {
+                if( exists $self->{'header'}{$forbidden}) {
+                    say "header $forbidden is forbidden!";
+                    return undef;
+                }
+            }
+        }
+        # process reverse proxy headers
+        else {
+            $self->{'ip'} = HTTP::BS::Server::Util::ParseIPv4($self->{'header'}{'X-Forwarded-For'}) if($self->{'header'}{'X-Forwarded-For'});
+        }
         my $netmap = $self->{'client'}{'server'}{'settings'}{'NETMAP'};
         if($netmap && (($self->{'ip'} >> 24) == $netmap->[0])) {
             say "HACK for netmap converting to local ip";
@@ -1652,9 +1662,9 @@ package HTTP::BS::Server::Client {
     $SIG{ __DIE__ } = sub { Carp::confess( @_ ) };
 
     sub new {
-        my ($class, $sock, $server, $reqhostname, $absurl, $ip) = @_;
+        my ($class, $sock, $server, $serverhostinfo, $ip) = @_;
         $sock->blocking(0);
-        my %self = ('sock' => $sock, 'server' => $server, 'time' => clock_gettime(CLOCK_MONOTONIC), 'inbuf' => '', 'reqhostname' => $reqhostname, 'absurl' => $absurl, 'ip' => $ip);
+        my %self = ('sock' => $sock, 'server' => $server, 'time' => clock_gettime(CLOCK_MONOTONIC), 'inbuf' => '', 'serverhostname' => $serverhostinfo->{'hostname'}, 'absurl' => $serverhostinfo->{'absurl'}, 'ip' => $ip, 'trusted' => $serverhostinfo->{'trusted'});
         $self{'CONN-ID'} = int($self{'time'} * rand()); # insecure uid
         $self{'outheaders'}{'X-MHFS-CONN-ID'} = sprintf("%X", $self{'CONN-ID'});
         bless \%self, $class;
@@ -3870,13 +3880,11 @@ package MHFS::Settings {
         # determine the allowed remoteip host combos. only ipv4 now sorry
         $SETTINGS->{'ARIPHOSTS_PARSED'} = [];
         foreach my $rule (@{$SETTINGS->{'ALLOWED_REMOTEIP_HOSTS'}}) {
-            my @values = $rule->[0] =~ /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?:\/(\d{1,2}))?$/;
-            scalar(@values) >= 4 or die("Invalid rule: " . $rule->[0]);
-            foreach my $i (0..3) {
-                ($values[$i] >= 0) && ($values[$i] <= 255) or die("Invalid rule: " . $rule->[0]);
-            }
-            my $ip = ($values[0] << 24) | ($values[1] << 16) | ($values[2] << 8) | ($values[3]);
-            my $cidr = $values[4] // 32;
+            # parse IPv4 with optional CIDR
+            $rule->[0] =~ /^([^\/]+)(?:\/(\d{1,2}))?$/ or die("Invalid rule: " . $rule->[0]);
+            my $ipstr = $1; my $cidr = $2 // 32;
+            my $ip = HTTP::BS::Server::Util::ParseIPv4($ipstr);
+            $ip or die("Invalid rule: " . $rule->[0]);
             $cidr >= 0 && $cidr <= 32  or die("Invalid rule: " . $rule->[0]);
             my $mask = (0xFFFFFFFF << (32-$cidr)) & 0xFFFFFFFF;
             say "ip: $ip cidr: $cidr subnetmask $mask";
@@ -3884,11 +3892,18 @@ package MHFS::Settings {
                 'ip' => $ip,
                 'subnetmask' => $mask
             );
-            $ariphost{'reqhostname'} = $rule->[1] if($rule->[1]);
+            # store the server hostname if verification is required for this rule
+            $ariphost{'hostname'} = $rule->[1] if($rule->[1]);
+            # store overriding absurl from this host if provided
             if($rule->[2]) {
                 my $absurl = $rule->[2];
                 chop $absurl if(index($absurl, '/', length($absurl)-1) != -1);
                 $ariphost{'absurl'} = $absurl;
+            }
+            # store whether to trust connections with this host
+            if($rule->[3] && ($rule->[3] eq 'trusted')) {
+                say "trusted";
+                $ariphost{'trusted'} = 1;
             }
             push @{ $SETTINGS->{'ARIPHOSTS_PARSED'}}, \%ariphost;
         }
@@ -7380,7 +7395,7 @@ sub tracker {
                     my $pubip = $request->{'client'}{'server'}{'settings'}{'PUBLICIP'};
                     if($netmap && (($values[0] == $netmap->[1]) && (unpack('C', $ipport) != $netmap->[1])) && $pubip) {
                         say "HACK converting local peer to public ip";
-                        $peer = pack('Nn', HTTP::BS::Server::Util::ParseIP($pubip), (($values[4] << 8) | $values[5]));
+                        $peer = pack('Nn', HTTP::BS::Server::Util::ParseIPv4($pubip), (($values[4] << 8) | $values[5]));
                         @values = unpack('CCCCCC', $peer);
                     }
                     say "sending peer $values[0].$values[1].$values[2].$values[3] at port " . (($values[4] << 8) | $values[5]);
