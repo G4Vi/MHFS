@@ -960,13 +960,10 @@ package HTTP::BS::Server::Client::Request {
         # assign the requestip
         $self->{'ip'} = (($self->{'client'}{'ip'} == ((127 << 24) | 1)) && $self->{'header'}{'X-Forwarded-For'}) ? HTTP::BS::Server::Util::ParseIP($self->{'header'}{'X-Forwarded-For'}) : '';
         $self->{'ip'} ||= $self->{'client'}{'ip'};
-        my $hairpin = $self->{'client'}{'server'}{'settings'}{'HAIRPIN'};
-        my $realip = $self->{'client'}{'server'}{'settings'}{'REALIP'};
-        if($hairpin && $realip) {
-            if($self->{'ip'} == HTTP::BS::Server::Util::ParseIP($hairpin)) {
-                say "HACK for NAT hairpin, overriding ip with REALIP";
-                $self->{'ip'} = HTTP::BS::Server::Util::ParseIP($realip);
-            }
+        my $netmap = $self->{'client'}{'server'}{'settings'}{'NETMAP'};
+        if($netmap && (($self->{'ip'} >> 24) == $netmap->[0])) {
+            say "HACK for netmap converting to local ip";
+            $self->{'ip'} = ($self->{'ip'} & 0xFFFFFF) | ($netmap->[1] << 24);
         }
 
         # remove the final \r\n
@@ -7332,6 +7329,8 @@ sub tracker {
 
         my $ip = $request->{'ip'};
         my $ipport = pack('Nn', $ip, $port);
+        my @pvals = unpack('CCCCCC', $ipport);
+        say "announce ipport: $pvals[0].$pvals[1].$pvals[2].$pvals[3] at port " . (($pvals[4] << 8) | $pvals[5]);
 
         my $event = $request->{'qs'}{'event'};
         if( (! exists $TORRENTS{$rih}{$ipport}) &&
@@ -7376,6 +7375,15 @@ sub tracker {
             }
             if($i++ < $numwant) {
                 if($peer ne $ipport) {
+                    my @values = unpack('CCCCCC', $peer);
+                    my $netmap = $request->{'client'}{'server'}{'settings'}{'NETMAP'};
+                    my $pubip = $request->{'client'}{'server'}{'settings'}{'PUBLICIP'};
+                    if($netmap && (($values[0] == $netmap->[1]) && (unpack('C', $ipport) != $netmap->[1])) && $pubip) {
+                        say "HACK converting local peer to public ip";
+                        $peer = pack('Nn', HTTP::BS::Server::Util::ParseIP($pubip), (($values[4] << 8) | $values[5]));
+                        @values = unpack('CCCCCC', $peer);
+                    }
+                    say "sending peer $values[0].$values[1].$values[2].$values[3] at port " . (($values[4] << 8) | $values[5]);
                     $pstr .= $peer;
                 }
             }
