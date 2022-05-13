@@ -3985,7 +3985,7 @@ package MHFS::Plugin::BitTorrent::Tracker {
             if(defined $event) {
                 say __PACKAGE__.": announce event $event";
                 if($event eq 'started') {
-                    $self->{torrents}{$rih}{$ipport} = {'exists' => 1};
+                    #$self->{torrents}{$rih}{$ipport} = {'exists' => 1};
                 }
                 elsif($event eq 'stopped') {
                     $self->removeTorrentPeer($rih, $ipport, " received stopped message");
@@ -4068,7 +4068,8 @@ package MHFS::Plugin::BitTorrent::Tracker {
                 say __PACKAGE__.": evict peers timer";
                 foreach my $infohash (keys %{$self->{'torrents'}}) {
                     foreach my $peer (keys %{$self->{'torrents'}{$infohash}}) {
-                        if(($current_time - $peer->{'last_announce'}) > ($self->{'announce_interval'}+60)) {
+                        my $peerdata = $self->{'torrents'}{$infohash}{$peer};
+                        if(($current_time - $peerdata->{'last_announce'}) > ($self->{'announce_interval'}+60)) {
                             $self->removeTorrentPeer($infohash, $peer, " timeout");
                         }
                     }
