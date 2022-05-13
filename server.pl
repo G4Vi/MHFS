@@ -1044,9 +1044,14 @@ package MHFS::HTTP::Server::Client::Request {
 
         $self->{'ip'} = $self->{'client'}{'ip'};
 
+        # check if we're trusted (we can trust the headers such as from reverse proxy)
+        my $trusted;
+        if($self->{'client'}{'X-MHFS-PROXY-KEY'} && $self->{'header'}{'X-MHFS-PROXY-KEY'}) {
+            $trusted = $self->{'client'}{'X-MHFS-PROXY-KEY'} eq $self->{'header'}{'X-MHFS-PROXY-KEY'};
+        }
         # drops conns for naughty client's using forbidden headers
-        if(!$self->{'client'}{'trusted'}) {
-            my @absolutelyforbidden = ('X-Forwarded-For');
+        if(!$trusted) {
+            my @absolutelyforbidden = ('X-MHFS-PROXY-KEY', 'X-Forwarded-For');
             foreach my $forbidden (@absolutelyforbidden) {
                 if( exists $self->{'header'}{$forbidden}) {
                     say "header $forbidden is forbidden!";
@@ -1056,6 +1061,7 @@ package MHFS::HTTP::Server::Client::Request {
         }
         # process reverse proxy headers
         else {
+            delete $self->{'header'}{'X-MHFS-PROXY-KEY'};
             $self->{'ip'} = MHFS::Util::ParseIPv4($self->{'header'}{'X-Forwarded-For'}) if($self->{'header'}{'X-Forwarded-For'});
         }
         my $netmap = $self->{'client'}{'server'}{'settings'}{'NETMAP'};
@@ -1749,7 +1755,7 @@ package MHFS::HTTP::Server::Client {
     sub new {
         my ($class, $sock, $server, $serverhostinfo, $ip) = @_;
         $sock->blocking(0);
-        my %self = ('sock' => $sock, 'server' => $server, 'time' => clock_gettime(CLOCK_MONOTONIC), 'inbuf' => '', 'serverhostname' => $serverhostinfo->{'hostname'}, 'absurl' => $serverhostinfo->{'absurl'}, 'ip' => $ip, 'trusted' => $serverhostinfo->{'trusted'});
+        my %self = ('sock' => $sock, 'server' => $server, 'time' => clock_gettime(CLOCK_MONOTONIC), 'inbuf' => '', 'serverhostname' => $serverhostinfo->{'hostname'}, 'absurl' => $serverhostinfo->{'absurl'}, 'ip' => $ip, 'X-MHFS-PROXY-KEY' => $serverhostinfo->{'X-MHFS-PROXY-KEY'});
         $self{'CONN-ID'} = int($self{'time'} * rand()); # insecure uid
         $self{'outheaders'}{'X-MHFS-CONN-ID'} = sprintf("%X", $self{'CONN-ID'});
         bless \%self, $class;
@@ -2685,7 +2691,7 @@ package MHFS::Settings {
             $rule->[0] =~ /^([^\/]+)(?:\/(\d{1,2}))?$/ or die("Invalid rule: " . $rule->[0]);
             my $ipstr = $1; my $cidr = $2 // 32;
             my $ip = MHFS::Util::ParseIPv4($ipstr);
-            $ip or die("Invalid rule: " . $rule->[0]);
+            defined($ip) or die("Invalid rule: " . $rule->[0]);
             $cidr >= 0 && $cidr <= 32  or die("Invalid rule: " . $rule->[0]);
             my $mask = (0xFFFFFFFF << (32-$cidr)) & 0xFFFFFFFF;
             say "ip: $ip cidr: $cidr subnetmask $mask";
@@ -2702,9 +2708,9 @@ package MHFS::Settings {
                 $ariphost{'absurl'} = $absurl;
             }
             # store whether to trust connections with this host
-            if($rule->[3] && ($rule->[3] eq 'trusted')) {
-                say "trusted";
-                $ariphost{'trusted'} = 1;
+            if($rule->[3]) {
+                say "set X-MHFS-PROXY-KEY for host";
+                $ariphost{'X-MHFS-PROXY-KEY'} = $rule->[3];
             }
             push @{ $SETTINGS->{'ARIPHOSTS_PARSED'}}, \%ariphost;
         }

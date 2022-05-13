@@ -85,7 +85,10 @@ Settings are loaded from [$XDG_CONFIG_DIRS](https://specifications.freedesktop.o
 ```perl
 'ALLOWED_REMOTEIP_HOSTS' => [
     # localhost connections for reverse proxy, use https://domain.net/mhfs to build absolute urls
-    ['127.0.0.1', undef, 'https://domain.net/mhfs'],
+    # the optional forth parameter is needed to ensure the the request came from the reverse proxy.
+    # It is checked against X-MHFS-PROXY-KEY request header. It MUST be set for features requiring
+    # headers (X-Forwarded-For, etc) from the reverse proxy such as MHFS::Plugin::BitTorrent::Tracker
+    ['127.0.0.1', undef, 'https://domain.net/mhfs', 'SETME_SUPER_SEKRET_PLEASE'],
     ['192.168.1.0/24'], # anyone on our LAN
     ['0.0.0.0/0', 'domain.net:8000'] # direct connections with the correct Host header
 ],
@@ -126,11 +129,12 @@ Timeouts are used to boot idle or non-responsive connections.
 
 #### Reverse Proxy
 To add TLS and allows access without entering a port in the URL, reverse proxying is recommended. Instructions for `apache2`, but it's similar for nginx:
-Setup [Let's Encrypt certbot](https://certbot.eff.org/instructions) to manage TLS if not already setup. Add the following to your site config i.e. `/etc/apache2/sites-available/000-default-le-ssl.conf` replacing `mhfs` with the name you want on your site. Keep the trailing slashes [or absense of] the same.
+Setup [Let's Encrypt certbot](https://certbot.eff.org/instructions) to manage TLS if not already setup. Add the following to your site config i.e. `/etc/apache2/sites-available/000-default-le-ssl.conf` replacing `mhfs` with the name you want on your site. Set `X-MHFS-PROXY-KEY` request header to the same secret as before. Keep the trailing slashes [or absense of] the same.
 ```apache2
 RewriteEngine On
 RewriteRule ^/mhfs$ mhfs/ [R,L]
 <Location "/mhfs/">
+  RequestHeader set X-MHFS-PROXY-KEY SAME_SUPER_SEKRET_AS_SET_IN_CONFIG
   AddOutputFilterByType DEFLATE application/json
   AddOutputFilterByType DEFLATE text/html
   AddOutputFilterByType DEFLATE application/javascript
@@ -140,7 +144,7 @@ RewriteRule ^/mhfs$ mhfs/ [R,L]
   ProxyPass "http://127.0.0.1:8000/"
 </Location>
 ```
-Reload apache2 `# service apache2 reload`
+Reload apache2 `# service apache2 reload`. If it fails install `mod_headers`:  maybe `a2enmod headers && service apache2 restart`
 
 #### Setup account to run MHFS
 `# adduser --system mhfs` - create the daemon user and home directory
