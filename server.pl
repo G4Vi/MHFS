@@ -4,7 +4,7 @@
 # load this conditionally as it will faile if syscall.ph doesn't exist
 BEGIN {
 if( eval {
-package EventLoop::Poll::Linux::Timer {
+package MHFS::EventLoop::Poll::Linux::Timer {
     use strict; use warnings;
     use IO::Poll qw(POLLIN POLLOUT POLLHUP);
     use POSIX qw/floor/;
@@ -94,7 +94,7 @@ else {
 
 # You must provide event handlers for the events you are listening for
 # return undef to have them removed from poll's structures
-package EventLoop::Poll::Base {
+package MHFS::EventLoop::Poll::Base {
     use strict; use warnings;
     use feature 'say';
     use POSIX ":sys_wait_h";
@@ -296,14 +296,14 @@ package EventLoop::Poll::Base {
     1;
 }
 
-package EventLoop::Poll::Linux {
+package MHFS::EventLoop::Poll::Linux {
     use strict; use warnings;
     use feature 'say';
-    use parent -norequire, 'EventLoop::Poll::Base';
+    use parent -norequire, 'MHFS::EventLoop::Poll::Base';
     sub new {
         my $class = shift;
         my $self = $class->SUPER::new(@_);
-        $self->{'evp_timer'} = EventLoop::Poll::Linux::Timer->new($self);
+        $self->{'evp_timer'} = MHFS::EventLoop::Poll::Linux::Timer->new($self);
         return $self;
     };
 
@@ -347,7 +347,7 @@ package EventLoop::Poll::Linux {
     1;
 }
 
-package EventLoop::Poll {
+package MHFS::EventLoop::Poll {
     use strict; use warnings;
     use feature 'say';
     BEGIN {
@@ -356,26 +356,25 @@ package EventLoop::Poll {
     my $isLoaded;
     if(index($Config{archname}, 'x86_64-linux') != -1) {
         if(! $main::HAS_EventLoop_Poll_Linux_Timer) {
-            warn "EventLoop::Poll: Failed to load EventLoop::Poll::Linux::Timer NOT enabling timerfd support!";
+            warn "MHFS::EventLoop::Poll: Failed to load MHFS::EventLoop::Poll::Linux::Timer NOT enabling timerfd support!";
         }
         else {
-            say "EventLoop::Poll: enabling timerfd support";
+            say "MHFS::EventLoop::Poll: enabling timerfd support";
             $isLoaded = 1;
-            eval "use parent -norequire, 'EventLoop::Poll::Linux'";
+            eval "use parent -norequire, 'MHFS::EventLoop::Poll::Linux'";
         }
     }
     else {
-        say "EventLoop::Poll no timerfd support for ".$Config{archname};
+        say "MHFS::EventLoop::Poll no timerfd support for ".$Config{archname};
     }
     if(! $isLoaded) {
-        eval "use parent -norequire, 'EventLoop::Poll::Base'";
+        eval "use parent -norequire, 'MHFS::EventLoop::Poll::Base'";
     }
     }
 1;
 }
 
-# bs = byte serving?
-package HTTP::BS::Server {
+package MHFS::HTTP::Server {
     use strict; use warnings;
     use feature 'say';
     use IO::Socket::INET;
@@ -385,7 +384,7 @@ package HTTP::BS::Server {
     use Data::Dumper;
     use Config;
 
-    HTTP::BS::Server::Util->import();
+    MHFS::Util->import();
 
     sub new {
         my ($class, $settings, $routes, $plugins) = @_;
@@ -418,7 +417,7 @@ package HTTP::BS::Server {
             use Socket qw(TCP_QUICKACK);
             $sock->setsockopt(IPPROTO_TCP, TCP_QUICKACK, 1) or die("Failed to set TCP_QUICKACK");
         }
-        my $evp = EventLoop::Poll->new;
+        my $evp = MHFS::EventLoop::Poll->new;
         my %self = ( 'settings' => $settings, 'routes' => $routes, 'route_default' => pop @$routes, 'plugins' => $plugins, 'sock' => $sock, 'evp' => $evp, 'uploaders' => [], 'sesh' =>
         { 'newindex' => 0, 'sessions' => {}});
         bless \%self, $class;
@@ -465,7 +464,7 @@ package HTTP::BS::Server {
             say "server: no peerhost";
             return 1;
         }
-        my $peerip = HTTP::BS::Server::Util::ParseIPv4($peerhost);
+        my $peerip = MHFS::Util::ParseIPv4($peerhost);
         if(! defined $peerip) {
             say "server: error parsing ip";
             return 1;
@@ -490,14 +489,14 @@ package HTTP::BS::Server {
         # finally create the client
         say "-------------------------------------------------";
         say "NEW CONN " . $peerhost . ':' . $peerport;
-        my $cref = HTTP::BS::Server::Client->new($csock, $server, $ah, $peerip);
+        my $cref = MHFS::HTTP::Server::Client->new($csock, $server, $ah, $peerip);
         return 1;
     }
 
     1;
 }
 
-package HTTP::BS::Server::Util {
+package MHFS::Util {
     use strict; use warnings;
     use feature 'say';
     use Exporter 'import';
@@ -796,8 +795,8 @@ package HTTP::BS::Server::Util {
     1;
 }
 
-package HTTP::BS::Server::Client::Request {
-    HTTP::BS::Server::Util->import();
+package MHFS::HTTP::Server::Client::Request {
+    MHFS::Util->import();
     use strict; use warnings;
     use feature 'say';
     use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
@@ -842,7 +841,7 @@ package HTTP::BS::Server::Client::Request {
         $self{'outheaders'}{'X-MHFS-CONN-ID'} = $client->{'outheaders'}{'X-MHFS-CONN-ID'};
         $self{'rl'} = 0;
         # we want the request
-        $client->SetEvents(POLLIN | EventLoop::Poll->ALWAYSMASK );
+        $client->SetEvents(POLLIN | MHFS::EventLoop::Poll->ALWAYSMASK );
         $self{'recvrequesttimerid'} = $client->AddClientCloseTimer($client->{'server'}{'settings'}{'recvrequestimeout'}, $client->{'CONN-ID'});
         return \%self;
     }
@@ -968,7 +967,7 @@ package HTTP::BS::Server::Client::Request {
         }
         # process reverse proxy headers
         else {
-            $self->{'ip'} = HTTP::BS::Server::Util::ParseIPv4($self->{'header'}{'X-Forwarded-For'}) if($self->{'header'}{'X-Forwarded-For'});
+            $self->{'ip'} = MHFS::Util::ParseIPv4($self->{'header'}{'X-Forwarded-For'}) if($self->{'header'}{'X-Forwarded-For'});
         }
         my $netmap = $self->{'client'}{'server'}{'settings'}{'NETMAP'};
         if($netmap && (($self->{'ip'} >> 24) == $netmap->[0])) {
@@ -983,7 +982,7 @@ package HTTP::BS::Server::Client::Request {
             $self->{'header'}{'_RangeEnd'} = ($2 ne  '') ? $2 : undef;
         }
         $self->{'on_read_ready'} = undef;
-        $self->{'client'}->SetEvents(EventLoop::Poll->ALWAYSMASK );
+        $self->{'client'}->SetEvents(MHFS::EventLoop::Poll->ALWAYSMASK );
         $self->{'client'}->KillClientCloseTimer($self->{'recvrequesttimerid'});
         $self->{'recvrequesttimerid'} = undef;
 
@@ -1032,7 +1031,7 @@ package HTTP::BS::Server::Client::Request {
         }
 
         $self->{'response'} = $fileitem;
-        $self->{'client'}->SetEvents(POLLOUT | EventLoop::Poll->ALWAYSMASK );
+        $self->{'client'}->SetEvents(POLLOUT | MHFS::EventLoop::Poll->ALWAYSMASK );
     }
 
     sub _SendDataItem {
@@ -1127,7 +1126,7 @@ package HTTP::BS::Server::Client::Request {
             $filename = $opt->{'inline'};
         }
         if($filename) {
-            my $sendablebytes = encode('UTF-8', MusicLibrary::get_printable_utf8($filename));
+            my $sendablebytes = encode('UTF-8', MHFS::Plugin::MusicLibrary::get_printable_utf8($filename));
             $headtext .=   "Content-Disposition: $disposition; filename*=UTF-8''".uri_escape($sendablebytes)."; filename=\"$sendablebytes\"\r\n";
         }
 
@@ -1490,14 +1489,14 @@ package HTTP::BS::Server::Client::Request {
 
         # HACK, use LD_PRELOAD to hook tar to calculate the size quickly
         my @tarcmd = ('tar', '-C', dirname($requestfile), basename($requestfile), '-c', '--owner=0', '--group=0');
-        $self->{'process'} =  HTTP::BS::Server::Process->new(\@tarcmd, $self->{'client'}{'server'}{'evp'}, {
+        $self->{'process'} =  MHFS::Process->new(\@tarcmd, $self->{'client'}{'server'}{'evp'}, {
             'SIGCHLD' => sub {
                 my $out = $self->{'process'}{'fd'}{'stdout'}{'fd'};
                 my $size;
                 read($out, $size, 50);
                 chomp $size;
                 say "size: $size";
-                $self->{'process'} = HTTP::BS::Server::Process->new(\@tarcmd, $self->{'client'}{'server'}{'evp'}, {
+                $self->{'process'} = MHFS::Process->new(\@tarcmd, $self->{'client'}{'server'}{'evp'}, {
                     'STDOUT' => sub {
                         my($out) = @_;
                         say "tar sending response";
@@ -1569,7 +1568,7 @@ package HTTP::BS::Server::Client::Request {
     sub PUTBuf_old {
         my ($self, $handler) = @_;
         if(length($self->{'client'}{'inbuf'}) < $self->{'header'}{'Content-Length'}) {
-            $self->{'client'}->SetEvents(POLLIN | EventLoop::Poll->ALWAYSMASK );
+            $self->{'client'}->SetEvents(POLLIN | MHFS::EventLoop::Poll->ALWAYSMASK );
         }
         my $sdata;
         $self->{'on_read_ready'} = sub {
@@ -1604,12 +1603,12 @@ package HTTP::BS::Server::Client::Request {
         my ($self, $handler) = @_;
         if($self->{'header'}{'Content-Length'} > 20000000) {
             say "PUTBuf too big";
-            $self->{'client'}->SetEvents(POLLIN | EventLoop::Poll->ALWAYSMASK );
+            $self->{'client'}->SetEvents(POLLIN | MHFS::EventLoop::Poll->ALWAYSMASK );
             $self->{'on_read_ready'} = sub { return undef };
             return;
         }
         if(length($self->{'client'}{'inbuf'}) < $self->{'header'}{'Content-Length'}) {
-            $self->{'client'}->SetEvents(POLLIN | EventLoop::Poll->ALWAYSMASK );
+            $self->{'client'}->SetEvents(POLLIN | MHFS::EventLoop::Poll->ALWAYSMASK );
         }
         $self->{'on_read_ready'} = sub {
             my $contentlength = $self->{'header'}{'Content-Length'};
@@ -1647,7 +1646,7 @@ package HTTP::BS::Server::Client::Request {
     1;
 }
 
-package HTTP::BS::Server::Client {
+package MHFS::HTTP::Server::Client {
     use strict; use warnings;
     use feature 'say';
     use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
@@ -1668,7 +1667,7 @@ package HTTP::BS::Server::Client {
         $self{'CONN-ID'} = int($self{'time'} * rand()); # insecure uid
         $self{'outheaders'}{'X-MHFS-CONN-ID'} = sprintf("%X", $self{'CONN-ID'});
         bless \%self, $class;
-        $self{'request'} = HTTP::BS::Server::Client::Request->new(\%self);
+        $self{'request'} = MHFS::HTTP::Server::Client::Request->new(\%self);
         return \%self;
     }
 
@@ -1754,7 +1753,7 @@ package HTTP::BS::Server::Client {
 
     sub CT_PROCESS {
         my ($self) = @_;
-        $self->{'request'} //= HTTP::BS::Server::Client::Request->new($self);
+        $self->{'request'} //= MHFS::HTTP::Server::Client::Request->new($self);
         if(!defined($self->{'request'}{'on_read_ready'})) {
             die("went into CT_PROCESS in bad state");
             return CT_YIELD;
@@ -1832,7 +1831,7 @@ package HTTP::BS::Server::Client {
             goto &do_on_data;
         }
         if(! $!{EAGAIN}) {
-            print ("HTTP::BS::Server::Client onReadReady RECV errno: $!\n");
+            print ("MHFS::HTTP::Server::Client onReadReady RECV errno: $!\n");
             return undef;
         }
         return '';
@@ -1855,7 +1854,7 @@ package HTTP::BS::Server::Client {
                     say "-------------------------------------------------";
                     return undef;
                 }
-                $client->{'request'} = HTTP::BS::Server::Client::Request->new($client);
+                $client->{'request'} = MHFS::HTTP::Server::Client::Request->new($client);
                 # handle possible existing read data
                 goto &do_on_data;
             }
@@ -2015,7 +2014,7 @@ package HTTP::BS::Server::Client {
 
     sub DESTROY {
         my $self = shift;
-        say "$$ HTTP::BS::Server::Client destructor: ";
+        say "$$ MHFS::HTTP::Server::Client destructor: ";
         say "$$ ".'X-MHFS-CONN-ID: ' . $self->{'outheaders'}{'X-MHFS-CONN-ID'};
         if($self->{'sock'}) {
             #shutdown($self->{'sock'}, 2);
@@ -2026,7 +2025,7 @@ package HTTP::BS::Server::Client {
     1;
 }
 
-package HTTP::BS::Server::FD::Reader{
+package MHFS::FD::Reader {
     use strict; use warnings;
     use feature 'say';
     use Time::HiRes qw( usleep clock_gettime CLOCK_MONOTONIC);
@@ -2069,7 +2068,7 @@ package HTTP::BS::Server::FD::Reader{
     1;
  }
 
- package HTTP::BS::Server::FD::Writer {
+ package MHFS::FD::Writer {
     use strict; use warnings;
     use feature 'say';
     use Time::HiRes qw( usleep clock_gettime CLOCK_MONOTONIC);
@@ -2110,7 +2109,7 @@ package HTTP::BS::Server::FD::Reader{
     1;
  }
 
-package HTTP::BS::Server::Process {
+package MHFS::Process {
     use strict; use warnings;
     use feature 'say';
     use Symbol 'gensym';
@@ -2156,22 +2155,22 @@ package HTTP::BS::Server::Process {
             $evp->register_child($pid, $fddispatch->{'SIGCHLD'});
         }
         if($fddispatch->{'STDIN'}) {
-            $self->{'fd'}{'stdin'} = HTTP::BS::Server::FD::Writer->new($self, $in, $fddispatch->{'STDIN'});
-            $evp->set($in, $self->{'fd'}{'stdin'}, POLLOUT | EventLoop::Poll->ALWAYSMASK);
+            $self->{'fd'}{'stdin'} = MHFS::FD::Writer->new($self, $in, $fddispatch->{'STDIN'});
+            $evp->set($in, $self->{'fd'}{'stdin'}, POLLOUT | MHFS::EventLoop::Poll->ALWAYSMASK);
         }
         else {
             $self->{'fd'}{'stdin'}{'fd'} = $in;
         }
         if($fddispatch->{'STDOUT'}) {
-            $self->{'fd'}{'stdout'} = HTTP::BS::Server::FD::Reader->new($self, $out, $fddispatch->{'STDOUT'});
-            $evp->set($out, $self->{'fd'}{'stdout'}, POLLIN | EventLoop::Poll->ALWAYSMASK());
+            $self->{'fd'}{'stdout'} = MHFS::FD::Reader->new($self, $out, $fddispatch->{'STDOUT'});
+            $evp->set($out, $self->{'fd'}{'stdout'}, POLLIN | MHFS::EventLoop::Poll->ALWAYSMASK());
         }
         else {
             $self->{'fd'}{'stdout'}{'fd'} = $out;
         }
         if($fddispatch->{'STDERR'}) {
-            $self->{'fd'}{'stderr'} = HTTP::BS::Server::FD::Reader->new($self, $err, $fddispatch->{'STDERR'});
-            $evp->set($err, $self->{'fd'}{'stderr'}, POLLIN | EventLoop::Poll->ALWAYSMASK);
+            $self->{'fd'}{'stderr'} = MHFS::FD::Reader->new($self, $err, $fddispatch->{'STDERR'});
+            $evp->set($err, $self->{'fd'}{'stderr'}, POLLIN | MHFS::EventLoop::Poll->ALWAYSMASK);
         }
         else {
             $self->{'fd'}{'stderr'}{'fd'} = $err;
@@ -2206,12 +2205,12 @@ package HTTP::BS::Server::Process {
 
     sub stopSTDOUT {
         my ($self) = @_;
-        $self->{'evp'}->set($self->{'fd'}{'stdout'}{'fd'}, $self->{'fd'}{'stdout'}, EventLoop::Poll->ALWAYSMASK);
+        $self->{'evp'}->set($self->{'fd'}{'stdout'}{'fd'}, $self->{'fd'}{'stdout'}, MHFS::EventLoop::Poll->ALWAYSMASK);
     }
 
     sub resumeSTDOUT {
         my ($self) = @_;
-        $self->{'evp'}->set($self->{'fd'}{'stdout'}{'fd'}, $self->{'fd'}{'stdout'}, POLLIN | EventLoop::Poll->ALWAYSMASK);
+        $self->{'evp'}->set($self->{'fd'}{'stdout'}{'fd'}, $self->{'fd'}{'stdout'}, POLLIN | MHFS::EventLoop::Poll->ALWAYSMASK);
     }
 
     sub new {
@@ -2455,7 +2454,7 @@ package HTTP::BS::Server::Process {
     1;
 }
 
-package MusicLibrary {
+package MHFS::Plugin::MusicLibrary {
     use strict; use warnings;
     use feature 'say';
     use Cwd qw(abs_path getcwd);
@@ -2467,11 +2466,11 @@ package MusicLibrary {
     use File::Basename;
     use File::Path qw(make_path);
     use Scalar::Util qw(looks_like_number);
-    HTTP::BS::Server::Util->import();
+    MHFS::Util->import();
     BEGIN {
         if( ! (eval "use JSON; 1")) {
             eval "use JSON::PP; 1" or die "No implementation of JSON available, see doc/dependencies.txt";
-            warn "plugin(MusicLibrary): Using PurePerl version of JSON (JSON::PP), see doc/dependencies.txt about installing faster version";
+            warn "plugin(MHFS::Plugin::MusicLibrary): Using PurePerl version of JSON (JSON::PP), see doc/dependencies.txt about installing faster version";
         }
     }
     use Encode qw(decode encode);
@@ -2493,7 +2492,7 @@ package MusicLibrary {
     use lib File::Spec->catdir($FindBin::Bin, 'XS', 'blib', 'arch');
     BEGIN {
         if(! (eval "use MHFS::XS; 1")) {
-            warn "plugin(MusicLibrary): XS not available";
+            warn "plugin(MHFS::Plugin::MusicLibrary): XS not available";
             our $HAS_MHFS_XS = 0;
         }
         else {
@@ -2617,12 +2616,12 @@ package MusicLibrary {
         #};
         #}
         #if(! $utf8name) {
-        #    say "MusicLibrary: BuildLibrary slow path decode - " . decode('UTF-8', $basepath);
+        #    say "MHFS::Plugin::MusicLibrary: BuildLibrary slow path decode - " . decode('UTF-8', $basepath);
         #    my $loose = decode("utf8", $basepath);
         #    $loose =~ s/([\x{D800}-\x{DBFF}])([\x{DC00}-\x{DFFF}])/surrogatepairtochar($1, $2)/ueg; #uncode, expression replacement, global
         #    Encode::_utf8_off($loose);
         #    $utf8name = decode('UTF-8', $loose);
-        #    say "MusicLibrary: BuildLibrary slow path decode changed to : $utf8name";
+        #    say "MHFS::Plugin::MusicLibrary: BuildLibrary slow path decode changed to : $utf8name";
         #}
         my $utf8name = get_printable_utf8($basepath);
 
@@ -2747,13 +2746,13 @@ package MusicLibrary {
 
         # maybe not allow everyone to do these commands?
         if($request->{'qs'}{'forcerefresh'}) {
-            say "MusicLibrary: forcerefresh";
+            say "MHFS::Plugin::MusicLibrary: forcerefresh";
             $self->BuildLibraries();
         }
         elsif($request->{'qs'}{'refresh'}) {
-            say "MusicLibrary: refresh";
+            say "MHFS::Plugin::MusicLibrary: refresh";
             UpdateLibrariesAsync($self, $request->{'client'}{'server'}{'evp'}, sub {
-                say "MusicLibrary: refresh done";
+                say "MHFS::Plugin::MusicLibrary: refresh done";
                 $request->{'qs'}{'refresh'} = 0;
                 SendLibrary($self, $request);
             });
@@ -2810,7 +2809,7 @@ package MusicLibrary {
             return $request->SendRedirect(307, 'static/music_inc/', $qs);
         }
         elsif($fmt eq 'legacy') {
-            say "MusicLibrary: legacy";
+            say "MHFS::Plugin::MusicLibrary: legacy";
             return $request->SendBytes("text/html; charset=utf-8", $self->{'html'});
         }
         else {
@@ -2824,14 +2823,14 @@ package MusicLibrary {
     sub SendTrack {
         my ($request, $tosend) = @_;
         if(defined $request->{'qs'}{'part'}) {
-            if(! $MusicLibrary::HAS_MHFS_XS) {
-                say "MusicLibrary: route not available without XS";
+            if(! $MHFS::Plugin::MusicLibrary::HAS_MHFS_XS) {
+                say "MHFS::Plugin::MusicLibrary: route not available without XS";
                 $request->Send503();
                 return;
             }
 
             if(! $TRACKDURATION{$tosend}) {
-                say "MusicLibrary: failed to get track duration";
+                say "MHFS::Plugin::MusicLibrary: failed to get track duration";
                 $request->Send503();
                 return;
             }
@@ -2848,8 +2847,8 @@ package MusicLibrary {
             $request->SendBytes('audio/flac', $res);
         }
         elsif(defined $request->{'qs'}{'fmt'} && ($request->{'qs'}{'fmt'}  eq 'wav')) {
-            if(! $MusicLibrary::HAS_MHFS_XS) {
-                say "MusicLibrary: route not available without XS";
+            if(! $MHFS::Plugin::MusicLibrary::HAS_MHFS_XS) {
+                say "MHFS::Plugin::MusicLibrary: route not available without XS";
                 $request->Send503();
                 return;
             }
@@ -2889,7 +2888,7 @@ package MusicLibrary {
             }
             # Send the total pcm frame count for mp3
             elsif(lc(substr($tosend, -4)) eq '.mp3') {
-                if($MusicLibrary::HAS_MHFS_XS) {
+                if($MHFS::Plugin::MusicLibrary::HAS_MHFS_XS) {
                     if(! $TRACKINFO{$tosend}) {
                         $TRACKINFO{$tosend} = { 'TOTALSAMPLES' => MHFS::XS::get_totalPCMFrameCount($tosend) };
                         say "mp3 totalPCMFrames: " . $TRACKINFO{$tosend}{'TOTALSAMPLES'};
@@ -2978,7 +2977,7 @@ package MusicLibrary {
                 my @cmd = ('ffmpeg', '-i', $file, '-c:a', 'flac', '-sample_fmt', 's16', $tlossy);
                 my $buf;
                 if(LOCK_WRITE($tlossy)) {
-                    $request->{'process'} = HTTP::BS::Server::Process->new(\@cmd, $evp, {
+                    $request->{'process'} = MHFS::Process->new(\@cmd, $evp, {
                     'SIGCHLD' => sub {
                         UNLOCK_WRITE($tlossy);
                         SendLocalTrack($request,$tlossy);
@@ -3063,7 +3062,7 @@ package MusicLibrary {
         say "cmd: " . join(' ', @cmd);
 
         if(LOCK_WRITE($outfile)) {
-            $request->{'process'} = HTTP::BS::Server::Process->new(\@cmd, $evp, {
+            $request->{'process'} = MHFS::Process->new(\@cmd, $evp, {
             'SIGCHLD' => sub {
                 UNLOCK_WRITE($outfile);
                 # BUG? files isn't necessarily flushed to disk on SIGCHLD. filesize can be wrong
@@ -3094,9 +3093,9 @@ package MusicLibrary {
         foreach my $source (@{$tocheck}) {
             my $lib;
             if($source->{'type'} eq 'local') {
-                say "MusicLibrary: building music " . clock_gettime(CLOCK_MONOTONIC);
+                say "MHFS::Plugin::MusicLibrary: building music " . clock_gettime(CLOCK_MONOTONIC);
                 $lib = BuildLibrary($source->{'folder'});
-                say "MusicLibrary: done building music " . clock_gettime(CLOCK_MONOTONIC);
+                say "MHFS::Plugin::MusicLibrary: done building music " . clock_gettime(CLOCK_MONOTONIC);
             }
             elsif($source->{'type'} eq 'ssh') {
             }
@@ -3191,8 +3190,8 @@ package MusicLibrary {
     sub SendResources {
         my ($self, $request) = @_;
 
-        if(! $MusicLibrary::HAS_MHFS_XS) {
-            say "MusicLibrary: route not available without XS";
+        if(! $MHFS::Plugin::MusicLibrary::HAS_MHFS_XS) {
+            say "MHFS::Plugin::MusicLibrary: route not available without XS";
             $request->Send503();
             return;
         }
@@ -3262,7 +3261,7 @@ package MusicLibrary {
 
     sub UpdateLibrariesAsync {
         my ($self, $evp, $onUpdateEnd) = @_;
-        HTTP::BS::Server::Process->new_output_child($evp, sub {
+        MHFS::Process->new_output_child($evp, sub {
             # done in child
             my ($datachannel) = @_;
 
@@ -3324,9 +3323,9 @@ package MusicLibrary {
 
         # no sources until loaded
         $self->{'sources'} = [];
-        $self->{'html_gapless'} = 'MusicLibrary not loaded';
-        $self->{'html'} = 'MusicLibrary not loaded';
-        $self->{'musicdbhtml'} = 'MusicLibrary not loaded';
+        $self->{'html_gapless'} = 'MHFS::Plugin::MusicLibrary not loaded';
+        $self->{'html'} = 'MHFS::Plugin::MusicLibrary not loaded';
+        $self->{'musicdbhtml'} = 'MHFS::Plugin::MusicLibrary not loaded';
         $self->{'musicdbjson'} = '{}';
 
         my $musicpageroute = sub {
@@ -3372,7 +3371,7 @@ package MusicLibrary {
     1;
 }
 
-package Youtube {
+package MHFS::Plugin::Youtube {
     use strict; use warnings;
     use feature 'say';
     use Data::Dumper;
@@ -3381,11 +3380,11 @@ package Youtube {
     use URI::Escape;
     use Scalar::Util qw(looks_like_number weaken);
     use File::stat;
-    HTTP::BS::Server::Util->import();
+    MHFS::Util->import();
     BEGIN {
         if( ! (eval "use JSON; 1")) {
             eval "use JSON::PP; 1" or die "No implementation of JSON available, see doc/dependencies.txt";
-            warn "plugin(Youtube): Using PurePerl version of JSON (JSON::PP), see doc/dependencies.txt about installing faster version";
+            warn "plugin(MHFS::Plugin::Youtube): Using PurePerl version of JSON (JSON::PP), see doc/dependencies.txt about installing faster version";
         }
     }
 
@@ -3487,7 +3486,7 @@ package Youtube {
         print "$_ " foreach @curlcmd;
         print "\n";
         state $tprocess;
-        $tprocess = HTTP::BS::Server::Process->new(\@curlcmd, $evp, {
+        $tprocess = MHFS::Process->new(\@curlcmd, $evp, {
             'SIGCHLD' => sub {
                 my $stdout = $tprocess->{'fd'}{'stdout'}{'fd'};
                 my $buf;
@@ -3528,7 +3527,7 @@ package Youtube {
 
         my $qs = $request->{'qs'};
         my @cmd = ($self->{'youtube-dl'}, '--no-part', '--print-traffic', '-f', $self->{'fmts'}{$qs->{"media"} // "video"} // "best", '-o', $video->{"out_filepath"}, '--', $qs->{"id"});
-        $request->{'process'} = HTTP::BS::Server::Process->new_cmd_process($request->{'client'}{'server'}{'evp'}, \@cmd, {
+        $request->{'process'} = MHFS::Process->new_cmd_process($request->{'client'}{'server'}{'evp'}, \@cmd, {
             'on_stdout_data' => sub {
                 my ($context) = @_;
 
@@ -3669,82 +3668,12 @@ package Youtube {
     1;
 }
 
-package TAR {
-    use strict; use warnings;
-    use feature 'say';
-    use File::stat;
-    use Devel::Peek;
-    use Data::Dumper;
-    use Fcntl ':mode';
-
-    sub tar {
-        my ($file, $out) = @_;
-        my $endslash = rindex($file, "/");
-        my $toremove = '';
-        if($endslash != -1) {
-            $toremove = substr($file, 0, $endslash+1);
-            say "toremove $toremove";
-        }
-        my $torem = length($toremove);
-
-        my @files = ($file);
-        while(@files) {
-            my $file = shift @files;
-            my $st = stat($file);
-            if(!$st) {
-                say "failed to stat $file";
-                return;
-            }
-            my $tarname = substr($file, $torem, 100-1);
-            say 'tar filename ' . $tarname;
-            my $fullmode = $st->mode;
-            my $modestr  = sprintf "%07o", $fullmode & 07777;
-            my $ownerstr = sprintf("%07u", $st->uid);
-            my $groupstr = sprintf("%07u", $st->gid);
-            my $sizestr  = S_ISDIR($fullmode) ? sprintf("%011o", 0) : sprintf("%011o", $st->size);
-            my $modtime =   sprintf("%011o", $st->mtime);
-            my $checksum = sprintf("           ");
-            my $type;
-            if(S_ISDIR($fullmode)) {
-                $type = 5;
-            }
-            elsif(S_ISREG($fullmode)) {
-                $type = 0;
-            }
-            else {
-                die;
-            }
-            my $packstr = sprintf("Z100Z8Z8Z8Z12Z12Z8cx355");
-            my $header = pack($packstr, $tarname, $modestr, $ownerstr, $groupstr, $sizestr, $modtime, $type);
-            Dump($header);
-            print Dumper(unpack("H*",$header));
-
-            if(S_ISDIR($fullmode)){
-                #my $dh = opendir($file);
-                #$dh or die("failed to open dir");
-                #my @tfiles = readdir($dh);
-                #@files = (@tfiles, @files)
-            }
-            else {
-                open(my $fh, '<', $file) or die("couldnt open file");
-                my $sv;
-                defined(read($fh, $sv, $st->size)) or die("couldn't read file");
-            }
-        }
-        die;
-    }
-
-
-
-    1;
-}
-
 package MHFS::Settings {
     use strict; use warnings;
     use feature 'say';
     use Scalar::Util qw(reftype);
     use File::Basename;
-    HTTP::BS::Server::Util->import();
+    MHFS::Util->import();
 
     sub write_settings_file {
         my ($SETTINGS, $filepath) = @_;
@@ -3883,7 +3812,7 @@ package MHFS::Settings {
             # parse IPv4 with optional CIDR
             $rule->[0] =~ /^([^\/]+)(?:\/(\d{1,2}))?$/ or die("Invalid rule: " . $rule->[0]);
             my $ipstr = $1; my $cidr = $2 // 32;
-            my $ip = HTTP::BS::Server::Util::ParseIPv4($ipstr);
+            my $ip = MHFS::Util::ParseIPv4($ipstr);
             $ip or die("Invalid rule: " . $rule->[0]);
             $cidr >= 0 && $cidr <= 32  or die("Invalid rule: " . $rule->[0]);
             my $mask = (0xFFFFFFFF << (32-$cidr)) & 0xFFFFFFFF;
@@ -4017,7 +3946,7 @@ use Symbol 'gensym';
 binmode(STDOUT, ":utf8");
 binmode(STDERR, ":utf8");
 
-HTTP::BS::Server::Util->import();
+MHFS::Util->import();
 
 $SIG{PIPE} = sub {
     print STDERR "SIGPIPE @_\n";
@@ -4045,8 +3974,8 @@ make_path($SETTINGS->{'SECRET_TMPDIR'}, {chmod => 0600});
 # load plugins
 my @plugins;
 {
-    my @plugintotry = ('Youtube');
-    push (@plugintotry, 'MusicLibrary') if($SETTINGS->{'MusicLibrary'});
+    my @plugintotry = ('MHFS::Plugin::Youtube');
+    push (@plugintotry, 'MHFS::Plugin::MusicLibrary') if($SETTINGS->{'MusicLibrary'});
     foreach my $plugin (@plugintotry) {
         next if(defined $SETTINGS->{$plugin}{'enabled'} && (!$SETTINGS->{$plugin}{'enabled'}));
         my $loaded = $plugin->new($SETTINGS);
@@ -4194,7 +4123,7 @@ my @routes = (
 );
 
 # finally start the server
-my $server = HTTP::BS::Server->new($SETTINGS, \@routes, \@plugins);
+my $server = MHFS::HTTP::Server->new($SETTINGS, \@routes, \@plugins);
 
 sub fmp4 {
     my ($request) = @_;
@@ -4286,7 +4215,7 @@ sub fmp4 {
     print $sock $headtext."\r\n";
     $evp->remove($sock);
     $request->{'client'} = undef;
-    HTTP::BS::Server::Process->cmd_to_sock(\@command, $sock);
+    MHFS::Process->cmd_to_sock(\@command, $sock);
 }
 
 # hls on demand
@@ -4368,7 +4297,7 @@ sub hls_ts {
     my @command = ('ffmpeg', '-ss', $timestring, '-i', $fileinfo->{'fileabspath'}, '-t', $fileinfo->{'segmentlength'}, '-an', '-c:v', 'libx264', '-f', 'mpegts', '-avoid_negative_ts', 'disabled', '-output_ts_offset',  $ogseconds, '-');
     my $evp = $request->{'client'}{'server'}{'evp'};
     $request->{'outheaders'}{'Access-Control-Allow-Origin'} = '*';
-    HTTP::BS::Server::Process->new_output_process($evp, \@command, sub {
+    MHFS::Process->new_output_process($evp, \@command, sub {
         my ($output, $error) = @_;
         $request->SendBytes('video/mp2t', $output);
     });
@@ -4586,8 +4515,8 @@ sub hls_audio_process {
     my $ffmpegcodecname = lc $atrack->{'CodecID_Major'};
     my $evp = $request->{'client'}{'server'}{'evp'};
     say "poll handles " . scalar($evp->{'poll'}->handles());
-    $sesh->{'process'} = HTTP::BS::Server::Process->new_cmd_process($evp, ['ffmpeg', '-f', $ffmpegcodecname, '-i', '-', '-c:a', 'aac', '-ac' , '2', '-b:a', '160k', '-f', 'adts', '-'], $ctx);
-    #$sesh->{'process'} = HTTP::BS::Server::Process->new_cmd_process($evp, ['ffmpeg', '-f', $ffmpegcodecname, '-i', '-', '-f', 's16le', '-c:a', 'pcm_s16le', '-'], $ctx);
+    $sesh->{'process'} = MHFS::Process->new_cmd_process($evp, ['ffmpeg', '-f', $ffmpegcodecname, '-i', '-', '-c:a', 'aac', '-ac' , '2', '-b:a', '160k', '-f', 'adts', '-'], $ctx);
+    #$sesh->{'process'} = MHFS::Process->new_cmd_process($evp, ['ffmpeg', '-f', $ffmpegcodecname, '-i', '-', '-f', 's16le', '-c:a', 'pcm_s16le', '-'], $ctx);
 
     # enable read
     $sesh->{'process'}->resumeSTDOUT();
@@ -4720,7 +4649,7 @@ sub hls_audio_m3u8 {
     #    my @command = ('ffmpeg', '-i', $fileinfo->{'fileabspath'}, '-vn', '-c', 'copy', '-f', 'hls', '-hls_time', '5', '-hls_list_size', '0', $pfile);
     #    my $evp = $request->{'client'}{'server'}{'evp'};
 #
-    #    HTTP::BS::Server::Process->new_output_process($evp, \@command, sub {
+    #    MHFS::Process->new_output_process($evp, \@command, sub {
     #        my ($output, $error) = @_;
     #        $request->SendLocalFile($pfile, 'video/mp2t');
     #    });
@@ -6613,7 +6542,7 @@ sub video_on_streams {
     my $input_file = $video->{'src_file'}{'filepath'};
     my @command = ('ffmpeg', '-i', $input_file);
     my $evp = $request->{'client'}{'server'}{'evp'};
-    HTTP::BS::Server::Process->new_output_process($evp, \@command, sub {
+    MHFS::Process->new_output_process($evp, \@command, sub {
         my ($output, $error) = @_;
         my @lines = split(/\n/, $error);
         my $current_stream;
@@ -6751,7 +6680,7 @@ sub ptp_request {
     my @cmd = ('curl', '-s', '-v', '-b', $cookie, '-c', $cookie, $SETTINGS->{'PTP'}{'url'}.'/' . $url);
 
     my $process;
-    $process    = HTTP::BS::Server::Process->new_output_process($evp, \@cmd, sub {
+    $process    = MHFS::Process->new_output_process($evp, \@cmd, sub {
         my ($output, $error) = @_;
         if($output) {
             #say 'ptprequest output: ' . $output;
@@ -6769,7 +6698,7 @@ sub ptp_request {
             make_path($ptpdir);
             my $cookie = $ptpdir . '/cookie';
             my @logincmd = ('curl', '-s', '-v', '-b', $cookie, '-c', $cookie, '-d', $postdata, $SETTINGS->{'PTP'}{'url'}.'/ajax.php?action=login');
-            $process = HTTP::BS::Server::Process->new_output_process($evp, \@logincmd, sub {
+            $process = MHFS::Process->new_output_process($evp, \@logincmd, sub {
                  my ($output, $error) = @_;
                  # todo error handling
                  ptp_request($evp, $url, $handler, 1);
@@ -6787,7 +6716,7 @@ sub rtxmlrpc {
     my @cmd = ('rtxmlrpc', @$params, '--config-dir', $SETTINGS->{'CFGDIR'} . '/.pyroscope/');
     print "$_ " foreach @cmd;
     print "\n";
-    $process    = HTTP::BS::Server::Process->new_io_process($evp, \@cmd, sub {
+    $process    = MHFS::Process->new_io_process($evp, \@cmd, sub {
         my ($output, $error) = @_;
         chomp $output;
         #say 'rtxmlrpc output: ' . $output;
@@ -6800,7 +6729,7 @@ sub lstor {
     my ($evp, $params, $cb) = @_;
     my $process;
     my @cmd = ('lstor', '-q', @$params);
-    $process    = HTTP::BS::Server::Process->new_output_process($evp, \@cmd, sub {
+    $process    = MHFS::Process->new_output_process($evp, \@cmd, sub {
         my ($output, $error) = @_;
         chomp $output;
         say 'lstor output: ' . $output;
@@ -6832,7 +6761,7 @@ END_pyroscope_get_info_hash
     my @cmd = ($python2, '-c', $pyroscope_get_info_hash);
     print "$_ " foreach @cmd;
     print "\n";
-    $process    = HTTP::BS::Server::Process->new_io_process($evp, \@cmd, sub {
+    $process    = MHFS::Process->new_io_process($evp, \@cmd, sub {
         my ($output, $error) = @_;
         chomp $output;
         $cb->($output);
@@ -7395,7 +7324,7 @@ sub tracker {
                     my $pubip = $request->{'client'}{'server'}{'settings'}{'PUBLICIP'};
                     if($netmap && (($values[0] == $netmap->[1]) && (unpack('C', $ipport) != $netmap->[1])) && $pubip) {
                         say "HACK converting local peer to public ip";
-                        $peer = pack('Nn', HTTP::BS::Server::Util::ParseIPv4($pubip), (($values[4] << 8) | $values[5]));
+                        $peer = pack('Nn', MHFS::Util::ParseIPv4($pubip), (($values[4] << 8) | $values[5]));
                         @values = unpack('CCCCCC', $peer);
                     }
                     say "sending peer $values[0].$values[1].$values[2].$values[3] at port " . (($values[4] << 8) | $values[5]);
