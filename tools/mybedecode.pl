@@ -50,6 +50,12 @@ sub bdecode {
             $foffset += $count;
             push @{$nodestack[-1]}, $node;
         }
+        elsif((substr($$contents, $foffset, 1) eq 'e') &&
+        (($nodestack[-1][0] eq 'l') ||
+        (($nodestack[-1][0] eq 'd') &&((scalar(@{$nodestack[-1]}) % 2) == 1)))) {
+            pop @nodestack;
+            $foffset++;
+        }
         elsif(($nodestack[-1][0] ne 'd') || ((scalar(@{$nodestack[-1]}) % 2) == 0)) {
             my $firstchar = substr($$contents, $foffset++, 1);
             if(($firstchar eq 'd') || ($firstchar eq 'l')) {
@@ -66,13 +72,6 @@ sub bdecode {
                 say "bad elm $firstchar $foffset";
                 return undef;
             }
-        }
-        elsif((substr($$contents, $foffset, 1) eq 'e') &&
-        (scalar(@nodestack) != 1) &&
-        (($nodestack[-1][0] ne 'd') || ((scalar(@{$nodestack[-1]}) % 2) == 1)))
-        {
-            pop @nodestack;
-            $foffset++;
         }
         else {
             say "bad elm $foffset";

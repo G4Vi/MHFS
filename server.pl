@@ -2783,6 +2783,177 @@ package MHFS::Settings {
     1;
 };
 
+package MHFS::BitTorrent::Bencoding {
+    use strict; use warnings;
+    use Exporter 'import';
+    our @EXPORT = ('bencode', 'bdecode');
+    use feature 'say';
+
+    # a node is an array with the first element being the type, followed by the value(s)
+    # ('int', iv)          - integer node, MUST have one integer value, bencoded as iIVe
+    # ('bstr', bytestring) - byte string node, MUST have one bytestring value, bencoded as bytestringLength:bytestring where bytestringLength is the length as ASCII numbers
+    # ('l', values)        - list node, MAY have one or more values of type int, bstr, list, and dict bencoded as lVALUESe
+    # ('d', kvpairs)       - dict node, special case of list, MAY one or more key and value pairs. A dict node MUST have multiple of 2 values; a bstr key with corespoding value
+    # ('null', value)      - null node, MAY have one value, used internally by bdecode to avoid dealing with the base case of no parent
+    # ('e')                - end node, MUST NOT have ANY values, used internally by bencode to handle writing list/dict end
+
+    sub bencode {
+        my ($node) = @_;
+        my @toenc = ($node);
+        my $output;
+
+        while(my $node = shift @toenc) {
+            my $type = $node->[0];
+            if(($type eq 'd') || ($type eq 'l')) {
+                $output .= $type;
+                my @nextitems = @{$node};
+                shift @nextitems;
+                push @nextitems, ['e'];
+                unshift @toenc, @nextitems;
+            }
+            elsif($type eq 'bstr') {
+                $output .= sprintf("%u:%s", length($node->[1]), $node->[1]);
+            }
+            elsif($type eq 'int') {
+                $output .= 'i'.$node->[1].'e';
+            }
+            elsif($type eq 'e') {
+                $output .= 'e';
+            }
+            else {
+                return undef;
+            }
+        }
+
+        return $output;
+    }
+
+    sub bdecode {
+        my ($contents, $foffset) = @_;
+        my @headnode = ('null');
+        my @nodestack = (\@headnode);
+        my $startoffset = $foffset;
+
+        while(1) {
+            # a bstr is always valid as it can be a dict key
+            if(substr($$contents, $foffset) =~ /^(0|[1-9][0-9]*):/) {
+                my $count = $1;
+                $foffset += length($count)+1;
+                my $bstr = substr($$contents, $foffset, $count);
+                my $node = ['bstr', $bstr];
+                $foffset += $count;
+                push @{$nodestack[-1]}, $node;
+            }
+            elsif((substr($$contents, $foffset, 1) eq 'e') &&
+            (($nodestack[-1][0] eq 'l') ||
+            (($nodestack[-1][0] eq 'd') &&((scalar(@{$nodestack[-1]}) % 2) == 1)))) {
+                pop @nodestack;
+                $foffset++;
+            }
+            elsif(($nodestack[-1][0] ne 'd') || ((scalar(@{$nodestack[-1]}) % 2) == 0)) {
+                my $firstchar = substr($$contents, $foffset++, 1);
+                if(($firstchar eq 'd') || ($firstchar eq 'l')) {
+                    my $node = [$firstchar];
+                    push @{$nodestack[-1]}, $node;
+                    push @nodestack, $node;
+                }
+                elsif(substr($$contents, $foffset-1) =~ /^i(0|\-?[1-9][0-9]*)e/) {
+                    my $node = ['int', $1];
+                    $foffset += length($1)+1;
+                    push @{$nodestack[-1]}, $node;
+                }
+                else {
+                    say "bad elm $firstchar $foffset";
+                    return undef;
+                }
+            }
+            else {
+                say "bad elm $foffset";
+                return undef;
+            }
+
+            if(scalar(@nodestack) == 1) {
+                return [$headnode[1], $foffset-$startoffset];
+            }
+        }
+    }
+
+    1;
+}
+
+package MHFS::BitTorrent::Metainfo {
+    use strict;
+    use warnings;
+    use feature 'say';
+    use Digest::SHA qw(sha1);
+    MHFS::BitTorrent::Bencoding->import();
+    use Data::Dumper;
+
+    sub Parse {
+        my ($srcdata) = @_;
+        my $tree = bdecode($srcdata, 0);
+        return undef if(! $tree);
+        return MHFS::BitTorrent::Metainfo->_new($tree->[0]);
+    }
+
+    sub Create {
+        my ($srcpath) = @_;
+        return undef;
+    }
+
+    sub InfohashAsHex {
+        my ($self) = @_;
+        return uc(unpack('H*', $self->{'infohash'}));
+    }
+
+    sub _bdictfind {
+        my ($node, $keys, $valuetype) = @_;
+        NEXTKEY: foreach my $key (@{$keys}) {
+            if($node->[0] ne 'd') {
+                say "cannot search non dictionary";
+                return undef;
+            }
+            for(my $i = 1; $i < scalar(@{$node}); $i+=2) {
+                if($node->[$i][1] eq $key) {
+                    $node = $node->[$i+1];
+                    last NEXTKEY;
+                }
+            }
+            say "failed to find key $key";
+            return undef;
+        }
+        if(($valuetype) && ($node->[0] ne $valuetype)) {
+            say "node has wrong type, expected $valuetype got ". $node->[0];
+            return undef;
+        }
+        return $node;
+    }
+
+    sub _bdictgetkeys {
+        my ($node) = @_;
+        if($node->[0] ne 'd') {
+            say "cannot search non dictionary";
+            return undef;
+        }
+        my @keys;
+        for(my $i = 1; $i < scalar(@{$node}); $i+=2) {
+            push @keys, $node->[$i][1];
+        }
+        return \@keys;
+    }
+
+    sub _new {
+        my ($class, $tree) = @_;
+        my $infodata = _bdictfind($tree, ['info'], 'd');
+        return undef if(! $infodata);
+        my %self = (tree => $tree, 'infohash' => sha1(bencode($infodata)));
+        bless \%self, $class;
+        return \%self;
+    }
+
+    1;
+}
+
 package MHFS::Plugin::MusicLibrary {
     use strict; use warnings;
     use feature 'say';
@@ -3882,6 +4053,7 @@ package MHFS::Plugin::BitTorrent::Tracker {
     use strict; use warnings;
     use feature 'say';
     use Time::HiRes qw( clock_gettime CLOCK_MONOTONIC);
+    MHFS::BitTorrent::Bencoding->import();
     use Data::Dumper;
 
     sub createTorrent {
@@ -3903,57 +4075,28 @@ package MHFS::Plugin::BitTorrent::Tracker {
         print "\n";
         my $evp = $request->{'client'}{'server'}{'evp'};
         App::MHFS::mktor($evp, \@params, sub {
-        App::MHFS::torrent_file_hash($evp, MHFS::Util::read_file($outputname), sub {
-        my ($asciihash) = @_;
 
-        print Dumper($self->{'torrents'});
-        $self->{'torrents'}{pack('H*', $asciihash)} //= {};
-        print Dumper($self->{'torrents'});
-
-        #App::MHFS::torrent_load_verbose($evp, $outputname, sub {
-        App::MHFS::torrent_load_raw_verbose($evp, MHFS::Util::read_file($outputname), sub {
-        if(! defined $_[0]) { $request->Send404; return;}
-
-        App::MHFS::torrent_d_directory_set($evp, $asciihash, $fileitem->{'containingdir'}, sub {
-        if(! defined $_[0]) { $request->Send404; return;}
-
-        App::MHFS::torrent_d_start($evp, $asciihash, sub {
-        if(! defined $_[0]) { $request->Send404; return;}
-
-        $request->{'responseopt'}{'cd_file'} = 'attachment';
-        $request->SendLocalFile($outputname, 'applications/x-bittorrent');
-        })})})})});
-    }
-
-    sub bencode {
-        my ($node) = @_;
-        my @toenc = ($node);
-        my $output;
-
-        while(my $node = shift @toenc) {
-            my $type = $node->[0];
-            if(($type eq 'd') || ($type eq 'l')) {
-                $output .= $type;
-                my @nextitems = @{$node};
-                shift @nextitems;
-                push @nextitems, ['e'];
-                unshift @toenc, @nextitems;
-            }
-            elsif($type eq 'bstr') {
-                $output .= sprintf("%u:%s", length($node->[1]), $node->[1]);
-            }
-            elsif($type eq 'int') {
-                $output .= 'i'.$node->[1].'e';
-            }
-            elsif($type eq 'e') {
-                $output .= 'e';
-            }
-            else {
-                return undef;
-            }
+        my $torrentData = MHFS::Util::read_file($outputname);
+        if(!$torrentData) {
+            $request->Send404;
         }
+        my $torrent = MHFS::BitTorrent::Metainfo::Parse(\$torrentData);
+        if(! $torrent) {
+            $request->Send404; return;
+        }
+        my $asciihash = $torrent->InfohashAsHex();
+        say "asciihash: $asciihash";
+        $self->{'torrents'}{pack('H*', $asciihash)} //= {};
 
-        return $output;
+        App::MHFS::torrent_start($evp, \$torrentData, $fileitem->{'containingdir'}, {
+            'on_success' => sub {
+                $request->{'responseopt'}{'cd_file'} = 'attachment';
+                $request->SendLocalFile($outputname, 'applications/x-bittorrent');
+            },
+            'on_failure' => sub {
+                $request->Send404;
+            }
+        })});
     }
 
     sub announce_error {
@@ -4014,11 +4157,11 @@ package MHFS::Plugin::BitTorrent::Tracker {
 
 
             my $event = $request->{'qs'}{'event'};
-            if( (! exists $self->{torrents}{$rih}{$ipport}) &&
-            ((! defined $event) || ($event ne 'started'))) {
-                $dictref = announce_error("first announce must include started event");
-                last;
-            }
+            #if( (! exists $self->{torrents}{$rih}{$ipport}) &&
+            #((! defined $event) || ($event ne 'started'))) {
+            #    $dictref = announce_error("first announce must include started event");
+            #    last;
+            #}
 
             if($left == 0) {
                 $self->{torrents}{$rih}{$ipport}{'completed'} = 1;
@@ -4097,6 +4240,29 @@ package MHFS::Plugin::BitTorrent::Tracker {
         my $self =  {'settings' => $settings, 'torrents' => \%{$settings->{'TORRENTS'}}, 'announce_interval' => $ai};
         bless $self, $class;
         say __PACKAGE__.": announce interval: ".$self->{'announce_interval'};
+
+        # load the existing torrents
+        my $odres = opendir(my $tdh, $settings->{'MHFS_TRACKER_TORRENT_DIR'});
+        if(! $odres){
+            say __PACKAGE__.":failed to open torrent dir";
+            return undef;
+        }
+        while(my $file = readdir($tdh)) {
+            next if(substr($file, 0, 1) eq '.');
+            my $fullpath = $settings->{'MHFS_TRACKER_TORRENT_DIR'}."/$file";
+            my $torrentcontents = MHFS::Util::read_file($fullpath);
+            if(! $torrentcontents) {
+                say __PACKAGE__.": error reading $fullpath";
+                return undef;
+            }
+            my $torrent = MHFS::BitTorrent::Metainfo::Parse(\$torrentcontents);
+            if(! $torrent) {
+                say __PACKAGE__.": error parsing $fullpath";
+                return undef;
+            }
+            $self->{'torrents'}{$torrent->{'infohash'}} = {};
+            say __PACKAGE__.": added torrent ".$torrent->InfohashAsHex() . ' '.$file;
+        }
 
         $self->{'routes'} = [
         ['/torrent/tracker', sub {
@@ -7077,21 +7243,6 @@ sub torrent_d_start {
     });
 }
 
-sub torrent_start {
-    my ($evp, $infohash, $callback) = @_;
-    rtxmlrpc($evp, ['d.stop', $infohash], sub {
-    my ($output) = @_;
-    if($output =~ /ERROR/) {
-        $callback->(undef);
-        return;
-    }
-    torrent_d_start($evp, $infohash, $callback);
-    });
-
-
-
-}
-
 sub torrent_d_delete_tied {
     my ($evp, $infohash, $callback) = @_;
     rtxmlrpc($evp, ['d.delete_tied', $infohash], sub {
@@ -7266,52 +7417,47 @@ sub play_in_browser_link {
     return 'N/A';
 }
 
-sub torrent_on_contents {
-    my ($evp, $request, $result, $saveto) = @_;
-    if(! $result) {
-        say "failed to dl torrent";
-        $request->Send404;
-        return;
+sub torrent_start {
+    my ($evp, $torrentData, $saveto, $cb) = @_;
+    my $torrent = MHFS::BitTorrent::Metainfo::Parse($torrentData);
+    if(! $torrent) {
+        $cb->{on_failure}->(); return;
+    }
+    my $asciihash = $torrent->InfohashAsHex();
+    say 'infohash ' . $asciihash;
+
+    # see if the hash is already in rtorrent
+    torrent_d_bytes_done($evp, $asciihash, sub {
+    my ($bytes_done) = @_;
+    if(! defined $bytes_done) {
+        # load, set directory, and download it (race condition)
+        # 02/05/2020 what race condition?
+        torrent_load_raw_verbose($evp, $$torrentData, sub {
+        if(! defined $_[0]) { $cb->{on_failure}->(); return;}
+
+        torrent_d_directory_set($evp, $asciihash, $saveto, sub {
+        if(! defined $_[0]) { $cb->{on_failure}->(); return;}
+
+        torrent_d_start($evp, $asciihash, sub {
+        if(! defined $_[0]) { $cb->{on_failure}->(); return;}
+
+        say 'starting ' . $asciihash;
+        $cb->{on_success}->($asciihash);
+        })})});
     }
     else {
-        torrent_file_hash($evp, $result, sub {
-        # error handling bad hashes?
-        my ($asciihash) = @_;
-        say 'infohash ' . $asciihash;
-
-        # see if the hash is already in rtorrent
-        torrent_d_bytes_done($evp, $asciihash, sub {
-        my ($bytes_done) = @_;
-        if(! defined $bytes_done) {
-            # load, set directory, and download it (race condition)
-            # 02/05/2020 what race condition?
-            torrent_load_raw_verbose($evp, $result, sub {
-            if(! defined $_[0]) { $request->Send404; return;}
-
-            torrent_d_directory_set($evp, $asciihash, $saveto, sub {
-            if(! defined $_[0]) { $request->Send404; return;}
-
-            torrent_d_start($evp, $asciihash, sub {
-            if(! defined $_[0]) { $request->Send404; return;}
-
-            say 'downloading ' . $asciihash;
-            $request->SendRedirectRawURL(301, 'torrent?infohash=' . $asciihash);
-            })})});
-        }
-        else {
         # set the priority and download
-            torrent_set_priority($evp, $asciihash, '1', sub {
-            if(! defined $_[0]) { $request->Send404; return;}
+        torrent_set_priority($evp, $asciihash, '1', sub {
+        if(! defined $_[0]) { $cb->{on_failure}->(); return;}
 
-            torrent_d_start($evp, $asciihash, sub {
-            if(! defined $_[0]) { $request->Send404; return;}
+        torrent_d_start($evp, $asciihash, sub {
+        if(! defined $_[0]) { $cb->{on_failure}->(); return;}
 
-            say 'downloading (existing) ' . $asciihash;
-            $request->SendRedirectRawURL(301, 'torrent?infohash=' . $asciihash);
-            })});
-        }
+        say 'starting (existing) ' . $asciihash;
+        $cb->{on_success}->($asciihash);
         })});
     }
+    });
 }
 
 # if an infohash is provided and it exists in rtorrent it reports the status of it
@@ -7384,7 +7530,20 @@ sub torrent {
     elsif(defined $qs->{'ptpid'}) {
         ptp_request($evp, 'torrents.php?action=download&id=' . $qs->{'ptpid'}, sub {
             my ($result) = @_;
-            torrent_on_contents($evp, $request, $result, $SETTINGS->{'MEDIALIBRARIES'}{'movies'});
+            if(! $result) {
+                say "failed to dl torrent";
+                $request->Send404;
+                return;
+            }
+            torrent_start($evp, \$result, $SETTINGS->{'MEDIALIBRARIES'}{'movies'}, {
+                'on_success' => sub {
+                    my ($hexhash) = @_;
+                    $request->SendRedirectRawURL(301, 'torrent?infohash=' . $hexhash);
+                },
+                'on_failure' => sub {
+                    $request->Send404;
+                }
+            });
         });
     }
     elsif(defined $qs->{'list'}) {
