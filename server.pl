@@ -2742,6 +2742,9 @@ package MHFS::Settings {
             }
             $SETTINGS->{'RUNTIME_DIR'} = $RUNTIMEDIR.'/mhfs';
         }
+        my $datadir = $SETTINGS->{'DATADIR'} || ($ENV{'XDG_DATA_HOME'} || ($ENV{'HOME'} . '/.local/share')) . '/mhfs';
+        $SETTINGS->{'DATADIR'} = $datadir;
+        $SETTINGS->{'MHFS_TRACKER_TORRENT_DIR'} ||= $SETTINGS->{'DATADIR'}.'/torrent';
         $SETTINGS->{'VIDEO_TMPDIR'} ||= $tmpdir.'/video';
         $SETTINGS->{'MUSIC_TMPDIR'} ||= $tmpdir.'/music';
         $SETTINGS->{'GENERIC_TMPDIR'} ||= $tmpdir.'/tmp';
@@ -3881,6 +3884,47 @@ package MHFS::Plugin::BitTorrent::Tracker {
     use Time::HiRes qw( clock_gettime CLOCK_MONOTONIC);
     use Data::Dumper;
 
+    sub createTorrent {
+        my ($self, $request) = @_;
+        my $fileitem = App::MHFS::video_file_lookup($request->{'qs'}{'name'});
+        if(!$fileitem) {
+            $request->Send404;
+            return;
+        }
+        my $absurl = $request->getAbsoluteURL;
+        if(! $absurl) {
+            say 'unable to $request->getAbsoluteURL';
+            $request->Send404;
+        }
+        print Dumper($fileitem);
+        my $outputname = $self->{'settings'}{'MHFS_TRACKER_TORRENT_DIR'}.'/'.$fileitem->{'name'}.'.torrent';
+        my @params = ('-p', '-o', $outputname, $fileitem->{filepath}, $absurl.'/torrent/tracker');
+        print "$_ " foreach @params;
+        print "\n";
+        my $evp = $request->{'client'}{'server'}{'evp'};
+        App::MHFS::mktor($evp, \@params, sub {
+        App::MHFS::torrent_file_hash($evp, MHFS::Util::read_file($outputname), sub {
+        my ($asciihash) = @_;
+
+        print Dumper($self->{'torrents'});
+        $self->{'torrents'}{pack('H*', $asciihash)} //= {};
+        print Dumper($self->{'torrents'});
+
+        #App::MHFS::torrent_load_verbose($evp, $outputname, sub {
+        App::MHFS::torrent_load_raw_verbose($evp, MHFS::Util::read_file($outputname), sub {
+        if(! defined $_[0]) { $request->Send404; return;}
+
+        App::MHFS::torrent_d_directory_set($evp, $asciihash, $fileitem->{'containingdir'}, sub {
+        if(! defined $_[0]) { $request->Send404; return;}
+
+        App::MHFS::torrent_d_start($evp, $asciihash, sub {
+        if(! defined $_[0]) { $request->Send404; return;}
+
+        $request->{'responseopt'}{'cd_file'} = 'attachment';
+        $request->SendLocalFile($outputname, 'applications/x-bittorrent');
+        })})})})});
+    }
+
     sub bencode {
         my ($node) = @_;
         my @toenc = ($node);
@@ -4059,6 +4103,10 @@ package MHFS::Plugin::BitTorrent::Tracker {
             my ($request) = @_;
             $self->announce($request);
         }],
+        ['/torrent/create', sub {
+            my ($request) = @_;
+            $self->createTorrent($request);
+        }],
         ];
 
         $self->{'timers'} = [
@@ -4150,6 +4198,7 @@ my %RESOURCES; # Caching of resources
 # make the temp dirs
 make_path($SETTINGS->{'VIDEO_TMPDIR'}, $SETTINGS->{'MUSIC_TMPDIR'}, $SETTINGS->{'RUNTIME_DIR'}, $SETTINGS->{'GENERIC_TMPDIR'});
 make_path($SETTINGS->{'SECRET_TMPDIR'}, {chmod => 0600});
+make_path($SETTINGS->{'DATADIR'}, $SETTINGS->{'MHFS_TRACKER_TORRENT_DIR'});
 
 # load plugins
 my @plugins;
@@ -6915,6 +6964,18 @@ sub lstor {
     return $process;
 }
 
+sub mktor {
+    my ($evp, $params, $cb) = @_;
+    my $process;
+    my @cmd = ('mktor', @$params);
+    $process    = MHFS::Process->new_output_process($evp, \@cmd, sub {
+        my ($output, $error) = @_;
+        chomp $output;
+        say 'mktor output: ' . $output;
+        $cb->($output);
+    });
+    return $process;
+}
 
 sub torrent_file_hash_pyroscope {
 my $pyroscope_get_info_hash = <<'END_pyroscope_get_info_hash';
