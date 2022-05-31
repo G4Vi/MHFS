@@ -2765,18 +2765,6 @@ package MHFS::Settings {
 
         $SETTINGS->{'Torrent'}{'pyroscope'} ||= $ENV{'HOME'} .'/.local/pyroscope';
 
-        if( ! defined $SETTINGS->{'MusicLibrary'}) {
-            my $folder = $SETTINGS->{'DOCUMENTROOT'} . "/media/music";
-            if(-d $folder) {
-                $SETTINGS->{'MusicLibrary'} = {
-                'enabled' => 1,
-                'sources' => [
-                    { 'type' => 'local', 'folder' => $folder},
-                    ]
-                };
-            }
-        }
-
         return $SETTINGS;
     }
 
@@ -3469,9 +3457,26 @@ package MHFS::Plugin::MusicLibrary {
         my @wholeLibrary;
 
         $self->{'sources'} = [];
-        my $tocheck = dclone($self->{'settings'}{'MusicLibrary'}{'sources'});
+        my $sources = $self->{'settings'}{'MEDIALIBRARIES'}{'music'};
+        my $typename = ref($sources);
+        if($typename ne 'ARRAY') {
+            $sources = [$sources];
+        }
+        my @tocheck;
+        foreach my $source (@$sources) {
+            my $stype = ref($source);
+            if($stype ne 'HASH') {
+                if($stype ne '') {
+                    say __PACKAGE__.": skipping source";
+                    next;
+                }
+                push @tocheck, {type => 'local',  folder => $source};
+                next;
+            }
+            push @tocheck, dclone($source);
+        }
 
-        foreach my $source (@{$tocheck}) {
+        foreach my $source (@tocheck) {
             my $lib;
             if($source->{'type'} eq 'local') {
                 say __PACKAGE__.": building music " . clock_gettime(CLOCK_MONOTONIC);
@@ -4369,8 +4374,7 @@ make_path($SETTINGS->{'DATADIR'}, $SETTINGS->{'MHFS_TRACKER_TORRENT_DIR'});
 # load plugins
 my @plugins;
 {
-    my @plugintotry = ('MHFS::Plugin::Youtube', 'MHFS::Plugin::BitTorrent::Tracker');
-    push (@plugintotry, 'MHFS::Plugin::MusicLibrary') if($SETTINGS->{'MusicLibrary'});
+    my @plugintotry = ('MHFS::Plugin::MusicLibrary', 'MHFS::Plugin::Youtube', 'MHFS::Plugin::BitTorrent::Tracker');
     foreach my $plugin (@plugintotry) {
         next if(defined $SETTINGS->{$plugin}{'enabled'} && (!$SETTINGS->{$plugin}{'enabled'}));
         my $loaded = $plugin->new($SETTINGS);
@@ -4462,6 +4466,9 @@ my @routes = (
     ],
     [
         '/torrent', \&torrent
+    ],
+    [
+        '/media_search', \&media_search
     ],
     [
         '/debug', sub {
@@ -5401,6 +5408,23 @@ sub kodi_movies {
     $request->SendHTML($buf);
 }
 
+sub media_search {
+    my ($request) = @_;
+    if(! defined $request->{qs}{name}) {
+        $request->Send404;
+        return undef;
+    }
+    my $src_file = media_file_search($request->{qs}{name});
+    if(! defined $src_file) {
+        $request->Send404;
+        return undef;
+    }
+
+    $request->SendAsJSON({'utf8' => MHFS::Util::get_printable_utf8($src_file->{'fullname'})});
+
+    return 1;
+}
+
 # really acquire media file (with search) and convert
 sub get_video {
     my ($request) = @_;
@@ -5422,15 +5446,6 @@ sub get_video {
             return 1;
         }
         if($video{'src_file'} = video_file_lookup($qs->{'name'})) {
-        }
-        elsif($video{'src_file'} = media_file_search($qs->{'name'})) {
-            say "useragent: " . $header->{'User-Agent'};
-            # VLC 2 doesn't handle redirects? VLC 3 does
-            if($header->{'User-Agent'} !~ /^VLC\/2\.\d+\.\d+\s/) {
-                $qs->{'name'} = $video{'src_file'}{'fullname'};
-                $request->SendRedirect(301, 'get_video', $qs);
-                return 1;
-            }
         }
         else {
             $request->Send404;
@@ -7043,18 +7058,14 @@ sub media_file_search {
     say "basename: " . basename($filename) . " dirname: " . dirname($filename);
     my $dir = dirname($filename);
     $dir = undef if ($dir eq '.');
-    my $filepath = FindFile(\@locations, basename($filename), $dir);
-    return if(! $filepath);
-
-    # a better find algorithm would tell us $location so we don't have to find it again
-    my $flocation;
-    foreach my $location(@locations) {
-        if(rindex($filepath, $location, 0) == 0) {
-            $flocation = $location;
-            last;
+    my $filepath;
+    foreach my $location (@locations) {
+        $filepath = FindFile([$location], basename($filename), $dir);
+        if($filepath) {
+            return media_filepath_to_src_file($filepath, $location);
         }
     }
-    return media_filepath_to_src_file($filepath, $flocation);
+    return undef;
 }
 
 sub GetResource {
