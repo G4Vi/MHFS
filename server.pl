@@ -1342,6 +1342,7 @@ package MHFS::HTTP::Server::Client::Request {
         if($self->{'method'} ne 'HEAD') {
             my $FH;
             if(! open($FH, "<", $requestfile)) {
+                say "SLF: open failed";
                 $self->Send404;
                 return;
             }
@@ -2551,6 +2552,8 @@ package MHFS::Settings {
     use feature 'say';
     use Scalar::Util qw(reftype);
     use File::Basename;
+    use Digest::MD5 qw(md5_base64);
+    use Storable qw(freeze);
     MHFS::Util->import();
 
     sub write_settings_file {
@@ -2752,6 +2755,31 @@ package MHFS::Settings {
         $SETTINGS->{'MEDIALIBRARIES'}{'movies'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/movies",
         $SETTINGS->{'MEDIALIBRARIES'}{'tv'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/tv",
         $SETTINGS->{'MEDIALIBRARIES'}{'music'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/music",
+        my %mediasources = ();
+        foreach my $lib ('movies', 'tv', 'music') {
+            my $srcs = $SETTINGS->{'MEDIALIBRARIES'}{$lib};
+            if(ref($srcs) ne 'ARRAY') {
+                $srcs = [$srcs];
+            }
+            my @subsrcs;
+            foreach my $source (@$srcs) {
+                my $stype = ref($source);
+                my $tohash = $source;
+                if($stype ne 'HASH') {
+                    if($stype ne '') {
+                        say __PACKAGE__.": skipping source";
+                        next;
+                    }
+                    $tohash = {type => 'local',  folder => $source};
+                }
+                push @subsrcs, [md5_base64(freeze($tohash)), $tohash];
+            }
+            $mediasources{$lib} = \@subsrcs;
+        }
+        my $videotmpdirsrc = {type => 'local',  folder => $SETTINGS->{'VIDEO_TMPDIR'}};
+        $mediasources{'vtemp'} = [[md5_base64(freeze($videotmpdirsrc)), $videotmpdirsrc]];
+        $SETTINGS->{'VIDEO_TMPDIR_QS'} = 'lib=vtemp&sid='.$mediasources{'vtemp'}[0][0];
+        $SETTINGS->{'MEDIASOURCES'} = \%mediasources;
         $SETTINGS->{'BINDIR'} ||= $APPDIR . '/bin';
         $SETTINGS->{'DOCDIR'} ||= $APPDIR . '/doc';
         $SETTINGS->{'CFGDIR'} ||= $CFGDIR;
@@ -3457,26 +3485,9 @@ package MHFS::Plugin::MusicLibrary {
         my @wholeLibrary;
 
         $self->{'sources'} = [];
-        my $sources = $self->{'settings'}{'MEDIALIBRARIES'}{'music'};
-        my $typename = ref($sources);
-        if($typename ne 'ARRAY') {
-            $sources = [$sources];
-        }
-        my @tocheck;
-        foreach my $source (@$sources) {
-            my $stype = ref($source);
-            if($stype ne 'HASH') {
-                if($stype ne '') {
-                    say __PACKAGE__.": skipping source";
-                    next;
-                }
-                push @tocheck, {type => 'local',  folder => $source};
-                next;
-            }
-            push @tocheck, dclone($source);
-        }
-
-        foreach my $source (@tocheck) {
+        my $sources = dclone($self->{'settings'}{'MEDIASOURCES'}{'music'});
+        foreach my $sourcepair (@$sources) {
+            my $source = $sourcepair->[1];
             my $lib;
             if($source->{'type'} eq 'local') {
                 say __PACKAGE__.": building music " . clock_gettime(CLOCK_MONOTONIC);
@@ -5434,18 +5445,16 @@ sub get_video {
     $qs->{'fmt'} //= 'noconv';
     my %video = ('out_fmt' => video_get_format($qs->{'fmt'}));
     if(defined($qs->{'name'})) {
-        if($qs->{'fmt'} eq 'tmpdir') {
-            my $location = $SETTINGS->{'VIDEO_TMPDIR'};
-            my $filename = $qs->{'name'};
-            my $absolute = abs_path("$location/$filename");
-            if(!$absolute || ($absolute !~ /^$location/) || (! -e $absolute)) {
+        if(defined($qs->{'sid'}) && defined($qs->{'lib'})) {
+            $video{'src_file'} = media_file_lookup($qs->{'name'}, $qs->{'lib'}, $qs->{'sid'});
+            if( ! $video{'src_file'} ) {
                 $request->Send404;
                 return undef;
             }
-            $request->SendFile($absolute);
-            return 1;
         }
-        if($video{'src_file'} = video_file_lookup($qs->{'name'})) {
+        # DEPRECATED, to be removed
+        elsif($video{'src_file'} = video_file_lookup($qs->{'name'})) {
+            #die;
         }
         else {
             $request->Send404;
@@ -5455,9 +5464,13 @@ sub get_video {
         # no conversion necessary, just SEND IT
         if($video{'out_fmt'} eq 'noconv') {
             say "NOCONV: SEND IT";
-            #$request->{'outheaders'}{'Icy-Name'} = 'Ice ice baby';
             $request->SendFile($video{'src_file'}{'filepath'});
             return 1;
+        }
+
+        if(! -e $video{'src_file'}{'filepath'}) {
+            $request->Send404;
+            return undef;
         }
 
         $video{'out_base'} = $video{'src_file'}{'name'};
@@ -5499,7 +5512,7 @@ sub get_video {
     my $fmt = $video{'out_fmt'};
     $video{'out_location'} = $SETTINGS->{'VIDEO_TMPDIR'} . '/' . $video{'out_base'};
     $video{'out_filepath'} = $video{'out_location'} . '/' . $video{'out_base'} . '.' . $VIDEOFORMATS{$video{'out_fmt'}}{'ext'};
-    $video{'out_location_url'} = 'get_video?fmt=tmpdir&name='.$video{'out_base'}.'%2F';
+    $video{'out_location_url'} = 'get_video?'.$SETTINGS->{VIDEO_TMPDIR_QS}.'&fmt=noconv&name='.$video{'out_base'}.'%2F';
 
     # Serve it up if it has been created
     if(-e $video{'out_filepath'}) {
@@ -6941,6 +6954,24 @@ sub video_file_lookup {
     return media_filepath_to_src_file($filepath, $flocation);
 }
 
+sub media_file_lookup {
+    my ($name, $lib, $sid) = @_;
+    foreach my $source (@{$SETTINGS->{'MEDIASOURCES'}{$lib}}) {
+        next if($sid ne $source->[0]);
+        my $src = $source->[1];
+        if($src->{'type'} ne 'local') {
+            say "unhandled src type ". $src->{'type'};
+            return undef;
+        }
+        my $location = $src->{'folder'};
+        my $absolute = abs_path($location.'/'.$name);
+        return undef if( ! $absolute);
+        return undef if ($absolute !~ /^$location/);
+        return media_filepath_to_src_file($absolute, $location);
+    }
+    return undef;
+}
+
 sub video_on_streams {
     my ($video, $request, $continue) = @_;
     $video->{'audio'} = [];
@@ -7006,7 +7037,7 @@ sub video_hls_write_master_playlist {
     foreach my $line (split("\n", $m3ucontent)) {
         # master playlist doesn't get written with base url ...
         if($line =~ /^(.+)\.m3u8_v$/) {
-            $subm3u = "get_video?fmt=tmpdir&name=" . uri_escape("$1/$1");
+            $subm3u = "get_video?".$SETTINGS->{VIDEO_TMPDIR_QS}."&fmt=noconv&name=" . uri_escape("$1/$1");
             $line = $subm3u . '.m3u8_v';
         }
         $newm3ucontent .= $line . "\n";
@@ -7724,12 +7755,16 @@ sub player_video {
     my %libraryprint = ( 'movies' => 'Movies', 'tv' => 'TV', 'other' => 'Other');
     my $fmt = video_get_format($qs->{'fmt'});
     foreach my $library (@libraries) {
-        my $dir = $SETTINGS->{'MEDIALIBRARIES'}{$library};
-        defined($dir) or next;
-        (-d $dir) or next;
-        $buf .= "<h1>" . $libraryprint{$library} . "</h1>\n";
-        $temp = video_library_html($dir, {'fmt' => $fmt});
-        $buf .= $$temp;
+        my $lib = $SETTINGS->{'MEDIASOURCES'}{$library};
+        defined($lib) or next;
+        my $libhtmlcontent;
+        foreach my $sublib (@$lib) {
+            next if(! -d $sublib->[1]{'folder'});
+            $libhtmlcontent .= ${video_library_html($sublib->[1]{'folder'}, $library, $sublib->[0], {'fmt' => $fmt})};
+        }
+        next if(! $libhtmlcontent);
+        $buf .= "<h1>" . $libraryprint{$library} . "</h1><ul>\n";
+        $buf .= $libhtmlcontent.'</ul>';
     }
     $buf .= '</div>';
 
@@ -7746,9 +7781,12 @@ sub player_video {
 }
 
 sub video_library_html {
-    my ($dir, $opt) = @_;
+    my ($dir, $lib, $sid, $opt) = @_;
     my $fmt = $opt->{'fmt'};
-    my $buf = '<ul>';
+
+    my $urlconstant = 'lib='.$lib.'&sid='.$sid;
+
+    my $buf;
     output_dir_versatile($dir, {
         'root' => $dir,
         'min_file_size' => 100000,
@@ -7759,7 +7797,7 @@ sub video_library_html {
             $buf .= '<li><div class="row">';
             $buf .= '<a href="#' . $relpath . '_hide" class="hide" id="' . $$disppath . '_hide">' . "$$disppath</a>";
             $buf .= '<a href="#' . $relpath . '_show" class="show" id="' . $$disppath . '_show">' . "$$disppath</a>";
-            $buf .= '    <a href="get_video?name=' . $relpath . '&fmt=m3u8">M3U</a>';
+            $buf .= '    <a href="get_video?'.$urlconstant.'&name=' . $relpath . '&fmt=m3u8">M3U</a>';
             $buf .= '<div class="list"><ul>';
         },
         'on_dir_end' => sub {
@@ -7769,10 +7807,9 @@ sub video_library_html {
             my ($realpath, $unsafe_relpath, $unsafe_name) = @_;
             my $relpath = uri_escape($unsafe_relpath);
             my $filename = escape_html(decode('UTF-8', $unsafe_name));
-            $buf .= '<li><a href="video?name='.$relpath.'&fmt=' . $fmt . '" class="mediafile">' . $$filename . '</a>    <a href="get_video?name=' . $relpath . '&fmt=' . $fmt . '">DL</a>    <a href="get_video?name=' . $relpath . '&fmt=m3u8">M3U</a></li>';
+            $buf .= '<li><a href="video?'.$urlconstant.'&name='.$relpath.'&fmt=' . $fmt . '" class="mediafile">' . $$filename . '</a>    <a href="get_video?'.$urlconstant.'&name=' . $relpath . '&fmt=' . $fmt . '">DL</a>    <a href="get_video?'.$urlconstant.'&name=' . $relpath . '&fmt=m3u8">M3U</a></li>';
         }
     });
-    $buf .=  '</ul>';
     return \$buf;
 }
 
