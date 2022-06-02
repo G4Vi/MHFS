@@ -3494,7 +3494,7 @@ package MHFS::Plugin::MusicLibrary {
         $self->{'sources'} = [];
 
         foreach my $sid (@{$self->{'settings'}{'MEDIASOURCES'}{'music'}}) {
-            my $source = dclone($self->{'settings'}{'SOURCES'}{$sid});
+            my $source = $self->{'settings'}{'SOURCES'}{$sid};
             my $lib;
             if($source->{'type'} eq 'local') {
                 say __PACKAGE__.": building music " . clock_gettime(CLOCK_MONOTONIC);
@@ -3505,20 +3505,18 @@ package MHFS::Plugin::MusicLibrary {
             }
             elsif($source->{'type'} eq 'mhfs') {
             }
-            if($lib) {
-                $source->{'lib'} = $lib;
-                push @{$self->{'sources'}}, $source;
-                OUTER: foreach my $item (@{$lib->[2]}) {
-                    foreach my $already (@wholeLibrary) {
-                        next OUTER if($already->[0] eq $item->[0]);
-                    }
-                    push @wholeLibrary, $item;
-                }
-            }
-            else {
-                $source->{'lib'} = undef;
+
+            if(!$lib) {
                 warn "invalid source: " . $source->{'type'};
                 warn 'folder: '. $source->{'folder'} if($source->{'type'} eq 'local');
+                next;
+            }
+            push @{$self->{'sources'}}, [$sid, $lib];
+            OUTER: foreach my $item (@{$lib->[2]}) {
+                foreach my $already (@wholeLibrary) {
+                    next OUTER if($already->[0] eq $item->[0]);
+                }
+                push @wholeLibrary, $item;
             }
         }
         $self->{'library'} = \@wholeLibrary;
@@ -3527,10 +3525,10 @@ package MHFS::Plugin::MusicLibrary {
     }
 
     sub FindInLibrary {
-        my ($source, $name) = @_;
+        my ($self, $msource, $name) = @_;
         my @namearr = split('/', $name);
-        my $finalstring = $source->{'folder'};
-        my $lib = $source->{'lib'};
+        my $finalstring = $self->{'settings'}{'SOURCES'}{$msource->[0]}{'folder'};
+        my $lib = $msource->[1];
         FindInLibrary_Outer: foreach my $component (@namearr) {
             foreach my $libcomponent (@{$lib->[2]}) {
                 if($libcomponent->[3] eq $component) {
@@ -3574,14 +3572,15 @@ package MHFS::Plugin::MusicLibrary {
     sub SendFromLibrary {
         my ($self, $request) = @_;
         my $utf8name = decode('UTF-8', $request->{'qs'}{'name'});
-        foreach my $source (@{$self->{'sources'}}) {
-            my $node = FindInLibrary($source, $utf8name);
+        foreach my $msource (@{$self->{'sources'}}) {
+            my $node = $self->FindInLibrary($msource, $utf8name);
             next if ! $node;
 
             my $nameloc;
             if($utf8name =~ /(.+\/).+$/) {
                 $nameloc  = $1;
             }
+            my $source = $self->{'settings'}{'SOURCES'}{$msource->[0]};
             if($sendFiles{$source->{'type'}}->($request, $node->{'path'}, $node->{'node'}, $source, $nameloc)) {
                 return 1;
             }
@@ -3601,8 +3600,8 @@ package MHFS::Plugin::MusicLibrary {
         }
 
         my $utf8name = decode('UTF-8', $request->{'qs'}{'name'});
-        foreach my $source (@{$self->{'sources'}}) {
-            my $node = FindInLibrary($source, $utf8name);
+        foreach my $msource (@{$self->{'sources'}}) {
+            my $node = $self->FindInLibrary($msource, $utf8name);
             next if ! $node;
             my $comments = MHFS::XS::get_vorbis_comments($node->{'path'});
             my $commenthash = {};
@@ -3623,8 +3622,8 @@ package MHFS::Plugin::MusicLibrary {
         my ($self, $request) = @_;
 
         my $utf8name = decode('UTF-8', $request->{'qs'}{'name'});
-        foreach my $source (@{$self->{'sources'}}) {
-            my $node = FindInLibrary($source, $utf8name);
+        foreach my $msource (@{$self->{'sources'}}) {
+            my $node = $self->FindInLibrary($msource, $utf8name);
             next if ! $node;
 
             my $dname = $node->{'path'};
@@ -4321,6 +4320,44 @@ package MHFS::Plugin::BitTorrent::Tracker {
     1;
 }
 
+package MHFS::Plugin::OpenDirectory {
+    use strict; use warnings;
+    use feature 'say';
+
+    sub new {
+        my ($class, $settings) = @_;
+        my $self =  {};
+        bless $self, $class;
+
+        my $odmappings = $settings->{OPENDIRECTORY}{maps};
+
+        $self->{'routes'} = [
+            [
+                '/od', sub {
+                    my ($request) = @_;
+                    $request->SendRedirect(301, 'od/');
+                }
+            ],
+            [
+                '/od/*', sub {
+                    my ($request) = @_;
+                    foreach my $key (keys %{$odmappings}) {
+                        if(rindex($request->{'path'}{'unsafepath'}, '/od/'.$key, 0) == 0) {
+                            $request->SendOpenDirectory($odmappings->{$key}, '/od/'.$key);
+                            return;
+                        }
+                    }
+                    $request->Send404;
+                }
+            ],
+        ];
+
+        return $self;
+    }
+
+    1;
+}
+
 package App::MHFS; #Media Http File Server
 use version; our $VERSION = version->declare("v0.2.0");
 unless (caller) {
@@ -4392,7 +4429,7 @@ make_path($SETTINGS->{'DATADIR'}, $SETTINGS->{'MHFS_TRACKER_TORRENT_DIR'});
 # load plugins
 my @plugins;
 {
-    my @plugintotry = ('MHFS::Plugin::MusicLibrary', 'MHFS::Plugin::Youtube', 'MHFS::Plugin::BitTorrent::Tracker');
+    my @plugintotry = ('MHFS::Plugin::MusicLibrary', 'MHFS::Plugin::Youtube', 'MHFS::Plugin::BitTorrent::Tracker', 'MHFS::Plugin::OpenDirectory');
     foreach my $plugin (@plugintotry) {
         next if(defined $SETTINGS->{$plugin}{'enabled'} && (!$SETTINGS->{$plugin}{'enabled'}));
         my $loaded = $plugin->new($SETTINGS);
@@ -4451,20 +4488,10 @@ my @routes = (
     [
         '/video/*', sub {
             my ($request) = @_;
-            my $tvdir = "/video/tv";
             my $koditvdir = "/video/kodi/tv";
-            my $moviedir = "/video/movies";
             my $kodimoviedir = "/video/kodi/movies";
-            if(rindex($request->{'path'}{'unsafepath'}, $tvdir, 0) == 0) {
-                $request->SendOpenDirectory($SETTINGS->{'MEDIALIBRARIES'}{'tv'}, $tvdir);
-                return;
-            }
-            elsif(rindex($request->{'path'}{'unsafepath'}, $koditvdir, 0) == 0) {
+            if(rindex($request->{'path'}{'unsafepath'}, $koditvdir, 0) == 0) {
                 kodi_tv($request, $SETTINGS->{'MEDIALIBRARIES'}{'tv'}, $koditvdir);
-                return;
-            }
-            elsif(rindex($request->{'path'}{'unsafepath'}, $moviedir, 0) == 0) {
-                $request->SendOpenDirectory($SETTINGS->{'MEDIALIBRARIES'}{'movies'}, $moviedir);
                 return;
             }
             elsif(rindex($request->{'path'}{'unsafepath'}, $kodimoviedir, 0) == 0) {
@@ -4479,7 +4506,12 @@ my @routes = (
                 fmp4($request);
                 return;
             }
-            $request->Send404;
+            if($request->{'path'}{'unsafepath'} eq '/video') {
+                $request->SendRedirect(301, '../video');
+            }
+            else {
+                $request->Send404;
+            }
         }
     ],
     [
@@ -5446,9 +5478,9 @@ sub media_search {
 # really acquire media file (with search) and convert
 sub get_video {
     my ($request) = @_;
-    $request->{'responseopt'}{'cd_file'} = 'inline';
-    my ($client, $qs, $header) =  ($request->{'client'}, $request->{'qs'}, $request->{'header'});
     say "/get_video ---------------------------------------";
+    $request->{'responseopt'}{'cd_file'} = 'inline';
+    my $qs = $request->{'qs'};
     $qs->{'fmt'} //= 'noconv';
     my %video = ('out_fmt' => video_get_format($qs->{'fmt'}));
     if(defined($qs->{'name'})) {
@@ -5566,7 +5598,7 @@ sub get_video {
         $video{'pid'} = ASYNC(\&shellcmd_unlock, \@cmd, $video{'out_filepath'});
 
         # our file isn't ready yet, so create a timer to check the progress and act
-        weaken($request); # the only one who should be keeping $request alive is $client
+        weaken($request); # the only one who should be keeping $request alive is the client
         $request->{'client'}{'server'}{'evp'}->add_timer(0, 0, sub {
             if(! defined $request) {
                 say "\$request undef, ignoring CB";
