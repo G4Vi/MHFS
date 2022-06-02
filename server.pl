@@ -2755,7 +2755,8 @@ package MHFS::Settings {
         $SETTINGS->{'MEDIALIBRARIES'}{'movies'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/movies",
         $SETTINGS->{'MEDIALIBRARIES'}{'tv'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/tv",
         $SETTINGS->{'MEDIALIBRARIES'}{'music'} ||= $SETTINGS->{'DOCUMENTROOT'} . "/media/music",
-        my %mediasources = ();
+        my %sources;
+        my %mediasources;
         foreach my $lib ('movies', 'tv', 'music') {
             my $srcs = $SETTINGS->{'MEDIALIBRARIES'}{$lib};
             if(ref($srcs) ne 'ARRAY') {
@@ -2772,14 +2773,20 @@ package MHFS::Settings {
                     }
                     $tohash = {type => 'local',  folder => $source};
                 }
-                push @subsrcs, [md5_base64(freeze($tohash)), $tohash];
+                my $sid = md5_base64(freeze($tohash));
+                $sources{$sid} = $tohash;
+                push @subsrcs, $sid;
             }
             $mediasources{$lib} = \@subsrcs;
         }
-        my $videotmpdirsrc = {type => 'local',  folder => $SETTINGS->{'VIDEO_TMPDIR'}};
-        $mediasources{'vtemp'} = [[md5_base64(freeze($videotmpdirsrc)), $videotmpdirsrc]];
-        $SETTINGS->{'VIDEO_TMPDIR_QS'} = 'lib=vtemp&sid='.$mediasources{'vtemp'}[0][0];
         $SETTINGS->{'MEDIASOURCES'} = \%mediasources;
+
+        my $videotmpdirsrc = {type => 'local',  folder => $SETTINGS->{'VIDEO_TMPDIR'}};
+        my $vtempsrcid = md5_base64(freeze($videotmpdirsrc));
+        $sources{$vtempsrcid} = $videotmpdirsrc;
+        $SETTINGS->{'VIDEO_TMPDIR_QS'} = 'sid='.$vtempsrcid;
+        $SETTINGS->{'SOURCES'} = \%sources;
+
         $SETTINGS->{'BINDIR'} ||= $APPDIR . '/bin';
         $SETTINGS->{'DOCDIR'} ||= $APPDIR . '/doc';
         $SETTINGS->{'CFGDIR'} ||= $CFGDIR;
@@ -3485,9 +3492,9 @@ package MHFS::Plugin::MusicLibrary {
         my @wholeLibrary;
 
         $self->{'sources'} = [];
-        my $sources = dclone($self->{'settings'}{'MEDIASOURCES'}{'music'});
-        foreach my $sourcepair (@$sources) {
-            my $source = $sourcepair->[1];
+
+        foreach my $sid (@{$self->{'settings'}{'MEDIASOURCES'}{'music'}}) {
+            my $source = dclone($self->{'settings'}{'SOURCES'}{$sid});
             my $lib;
             if($source->{'type'} eq 'local') {
                 say __PACKAGE__.": building music " . clock_gettime(CLOCK_MONOTONIC);
@@ -5445,8 +5452,8 @@ sub get_video {
     $qs->{'fmt'} //= 'noconv';
     my %video = ('out_fmt' => video_get_format($qs->{'fmt'}));
     if(defined($qs->{'name'})) {
-        if(defined($qs->{'sid'}) && defined($qs->{'lib'})) {
-            $video{'src_file'} = media_file_lookup($qs->{'name'}, $qs->{'lib'}, $qs->{'sid'});
+        if(defined($qs->{'sid'})) {
+            $video{'src_file'} = media_file_lookup($qs->{'name'}, $qs->{'sid'});
             if( ! $video{'src_file'} ) {
                 $request->Send404;
                 return undef;
@@ -6955,21 +6962,22 @@ sub video_file_lookup {
 }
 
 sub media_file_lookup {
-    my ($name, $lib, $sid) = @_;
-    foreach my $source (@{$SETTINGS->{'MEDIASOURCES'}{$lib}}) {
-        next if($sid ne $source->[0]);
-        my $src = $source->[1];
-        if($src->{'type'} ne 'local') {
-            say "unhandled src type ". $src->{'type'};
-            return undef;
-        }
-        my $location = $src->{'folder'};
-        my $absolute = abs_path($location.'/'.$name);
-        return undef if( ! $absolute);
-        return undef if ($absolute !~ /^$location/);
-        return media_filepath_to_src_file($absolute, $location);
+    my ($name, $sid) = @_;
+
+    if(! exists $SETTINGS->{'SOURCES'}{$sid}) {
+        return undef;
     }
-    return undef;
+
+    my $src = $SETTINGS->{'SOURCES'}{$sid};
+    if($src->{'type'} ne 'local') {
+        say "unhandled src type ". $src->{'type'};
+        return undef;
+    }
+    my $location = $src->{'folder'};
+    my $absolute = abs_path($location.'/'.$name);
+    return undef if( ! $absolute);
+    return undef if ($absolute !~ /^$location/);
+    return media_filepath_to_src_file($absolute, $location);
 }
 
 sub video_on_streams {
@@ -7755,12 +7763,13 @@ sub player_video {
     my %libraryprint = ( 'movies' => 'Movies', 'tv' => 'TV', 'other' => 'Other');
     my $fmt = video_get_format($qs->{'fmt'});
     foreach my $library (@libraries) {
+        exists $SETTINGS->{'MEDIASOURCES'}{$library} or next;
         my $lib = $SETTINGS->{'MEDIASOURCES'}{$library};
-        defined($lib) or next;
         my $libhtmlcontent;
-        foreach my $sublib (@$lib) {
-            next if(! -d $sublib->[1]{'folder'});
-            $libhtmlcontent .= ${video_library_html($sublib->[1]{'folder'}, $library, $sublib->[0], {'fmt' => $fmt})};
+        foreach my $sid (@$lib) {
+            my $sublib = $SETTINGS->{'SOURCES'}{$sid};
+            next if(! -d $sublib->{'folder'});
+            $libhtmlcontent .= ${video_library_html($sublib->{'folder'}, $library, $sid, {'fmt' => $fmt})};
         }
         next if(! $libhtmlcontent);
         $buf .= "<h1>" . $libraryprint{$library} . "</h1><ul>\n";
