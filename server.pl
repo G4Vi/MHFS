@@ -2552,7 +2552,7 @@ package MHFS::Settings {
     use feature 'say';
     use Scalar::Util qw(reftype);
     use File::Basename;
-    use Digest::MD5 qw(md5_base64);
+    use Digest::MD5 qw(md5_hex);
     use Storable qw(freeze);
     MHFS::Util->import();
 
@@ -2639,6 +2639,15 @@ package MHFS::Settings {
         $settingscontents .= ";\n\n\$SETTINGS;\n";
         system('mkdir', '-p', dirname($filepath)) == 0 or die("failed to make settings folder");
         write_file($filepath,  $settingscontents);
+    }
+
+    sub calc_source_id {
+        my ($source) = @_;
+        if($source->{'type'} ne 'local') {
+            say "only local sources supported right now";
+            return undef;
+        }
+        return substr(md5_hex('local:'.$source->{folder}), 0, 8);
     }
 
     sub load {
@@ -2773,7 +2782,7 @@ package MHFS::Settings {
                     }
                     $tohash = {type => 'local',  folder => $source};
                 }
-                my $sid = md5_base64(freeze($tohash));
+                my $sid = calc_source_id($tohash);
                 $sources{$sid} = $tohash;
                 push @subsrcs, $sid;
             }
@@ -2782,7 +2791,7 @@ package MHFS::Settings {
         $SETTINGS->{'MEDIASOURCES'} = \%mediasources;
 
         my $videotmpdirsrc = {type => 'local',  folder => $SETTINGS->{'VIDEO_TMPDIR'}};
-        my $vtempsrcid = md5_base64(freeze($videotmpdirsrc));
+        my $vtempsrcid = calc_source_id($videotmpdirsrc);
         $sources{$vtempsrcid} = $videotmpdirsrc;
         $SETTINGS->{'VIDEO_TMPDIR_QS'} = 'sid='.$vtempsrcid;
         $SETTINGS->{'SOURCES'} = \%sources;
@@ -4358,6 +4367,65 @@ package MHFS::Plugin::OpenDirectory {
     1;
 }
 
+package MHFS::Plugin::Playlist {
+    use strict; use warnings;
+    use feature 'say';
+    use Data::Dumper;
+
+    sub new {
+        my ($class, $settings) = @_;
+        my $self =  {};
+        bless $self, $class;
+
+        my @subsystems = ('video');
+
+        $self->{'routes'} = [
+            [
+                '/playlist/*', sub {
+                    my ($request) = @_;
+                    my $qs = $request->{'qs'};
+                    my @pathcomponents = split('/', $request->{'path'}{'unsafepath'});
+                    if(scalar(@pathcomponents) >= 3) {
+                        if($pathcomponents[2] eq 'video') {
+                            if(scalar(@pathcomponents) >= 5) {
+                                my %video = ('out_fmt' => ($request->{'qs'}{'vfmt'} // 'noconv'));
+                                my $sid = $pathcomponents[3];
+                                splice(@pathcomponents, 0, 4);
+                                my $nametolookup = join('/', @pathcomponents);
+                                $video{'src_file'} = App::MHFS::media_file_lookup($nametolookup, $sid);
+                                if( ! $video{'src_file'} ) {
+                                    $request->Send404;
+                                    return undef;
+                                }
+                                $video{'out_base'} = $video{'src_file'}{'name'};
+                                my $fmt = $request->{'qs'}{'fmt'} // 'm3u8';
+                                if($fmt eq 'm3u8') {
+                                    my $absurl = $request->getAbsoluteURL;
+                                    if(! $absurl) {
+                                        say 'unable to $request->getAbsoluteURL';
+                                        $request->Send404;
+                                        return undef;
+                                    }
+                                    my $m3u8 = App::MHFS::video_get_m3u8(\%video,  $absurl . '/get_video?sid='. $sid . '&name=');
+                                    $video{'src_file'}{'ext'} = $video{'src_file'}{'ext'} ? '.'. $video{'src_file'}{'ext'} : '';
+                                    $request->{'responseopt'}{'cd_file'} = 'inline';
+                                    $request->SendText('application/x-mpegURL', $$m3u8, {'filename' => $video{'src_file'}{'name'} . $video{'src_file'}{'ext'} . '.m3u8'});
+                                    return 1;
+                                }
+                            }                  
+                        }
+                    }
+                    $request->Send404;
+                }
+            ],
+        ];
+
+        return $self;
+    }
+
+    1;
+}
+
 package App::MHFS; #Media Http File Server
 use version; our $VERSION = version->declare("v0.2.0");
 unless (caller) {
@@ -4429,7 +4497,7 @@ make_path($SETTINGS->{'DATADIR'}, $SETTINGS->{'MHFS_TRACKER_TORRENT_DIR'});
 # load plugins
 my @plugins;
 {
-    my @plugintotry = ('MHFS::Plugin::MusicLibrary', 'MHFS::Plugin::Youtube', 'MHFS::Plugin::BitTorrent::Tracker', 'MHFS::Plugin::OpenDirectory');
+    my @plugintotry = ('MHFS::Plugin::MusicLibrary', 'MHFS::Plugin::Youtube', 'MHFS::Plugin::BitTorrent::Tracker', 'MHFS::Plugin::OpenDirectory', 'MHFS::Plugin::Playlist');
     foreach my $plugin (@plugintotry) {
         next if(defined $SETTINGS->{$plugin}{'enabled'} && (!$SETTINGS->{$plugin}{'enabled'}));
         my $loaded = $plugin->new($SETTINGS);
@@ -4465,7 +4533,6 @@ my %VIDEOFORMATS = (
             'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/mp4seg_player.html', }, #'minsize' => '20971520'},
 
             'noconv' => {'lock' => 0, 'ext' => '', 'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/noconv_player.html', },
-            'm3u8'   => {'lock' => 0, 'ext' => ''},
             'mkv'    => {'lock' => 0, 'ext' => ''}
 );
 
@@ -5513,21 +5580,8 @@ sub get_video {
         }
 
         $video{'out_base'} = $video{'src_file'}{'name'};
-        if($video{'out_fmt'} eq 'm3u8') {
-            my $absurl = $request->getAbsoluteURL;
-            if(! $absurl) {
-                say 'unable to $request->getAbsoluteURL';
-                $request->Send404;
-                return undef;
-            }
-            my $m3u8 = video_get_m3u8(\%video,  $absurl . $request->{'path'}{'unsafepath'} . '?name=');
-            #$request->{'outheaders'}{'Icy-Name'} = $video{'fullname'};
-            $video{'src_file'}{'ext'} = $video{'src_file'}{'ext'} ? '.'. $video{'src_file'}{'ext'} : '';
-            $request->SendText('application/x-mpegURL', $$m3u8, {'filename' => $video{'src_file'}{'name'} . $video{'src_file'}{'ext'} . '.m3u8'});
-            return 1;
-        }
         # virtual mkv
-        elsif($video{'out_fmt'} eq 'mkv') {
+        if($video{'out_fmt'} eq 'mkv') {
             $video{'out_location'} = $SETTINGS->{'VIDEO_TMPDIR'} . '/' . $video{'out_base'};
             video_matroska(\%video, $request);
             return 1;
@@ -7821,11 +7875,21 @@ sub player_video {
     $request->SendHTML($buf);
 }
 
+sub uri_escape_path {
+    my ($path) = @_;
+    my @components = split('/', $path);
+    print Dumper(@components);
+    my @encodedcomponents = map(uri_escape($_), @components);
+    print Dumper(@encodedcomponents);
+    return join('/', @encodedcomponents);
+}
+
 sub video_library_html {
     my ($dir, $lib, $sid, $opt) = @_;
     my $fmt = $opt->{'fmt'};
 
     my $urlconstant = 'lib='.$lib.'&sid='.$sid;
+    my $playlisturl = "playlist/video/$sid/";
 
     my $buf;
     output_dir_versatile($dir, {
@@ -7838,7 +7902,7 @@ sub video_library_html {
             $buf .= '<li><div class="row">';
             $buf .= '<a href="#' . $relpath . '_hide" class="hide" id="' . $$disppath . '_hide">' . "$$disppath</a>";
             $buf .= '<a href="#' . $relpath . '_show" class="show" id="' . $$disppath . '_show">' . "$$disppath</a>";
-            $buf .= '    <a href="get_video?'.$urlconstant.'&name=' . $relpath . '&fmt=m3u8">M3U</a>';
+            $buf .= '    <a href="'.$playlisturl . uri_escape_path($unsafe_relpath) . '?fmt=m3u8">M3U</a>';
             $buf .= '<div class="list"><ul>';
         },
         'on_dir_end' => sub {
@@ -7848,7 +7912,7 @@ sub video_library_html {
             my ($realpath, $unsafe_relpath, $unsafe_name) = @_;
             my $relpath = uri_escape($unsafe_relpath);
             my $filename = escape_html(decode('UTF-8', $unsafe_name));
-            $buf .= '<li><a href="video?'.$urlconstant.'&name='.$relpath.'&fmt=' . $fmt . '" class="mediafile">' . $$filename . '</a>    <a href="get_video?'.$urlconstant.'&name=' . $relpath . '&fmt=' . $fmt . '">DL</a>    <a href="get_video?'.$urlconstant.'&name=' . $relpath . '&fmt=m3u8">M3U</a></li>';
+            $buf .= '<li><a href="video?'.$urlconstant.'&name='.$relpath.'&fmt=' . $fmt . '" class="mediafile">' . $$filename . '</a>    <a href="get_video?'.$urlconstant.'&name=' . $relpath . '&fmt=' . $fmt . '">DL</a>    <a href="'.$playlisturl . uri_escape_path($unsafe_relpath) . '?fmt=m3u8">M3U</a></li>';
         }
     });
     return \$buf;
