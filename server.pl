@@ -4426,6 +4426,284 @@ package MHFS::Plugin::Playlist {
     1;
 }
 
+package MHFS::Plugin::Kodi {
+    use strict; use warnings;
+    use feature 'say';
+    use File::Basename qw(basename);
+    use Cwd qw(abs_path);
+    use URI::Escape qw(uri_escape);
+    use Encode qw(decode);
+
+    # format tv library for kodi http
+    sub route_tv {
+        my ($request, $absdir, $kodidir) = @_;
+        # read in the shows
+        my $tvdir = abs_path($absdir);
+        if(! defined $tvdir) {
+            $request->Send404;
+            return;
+        }
+        my $dh;
+        if(! opendir ( $dh, $tvdir )) {
+            warn "Error in opening dir $tvdir\n";
+            $request->Send404;
+            return;
+        }
+        my %shows = ();
+        my @diritems;
+        while( (my $filename = readdir($dh))) {
+            next if(($filename eq '.') || ($filename eq '..'));
+            next if(!(-s "$tvdir/$filename"));
+            # extract the showname
+            next if($filename !~ /^(.+)[\.\s]+S\d+/);
+            my $showname = $1;
+            if($showname) {
+                $showname =~ s/\./ /g;
+                if(! $shows{$showname}) {
+                    $shows{$showname} = [];
+                    push @diritems, {'item' => $showname, 'isdir' => 1}
+                }
+                push @{$shows{$showname}}, "$tvdir/$filename";
+            }
+        }
+        closedir($dh);
+    
+        # locate the content
+        if($request->{'path'}{'unsafepath'} ne $kodidir) {
+            my $fullshowname = substr($request->{'path'}{'unsafepath'}, length($kodidir)+1);
+            my $slash = index($fullshowname, '/');
+            @diritems = ();
+            my $showname = ($slash != -1) ? substr($fullshowname, 0, $slash) : $fullshowname;
+            my $showfilename = ($slash != -1) ? substr($fullshowname, $slash+1) : undef;
+    
+            my $showitems = $shows{$showname};
+            if(!$showitems) {
+                $request->Send404;
+                return;
+            }
+            my @initems = @{$showitems};
+            my @outitems;
+            # TODO replace basename usage?
+            while(@initems) {
+                my $item = shift @initems;
+                $item = abs_path($item);
+                if(! $item) {
+                    say "bad item";
+                }
+                elsif(rindex($item, $tvdir, 0) != 0) {
+                    say "bad item, path traversal?";
+                }
+                elsif(-f $item) {
+                    my $filebasename = basename($item);
+                    if(!$showfilename) {
+                        push @diritems, {'item' => $filebasename, 'isdir' => 0};
+                    }
+                    elsif($showfilename eq $filebasename) {
+                        if(index($request->{'path'}{'unsafecollapse'}, '/', length($request->{'path'}{'unsafecollapse'})-1) == -1) {
+                            say "found show filename";
+                            $request->SendFile($item);
+                        }
+                        else {
+                            $request->Send404;
+                        }
+                        return;
+                    }
+                }
+                elsif(-d _) {
+                    opendir(my $dh, $item) or die('failed to open dir');
+                    my @newitems;
+                    while(my $newitem = readdir($dh)) {
+                        next if(($newitem eq '.') || ($newitem eq '..'));
+                        push @newitems, "$item/$newitem";
+                    }
+                    closedir($dh);
+                    unshift @initems, @newitems;
+                }
+                else {
+                    say "bad item unknown filetype " . $item;
+                }
+            }
+        }
+    
+        # redirect if the slash wasn't there
+        if(index($request->{'path'}{'unescapepath'}, '/', length($request->{'path'}{'unescapepath'})-1) == -1) {
+            $request->SendRedirect(301, substr($request->{'path'}{'unescapepath'}, rindex($request->{'path'}{'unescapepath'}, '/')+1).'/');
+            return;
+        }
+    
+        # generate the directory html
+        my $buf = '';
+        foreach my $show (@diritems) {
+            my $showname = $show->{'item'};
+            my $url = uri_escape($showname);
+            $url .= '/' if($show->{'isdir'});
+            $buf .= '<a href="' . $url .'">'.${MHFS::Util::escape_html_noquote(decode('UTF-8', $showname, Encode::LEAVE_SRC))} .'</a><br><br>';
+        }
+        $request->SendHTML($buf);
+    }
+    
+    # format movies library for kodi http
+    sub route_movies {
+        my ($request, $absdir, $kodidir) = @_;
+        # read in the shows
+        my $moviedir = abs_path($absdir);
+        if(! defined $moviedir) {
+            $request->Send404;
+            return;
+        }
+        my $dh;
+        if(! opendir ( $dh, $moviedir )) {
+            warn "Error in opening dir $moviedir\n";
+            $request->Send404;
+            return;
+        }
+        my %shows = ();
+        my @diritems;
+        while( (my $filename = readdir($dh))) {
+            next if(($filename eq '.') || ($filename eq '..'));
+            next if(!(-s "$moviedir/$filename"));
+            my $showname;
+            # extract the showname
+            if($filename =~ /^(.+)[\.\s]+\(?(\d{4})([^p]|$)/) {
+                $showname = "$1 ($2)";
+            }
+            elsif($filename =~ /^(.+)(\.DVDRip)\.[a-zA-Z]{3,4}$/) {
+                $showname = $1;
+            }
+            elsif($filename =~ /^(.+)\.VHS/) {
+                $showname = $1;
+            }
+            elsif($filename =~ /^(.+)[\.\s]+\d{3,4}p\.[a-zA-Z]{3,4}$/) {
+                $showname = $1;
+            }
+            elsif($filename =~ /^(.+)\.[a-zA-Z]{3,4}$/) {
+                $showname = $1;
+            }
+            else{
+                #next;
+                $showname = $filename;
+            }
+            if($showname) {
+                $showname =~ s/\./ /g;
+                if(! $shows{$showname}) {
+                    $shows{$showname} = [];
+                    push @diritems, {'item' => $showname, 'isdir' => 1}
+                }
+                push @{$shows{$showname}}, "$moviedir/$filename";
+            }
+        }
+        closedir($dh);
+    
+        # locate the content
+        if($request->{'path'}{'unsafepath'} ne $kodidir) {
+            my $fullshowname = substr($request->{'path'}{'unsafepath'}, length($kodidir)+1);
+            say "fullshowname $fullshowname";
+            my $slash = index($fullshowname, '/');
+            @diritems = ();
+            my $showname = ($slash != -1) ? substr($fullshowname, 0, $slash) : $fullshowname;
+            my $showfilename = ($slash != -1) ? substr($fullshowname, $slash+1) : undef;
+            say "showname $showname";
+    
+            my $showitems = $shows{$showname};
+            if(!$showitems) {
+                $request->Send404;
+                return;
+            }
+            my @initems = @{$showitems};
+            my @outitems;
+            # TODO replace basename usage?
+            while(@initems) {
+                my $item = shift @initems;
+                $item = abs_path($item);
+                if(! $item) {
+                    say "bad item";
+                }
+                elsif(rindex($item, $moviedir, 0) != 0) {
+                    say "bad item, path traversal?";
+                }
+                elsif(-f $item) {
+                    my $filebasename = basename($item);
+                    if(!$showfilename) {
+                        push @diritems, {'item' => $filebasename, 'isdir' => 0};
+                    }
+                    elsif($showfilename eq $filebasename) {
+                        if(index($request->{'path'}{'unsafecollapse'}, '/', length($request->{'path'}{'unsafecollapse'})-1) == -1) {
+                            say "found show filename";
+                            $request->SendFile($item);
+                        }
+                        else {
+                            $request->Send404;
+                        }
+                        return;
+                    }
+                }
+                elsif(-d _) {
+                    opendir(my $dh, $item) or die('failed to open dir');
+                    my @newitems;
+                    while(my $newitem = readdir($dh)) {
+                        next if(($newitem eq '.') || ($newitem eq '..'));
+                        push @newitems, "$item/$newitem";
+                    }
+                    closedir($dh);
+                    unshift @initems, @newitems;
+                }
+                else {
+                    say "bad item unknown filetype " . $item;
+                }
+            }
+        }
+    
+        # redirect if the slash wasn't there
+        if(index($request->{'path'}{'unescapepath'}, '/', length($request->{'path'}{'unescapepath'})-1) == -1) {
+            $request->SendRedirect(301, substr($request->{'path'}{'unescapepath'}, rindex($request->{'path'}{'unescapepath'}, '/')+1).'/');
+            return;
+        }
+    
+        # generate the directory html
+        my $buf = '';
+        foreach my $show (@diritems) {
+            my $showname = $show->{'item'};
+            my $url = uri_escape($showname);
+            $url .= '/' if($show->{'isdir'});
+            $buf .= '<a href="' . $url .'">'. ${MHFS::Util::escape_html_noquote(decode('UTF-8', $showname, Encode::LEAVE_SRC))} .'</a><br><br>';
+        }
+        $request->SendHTML($buf);
+    }
+
+    sub new {
+        my ($class, $settings) = @_;
+        my $self =  {};
+        bless $self, $class;
+
+        my @subsystems = ('video');
+
+        $self->{'routes'} = [
+            [
+                '/kodi/*', sub {
+                    my ($request) = @_;
+                    my @pathcomponents = split('/', $request->{'path'}{'unsafepath'});
+                    if(scalar(@pathcomponents) >= 3) {
+                        if($pathcomponents[2] eq 'movies') {
+                            route_movies($request, $settings->{'MEDIALIBRARIES'}{'movies'}, '/kodi/movies');
+                            return;
+                        }
+                        elsif($pathcomponents[2] eq 'tv') {
+                            route_tv($request, $settings->{'MEDIALIBRARIES'}{'tv'}, '/kodi/tv');
+                            return;
+                        }
+                    }
+                    $request->Send404;
+                }
+            ],
+        ];
+
+        return $self;
+    }
+
+
+    1;
+}
+
 package App::MHFS; #Media Http File Server
 use version; our $VERSION = version->declare("v0.2.0");
 unless (caller) {
@@ -4497,7 +4775,7 @@ make_path($SETTINGS->{'DATADIR'}, $SETTINGS->{'MHFS_TRACKER_TORRENT_DIR'});
 # load plugins
 my @plugins;
 {
-    my @plugintotry = ('MHFS::Plugin::MusicLibrary', 'MHFS::Plugin::Youtube', 'MHFS::Plugin::BitTorrent::Tracker', 'MHFS::Plugin::OpenDirectory', 'MHFS::Plugin::Playlist');
+    my @plugintotry = ('MHFS::Plugin::MusicLibrary', 'MHFS::Plugin::Youtube', 'MHFS::Plugin::BitTorrent::Tracker', 'MHFS::Plugin::OpenDirectory', 'MHFS::Plugin::Playlist', 'MHFS::Plugin::Kodi');
     foreach my $plugin (@plugintotry) {
         next if(defined $SETTINGS->{$plugin}{'enabled'} && (!$SETTINGS->{$plugin}{'enabled'}));
         my $loaded = $plugin->new($SETTINGS);
@@ -4508,29 +4786,20 @@ my @plugins;
 
 # get_video formats
 my %VIDEOFORMATS = (
-            'hlsold' => {'lock' => 0, 'create_cmd' => "ffmpeg -i '%s' -codec:v copy -bsf:v h264_mp4toannexb -strict experimental -acodec aac -f ssegment -segment_list '%s' -segment_list_flags +live -segment_time 10 '%s%%03d.ts'",  'create_cmd_args' => ['requestfile', 'outpathext', 'outpath'], 'ext' => 'm3u8',
-            'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/hls_player.html'},
-
             'hls' => {'lock' => 0, 'create_cmd' => ['ffmpeg', '-i', '$video{"src_file"}{"filepath"}', '-codec:v', 'libx264', '-strict', 'experimental', '-codec:a', 'aac', '-ac', '2', '-f', 'hls', '-hls_base_url', '$video{"out_location_url"}', '-hls_time', '5', '-hls_list_size', '0',  '-hls_segment_filename', '$video{"out_location"} . "/" . $video{"out_base"} . "%04d.ts"', '-master_pl_name', '$video{"out_base"} . ".m3u8"', '$video{"out_filepath"} . "_v"'], 'ext' => 'm3u8', 'desired_audio' => 'aac',
             'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/hls_player.html'},
 
-            'dash' => {'lock' => 0, 'create_cmd' => #['ffmpeg', '-i', '$video{"src_file"}{"filepath"}', '-codec:v', 'copy', '-strict', 'experimental', '-codec:a', 'aac', '-ac', '2', '-map', 'v:0', '-map', 'a:0',  '-f', 'dash',  '$video{"out_filepath"}', '-flush_packets', '1', '-map', '0:2', '-f', 'webvtt', '$video{"out_filepath"} . ".vtt"']
-            ['ffmpeg', '-i', '$video{"src_file"}{"filepath"}', '-codec:v', 'copy', '-strict', 'experimental', '-codec:a', 'aac', '-ac', '2', '-f', 'dash',  '$video{"out_filepath"}']
-            , 'ext' => 'mpd', 'desired_audio' => 'aac',
-        'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/dash_player.html'}, #'-use_timeline', '0', '-min_seg_duration', '20000000',
+            'dash' => {'lock' => 0, 'create_cmd' => ['ffmpeg', '-i', '$video{"src_file"}{"filepath"}', '-codec:v', 'copy', '-strict', 'experimental', '-codec:a', 'aac', '-ac', '2', '-f', 'dash',  '$video{"out_filepath"}'],
+            'ext' => 'mpd', 'desired_audio' => 'aac', 'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/dash_player.html'},
 
             'flv' => {'lock' => 1, 'create_cmd' => "ffmpeg -re -i '%s' -strict experimental -acodec aac -ab 64k -vcodec copy -flush_packets 1 -f flv '%s'", 'create_cmd_args' => ['requestfile', 'outpathext'], 'ext' => 'flv',
             'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/flv_player.html', 'minsize' => '1048576'},
 
             'jsmpeg' => {'lock' => 0, 'create_cmd' => ['ffmpeg', '-i', '$video{"src_file"}{"filepath"}', '-f', 'mpegts', '-codec:v', 'mpeg1video', '-codec:a', 'mp2', '-b', '0',  '$video{"out_filepath"}'], 'ext' => 'ts',
             'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/jsmpeg_player.html', 'minsize' => '1048576'},
-            #'-c:v', 'copy'
-            'mp4' => {'lock' => 1, 'create_cmd' => ['ffmpeg', '-i', '$video{"src_file"}{"filepath"}', '-c:v', 'copy', '-c:a', 'aac', '-f', 'mp4', '-movflags', 'frag_keyframe+empty_moov', '$video{"out_filepath"}'],
-            'ext' => 'mp4',
-            'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/mp4_player.html', 'minsize' => '1048576'},
 
-            'mp4seg' => {'lock' => 0, 'create_cmd' => '',  'create_cmd_args' => ['requestfile', 'outpathext', 'outpath'], 'ext' => 'm3u8',
-            'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/mp4seg_player.html', }, #'minsize' => '20971520'},
+            'mp4' => {'lock' => 1, 'create_cmd' => ['ffmpeg', '-i', '$video{"src_file"}{"filepath"}', '-c:v', 'copy', '-c:a', 'aac', '-f', 'mp4', '-movflags', 'frag_keyframe+empty_moov', '$video{"out_filepath"}'],
+            'ext' => 'mp4', 'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/mp4_player.html', 'minsize' => '1048576'},
 
             'noconv' => {'lock' => 0, 'ext' => '', 'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/noconv_player.html', },
             'mkv'    => {'lock' => 0, 'ext' => ''}
@@ -4555,17 +4824,7 @@ my @routes = (
     [
         '/video/*', sub {
             my ($request) = @_;
-            my $koditvdir = "/video/kodi/tv";
-            my $kodimoviedir = "/video/kodi/movies";
-            if(rindex($request->{'path'}{'unsafepath'}, $koditvdir, 0) == 0) {
-                kodi_tv($request, $SETTINGS->{'MEDIALIBRARIES'}{'tv'}, $koditvdir);
-                return;
-            }
-            elsif(rindex($request->{'path'}{'unsafepath'}, $kodimoviedir, 0) == 0) {
-                kodi_movies($request, $SETTINGS->{'MEDIALIBRARIES'}{'movies'}, $kodimoviedir);
-                return;
-            }
-            elsif(rindex($request->{'path'}{'unsafepath'}, '/video/fmp4', 0) == 0) {
+            if(rindex($request->{'path'}{'unsafepath'}, '/video/fmp4', 0) == 0) {
                 fmp4($request);
                 return;
             }
@@ -4744,255 +5003,6 @@ sub adts_get_packet_size {
 
     my $size = ($rest >> 13) & 0x1FFF;
     return $size;
-}
-
-# format tv library for kodi http
-sub kodi_tv {
-    my ($request, $absdir, $kodidir) = @_;
-    # read in the shows
-    my $tvdir = abs_path($absdir);
-    if(! defined $tvdir) {
-        $request->Send404;
-        return;
-    }
-    my $dh;
-    if(! opendir ( $dh, $tvdir )) {
-        warn "Error in opening dir $tvdir\n";
-        $request->Send404;
-        return;
-    }
-    my %shows = ();
-    my @diritems;
-    while( (my $filename = readdir($dh))) {
-        next if(($filename eq '.') || ($filename eq '..'));
-        next if(!(-s "$tvdir/$filename"));
-        # extract the showname
-        next if($filename !~ /^(.+)[\.\s]+S\d+/);
-        my $showname = $1;
-        if($showname) {
-            $showname =~ s/\./ /g;
-            if(! $shows{$showname}) {
-                $shows{$showname} = [];
-                push @diritems, {'item' => $showname, 'isdir' => 1}
-            }
-            push @{$shows{$showname}}, "$tvdir/$filename";
-        }
-    }
-    closedir($dh);
-
-    # locate the content
-    if($request->{'path'}{'unsafepath'} ne $kodidir) {
-        my $fullshowname = substr($request->{'path'}{'unsafepath'}, length($kodidir)+1);
-        my $slash = index($fullshowname, '/');
-        @diritems = ();
-        my $showname = ($slash != -1) ? substr($fullshowname, 0, $slash) : $fullshowname;
-        my $showfilename = ($slash != -1) ? substr($fullshowname, $slash+1) : undef;
-
-        my $showitems = $shows{$showname};
-        if(!$showitems) {
-            $request->Send404;
-            return;
-        }
-        my @initems = @{$showitems};
-        my @outitems;
-        # TODO replace basename usage?
-        while(@initems) {
-            my $item = shift @initems;
-            $item = abs_path($item);
-            if(! $item) {
-                say "bad item";
-            }
-            elsif(rindex($item, $tvdir, 0) != 0) {
-                say "bad item, path traversal?";
-            }
-            elsif(-f $item) {
-                my $filebasename = basename($item);
-                if(!$showfilename) {
-                    push @diritems, {'item' => $filebasename, 'isdir' => 0};
-                }
-                elsif($showfilename eq $filebasename) {
-                    if(index($request->{'path'}{'unsafecollapse'}, '/', length($request->{'path'}{'unsafecollapse'})-1) == -1) {
-                        say "found show filename";
-                        $request->SendFile($item);
-                    }
-                    else {
-                        $request->Send404;
-                    }
-                    return;
-                }
-            }
-            elsif(-d _) {
-                opendir(my $dh, $item) or die('failed to open dir');
-                my @newitems;
-                while(my $newitem = readdir($dh)) {
-                    next if(($newitem eq '.') || ($newitem eq '..'));
-                    push @newitems, "$item/$newitem";
-                }
-                closedir($dh);
-                unshift @initems, @newitems;
-            }
-            else {
-                say "bad item unknown filetype " . $item;
-            }
-        }
-    }
-
-    # stop if we didn't find anything useful
-    if(scalar(@diritems) == 0){
-        $request->Send404;
-        return;
-    }
-
-    # redirect if the slash wasn't there
-    if(index($request->{'path'}{'unescapepath'}, '/', length($request->{'path'}{'unescapepath'})-1) == -1) {
-        $request->SendRedirect(301, substr($request->{'path'}{'unescapepath'}, rindex($request->{'path'}{'unescapepath'}, '/')+1).'/');
-        return;
-    }
-
-    # generate the directory html
-    my $buf = '';
-    foreach my $show (@diritems) {
-        my $showname = $show->{'item'};
-        my $url = uri_escape($showname);
-        $url .= '/' if($show->{'isdir'});
-        $buf .= '<a href="' . $url .'">'.${escape_html_noquote(decode('UTF-8', $showname, Encode::LEAVE_SRC))} .'</a><br><br>';
-    }
-    $request->SendHTML($buf);
-}
-
-# format movies library for kodi http
-sub kodi_movies {
-    my ($request, $absdir, $kodidir) = @_;
-    # read in the shows
-    my $moviedir = abs_path($absdir);
-    if(! defined $moviedir) {
-        $request->Send404;
-        return;
-    }
-    my $dh;
-    if(! opendir ( $dh, $moviedir )) {
-        warn "Error in opening dir $moviedir\n";
-        $request->Send404;
-        return;
-    }
-    my %shows = ();
-    my @diritems;
-    while( (my $filename = readdir($dh))) {
-        next if(($filename eq '.') || ($filename eq '..'));
-        next if(!(-s "$moviedir/$filename"));
-        my $showname;
-        # extract the showname
-        if($filename =~ /^(.+)[\.\s]+\(?(\d{4})([^p]|$)/) {
-            $showname = "$1 ($2)";
-        }
-        elsif($filename =~ /^(.+)(\.DVDRip)\.[a-zA-Z]{3,4}$/) {
-            $showname = $1;
-        }
-        elsif($filename =~ /^(.+)\.VHS/) {
-            $showname = $1;
-        }
-        elsif($filename =~ /^(.+)[\.\s]+\d{3,4}p\.[a-zA-Z]{3,4}$/) {
-            $showname = $1;
-        }
-        elsif($filename =~ /^(.+)\.[a-zA-Z]{3,4}$/) {
-            $showname = $1;
-        }
-        else{
-            #say "unable to match: $filename";
-            #next;
-            $showname = $filename;
-        }
-        if($showname) {
-            $showname =~ s/\./ /g;
-            if(! $shows{$showname}) {
-                $shows{$showname} = [];
-                push @diritems, {'item' => $showname, 'isdir' => 1}
-            }
-            push @{$shows{$showname}}, "$moviedir/$filename";
-        }
-    }
-    closedir($dh);
-
-    # locate the content
-    if($request->{'path'}{'unsafepath'} ne $kodidir) {
-        my $fullshowname = substr($request->{'path'}{'unsafepath'}, length($kodidir)+1);
-        say "fullshowname $fullshowname";
-        my $slash = index($fullshowname, '/');
-        @diritems = ();
-        my $showname = ($slash != -1) ? substr($fullshowname, 0, $slash) : $fullshowname;
-        my $showfilename = ($slash != -1) ? substr($fullshowname, $slash+1) : undef;
-        say "showname $showname";
-
-        my $showitems = $shows{$showname};
-        if(!$showitems) {
-            $request->Send404;
-            return;
-        }
-        my @initems = @{$showitems};
-        my @outitems;
-        # TODO replace basename usage?
-        while(@initems) {
-            my $item = shift @initems;
-            $item = abs_path($item);
-            if(! $item) {
-                say "bad item";
-            }
-            elsif(rindex($item, $moviedir, 0) != 0) {
-                say "bad item, path traversal?";
-            }
-            elsif(-f $item) {
-                my $filebasename = basename($item);
-                if(!$showfilename) {
-                    push @diritems, {'item' => $filebasename, 'isdir' => 0};
-                }
-                elsif($showfilename eq $filebasename) {
-                    if(index($request->{'path'}{'unsafecollapse'}, '/', length($request->{'path'}{'unsafecollapse'})-1) == -1) {
-                        say "found show filename";
-                        $request->SendFile($item);
-                    }
-                    else {
-                        $request->Send404;
-                    }
-                    return;
-                }
-            }
-            elsif(-d _) {
-                opendir(my $dh, $item) or die('failed to open dir');
-                my @newitems;
-                while(my $newitem = readdir($dh)) {
-                    next if(($newitem eq '.') || ($newitem eq '..'));
-                    push @newitems, "$item/$newitem";
-                }
-                closedir($dh);
-                unshift @initems, @newitems;
-            }
-            else {
-                say "bad item unknown filetype " . $item;
-            }
-        }
-    }
-
-    # stop if we didn't find anything useful
-    if(scalar(@diritems) == 0){
-        $request->Send404;
-        return;
-    }
-
-    # redirect if the slash wasn't there
-    if(index($request->{'path'}{'unescapepath'}, '/', length($request->{'path'}{'unescapepath'})-1) == -1) {
-        $request->SendRedirect(301, substr($request->{'path'}{'unescapepath'}, rindex($request->{'path'}{'unescapepath'}, '/')+1).'/');
-        return;
-    }
-
-    # generate the directory html
-    my $buf = '';
-    foreach my $show (@diritems) {
-        my $showname = $show->{'item'};
-        my $url = uri_escape($showname);
-        $url .= '/' if($show->{'isdir'});
-        $buf .= '<a href="' . $url .'">'. ${escape_html_noquote(decode('UTF-8', $showname, Encode::LEAVE_SRC))} .'</a><br><br>';
-    }
-    $request->SendHTML($buf);
 }
 
 sub media_search {
