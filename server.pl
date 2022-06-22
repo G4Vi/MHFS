@@ -4786,17 +4786,21 @@ my @plugins;
 
 # get_video formats
 my %VIDEOFORMATS = (
-            'hls' => {'lock' => 0, 'create_cmd' => ['ffmpeg', '-i', '$video{"src_file"}{"filepath"}', '-codec:v', 'libx264', '-strict', 'experimental', '-codec:a', 'aac', '-ac', '2', '-f', 'hls', '-hls_base_url', '$video{"out_location_url"}', '-hls_time', '5', '-hls_list_size', '0',  '-hls_segment_filename', '$video{"out_location"} . "/" . $video{"out_base"} . "%04d.ts"', '-master_pl_name', '$video{"out_base"} . ".m3u8"', '$video{"out_filepath"} . "_v"'], 'ext' => 'm3u8', 'desired_audio' => 'aac',
+            'hls' => {'lock' => 0, 'create_cmd' => sub {
+                my ($video) = @_;
+                return ['ffmpeg', '-i', $video->{"src_file"}{"filepath"}, '-codec:v', 'libx264', '-strict', 'experimental', '-codec:a', 'aac', '-ac', '2', '-f', 'hls', '-hls_base_url', $video->{"out_location_url"}, '-hls_time', '5', '-hls_list_size', '0',  '-hls_segment_filename', $video->{"out_location"} . "/" . $video->{"out_base"} . "%04d.ts", '-master_pl_name', $video->{"out_base"} . ".m3u8", $video->{"out_filepath"} . "_v"]
+            }, 'ext' => 'm3u8', 'desired_audio' => 'aac',
             'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/hls_player.html'},
 
-            'dash' => {'lock' => 0, 'create_cmd' => ['ffmpeg', '-i', '$video{"src_file"}{"filepath"}', '-codec:v', 'copy', '-strict', 'experimental', '-codec:a', 'aac', '-ac', '2', '-f', 'dash',  '$video{"out_filepath"}'],
-            'ext' => 'mpd', 'desired_audio' => 'aac', 'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/dash_player.html'},
+            'jsmpeg' => {'lock' => 0, 'create_cmd' => sub {
+                my ($video) = @_;
+                return ['ffmpeg', '-i', $video->{"src_file"}{"filepath"}, '-f', 'mpegts', '-codec:v', 'mpeg1video', '-codec:a', 'mp2', '-b', '0',  $video->{"out_filepath"}];
+            }, 'ext' => 'ts', 'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/jsmpeg_player.html', 'minsize' => '1048576'},
 
-            'jsmpeg' => {'lock' => 0, 'create_cmd' => ['ffmpeg', '-i', '$video{"src_file"}{"filepath"}', '-f', 'mpegts', '-codec:v', 'mpeg1video', '-codec:a', 'mp2', '-b', '0',  '$video{"out_filepath"}'], 'ext' => 'ts',
-            'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/jsmpeg_player.html', 'minsize' => '1048576'},
-
-            'mp4' => {'lock' => 1, 'create_cmd' => ['ffmpeg', '-i', '$video{"src_file"}{"filepath"}', '-c:v', 'copy', '-c:a', 'aac', '-f', 'mp4', '-movflags', 'frag_keyframe+empty_moov', '$video{"out_filepath"}'],
-            'ext' => 'mp4', 'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/mp4_player.html', 'minsize' => '1048576'},
+            'mp4' => {'lock' => 1, 'create_cmd' => sub {
+                my ($video) = @_;
+                return ['ffmpeg', '-i', $video->{"src_file"}{"filepath"}, '-c:v', 'copy', '-c:a', 'aac', '-f', 'mp4', '-movflags', 'frag_keyframe+empty_moov', $video->{"out_filepath"}];
+            }, 'ext' => 'mp4', 'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/mp4_player.html', 'minsize' => '1048576'},
 
             'noconv' => {'lock' => 0, 'ext' => '', 'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/noconv_player.html', },
 );
@@ -5094,16 +5098,8 @@ sub get_video {
         $video{'plugin'}->downloadAndServe($request, \%video);
         return 1;
     }
-    elsif(defined($VIDEOFORMATS{$fmt}{'create_cmd'}) && ($VIDEOFORMATS{$fmt}{'create_cmd'}[0] ne '')) {
-        my @cmd;
-        foreach my $cmdpart (@{$VIDEOFORMATS{$fmt}{'create_cmd'}}) {
-            if($cmdpart =~ /^\$/) {
-                push @cmd, eval($cmdpart);
-            }
-            else {
-                push @cmd, $cmdpart;
-            }
-        }
+    elsif(defined($VIDEOFORMATS{$fmt}{'create_cmd'})) {
+        my @cmd = @{$VIDEOFORMATS{$fmt}{'create_cmd'}->(\%video)};
         print "$_ " foreach @cmd;
         print "\n";
 
@@ -5114,9 +5110,6 @@ sub get_video {
 
         if($fmt eq 'hls') {
             $video{'on_exists'} = \&video_hls_write_master_playlist;
-        }
-        elsif($fmt eq 'dash') {
-            $video{'on_exists'} = \&video_dash_check_ready;
         }
 
         # deprecated
@@ -6214,9 +6207,14 @@ sub matroska_read_track {
 
 sub video_get_format {
     my ($fmt) = @_;
+
+    # hack for jsmpeg corrupting the url
+    $fmt =~ s/\?.+$//;
+
     if(!defined($fmt) || !defined($VIDEOFORMATS{$fmt})) {
         $fmt = 'noconv';
     }
+
     return $fmt;
 }
 
@@ -6348,16 +6346,6 @@ sub video_hls_write_master_playlist {
     }
     write_file($requestfile, $newm3ucontent);
     return 1;
-}
-
-sub video_dash_check_ready {
-    my ($video) = @_;
-    my $mpdcontent = read_file($video->{'out_filepath'});
-
-    foreach my $line (split("\n", $mpdcontent)) {
-        return 1 if($line =~ /<S.+d=.+\/>/);
-    }
-    return undef;
 }
 
 sub media_filepath_to_src_file {
