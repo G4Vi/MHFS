@@ -4467,7 +4467,7 @@ package MHFS::Plugin::Kodi {
             }
         }
         closedir($dh);
-    
+
         # locate the content
         if($request->{'path'}{'unsafepath'} ne $kodidir) {
             my $fullshowname = substr($request->{'path'}{'unsafepath'}, length($kodidir)+1);
@@ -4475,7 +4475,7 @@ package MHFS::Plugin::Kodi {
             @diritems = ();
             my $showname = ($slash != -1) ? substr($fullshowname, 0, $slash) : $fullshowname;
             my $showfilename = ($slash != -1) ? substr($fullshowname, $slash+1) : undef;
-    
+
             my $showitems = $shows{$showname};
             if(!$showitems) {
                 $request->Send404;
@@ -4524,13 +4524,13 @@ package MHFS::Plugin::Kodi {
                 }
             }
         }
-    
+
         # redirect if the slash wasn't there
         if(index($request->{'path'}{'unescapepath'}, '/', length($request->{'path'}{'unescapepath'})-1) == -1) {
             $request->SendRedirect(301, substr($request->{'path'}{'unescapepath'}, rindex($request->{'path'}{'unescapepath'}, '/')+1).'/');
             return;
         }
-    
+
         # generate the directory html
         my $buf = '';
         foreach my $show (@diritems) {
@@ -4541,7 +4541,7 @@ package MHFS::Plugin::Kodi {
         }
         $request->SendHTML($buf);
     }
-    
+
     # format movies library for kodi http
     sub route_movies {
         my ($request, $absdir, $kodidir) = @_;
@@ -4593,7 +4593,7 @@ package MHFS::Plugin::Kodi {
             }
         }
         closedir($dh);
-    
+
         # locate the content
         if($request->{'path'}{'unsafepath'} ne $kodidir) {
             my $fullshowname = substr($request->{'path'}{'unsafepath'}, length($kodidir)+1);
@@ -4603,7 +4603,7 @@ package MHFS::Plugin::Kodi {
             my $showname = ($slash != -1) ? substr($fullshowname, 0, $slash) : $fullshowname;
             my $showfilename = ($slash != -1) ? substr($fullshowname, $slash+1) : undef;
             say "showname $showname";
-    
+
             my $showitems = $shows{$showname};
             if(!$showitems) {
                 $request->Send404;
@@ -4652,13 +4652,13 @@ package MHFS::Plugin::Kodi {
                 }
             }
         }
-    
+
         # redirect if the slash wasn't there
         if(index($request->{'path'}{'unescapepath'}, '/', length($request->{'path'}{'unescapepath'})-1) == -1) {
             $request->SendRedirect(301, substr($request->{'path'}{'unescapepath'}, rindex($request->{'path'}{'unescapepath'}, '/')+1).'/');
             return;
         }
-    
+
         # generate the directory html
         my $buf = '';
         foreach my $show (@diritems) {
@@ -4792,9 +4792,6 @@ my %VIDEOFORMATS = (
             'dash' => {'lock' => 0, 'create_cmd' => ['ffmpeg', '-i', '$video{"src_file"}{"filepath"}', '-codec:v', 'copy', '-strict', 'experimental', '-codec:a', 'aac', '-ac', '2', '-f', 'dash',  '$video{"out_filepath"}'],
             'ext' => 'mpd', 'desired_audio' => 'aac', 'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/dash_player.html'},
 
-            'flv' => {'lock' => 1, 'create_cmd' => "ffmpeg -re -i '%s' -strict experimental -acodec aac -ab 64k -vcodec copy -flush_packets 1 -f flv '%s'", 'create_cmd_args' => ['requestfile', 'outpathext'], 'ext' => 'flv',
-            'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/flv_player.html', 'minsize' => '1048576'},
-
             'jsmpeg' => {'lock' => 0, 'create_cmd' => ['ffmpeg', '-i', '$video{"src_file"}{"filepath"}', '-f', 'mpegts', '-codec:v', 'mpeg1video', '-codec:a', 'mp2', '-b', '0',  '$video{"out_filepath"}'], 'ext' => 'ts',
             'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/jsmpeg_player.html', 'minsize' => '1048576'},
 
@@ -4802,7 +4799,6 @@ my %VIDEOFORMATS = (
             'ext' => 'mp4', 'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/mp4_player.html', 'minsize' => '1048576'},
 
             'noconv' => {'lock' => 0, 'ext' => '', 'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/noconv_player.html', },
-            'mkv'    => {'lock' => 0, 'ext' => ''}
 );
 
 # get_video formats from plugins
@@ -5060,12 +5056,7 @@ sub get_video {
         }
 
         $video{'out_base'} = $video{'src_file'}{'name'};
-        # virtual mkv
-        if($video{'out_fmt'} eq 'mkv') {
-            $video{'out_location'} = $SETTINGS->{'VIDEO_TMPDIR'} . '/' . $video{'out_base'};
-            video_matroska(\%video, $request);
-            return 1;
-        }
+
         # soon https://github.com/video-dev/hls.js/pull/1899
         $video{'out_base'} = space2us($video{'out_base'}) if ($video{'out_fmt'} eq 'hls');
     }
@@ -6219,286 +6210,6 @@ sub matroska_read_track {
             $offset += $len;
         }
     }
-}
-
-sub video_matroska {
-    my ($video, $request) = @_;
-
-    my $ebml = ebml_open($video->{'src_file'}{'filepath'});
-    if(! $ebml) {
-        $request->Send404;
-        return;
-    }
-
-    # find segment
-    my $foundsegment = ebml_find_id($ebml, EBMLID_Segment);
-    if(!$foundsegment) {
-        $request->Send404;
-        return;
-    }
-    say "Found segment";
-    my %segment = (id => EBMLID_Segment, 'infsize' => 1, 'elms' => []);
-
-    # find segment info
-    my $foundsegmentinfo = ebml_find_id($ebml, EBMLID_SegmentInfo);
-    if(!$foundsegmentinfo) {
-        $request->Send404;
-        return;
-    }
-    say "Found segment info";
-    my %segmentinfo = (id => EBMLID_SegmentInfo, elms => []);
-
-    # find TimestampScale
-    my $tselm = ebml_find_id($ebml, EBMLID_TimestampScale);
-    if(!$tselm) {
-        $request->Send404;
-        return;
-    }
-    say "Found ts elm";
-    my $tsbinary;
-    if(!ebml_read($ebml, $tsbinary, $tselm->{'size'})) {
-        $request->Send404;
-        return;
-    }
-    Dump($tsbinary);
-    if(!ebml_skip($ebml)) {
-        $request->Send404;
-        return;
-    }
-    push @{$segmentinfo{'elms'}}, {id => EBMLID_TimestampScale, data => $tsbinary};
-
-    # find Duration
-    my $durationelm = ebml_find_id($ebml, EBMLID_Duration);
-    if(!$durationelm) {
-        $request->Send404;
-        return;
-    }
-    say "Found duration elm";
-    my $durbin;
-    if(!ebml_read($ebml, $durbin, $durationelm->{'size'})) {
-        $request->Send404;
-        return;
-    }
-    Dump($durbin);
-    if(!ebml_skip($ebml)) {
-        $request->Send404;
-        return;
-    }
-    if(!ebml_skip($ebml)) {
-        $request->Send404;
-        return;
-    }
-    push @{$segmentinfo{'elms'}}, {id => EBMLID_Duration, data => $durbin};
-
-    # set multiplexing app and writing application
-    push @{$segmentinfo{'elms'}}, {id => EBMLID_MuxingApp, data => 'mhfs-alpha_0'};
-    push @{$segmentinfo{'elms'}}, {id => EBMLID_WritingApp, data => 'mhfs-alpha_0'};
-
-    push @{$segment{'elms'}}, \%segmentinfo;
-
-    # find Tracks
-    my $in_tracks = ebml_find_id($ebml, EBMLID_Tracks);
-    if(!$in_tracks) {
-        $request->Send404;
-        return;
-    }
-    # loop through the Tracks
-    my @tracks;
-    for(;;) {
-        my $in_track = ebml_find_id($ebml, EBMLID_Track);
-        if(! $in_track) {
-            ebml_skip($ebml);
-            last;
-        }
-        my %track = ('id' => EBMLID_Track, 'elms' => []);
-        for(;;) {
-            my $telm = ebml_read_element($ebml);
-            if(!$telm) {
-                ebml_skip($ebml);
-                last;
-            }
-
-            # save the element into tracks
-            my %elm = ('id' => $telm->{'id'}, 'data' => '');
-            ebml_read($ebml, $elm{'data'}, $telm->{'size'});
-            if($elm{'id'} == EBMLID_TrackNumber) {
-                say "trackno";
-                $elm{'value'} = unpack('C', $elm{'data'});
-                $track{$elm{'id'}} = \%elm;
-            }
-            elsif($elm{'id'} == EBMLID_CodecID) {
-                say "codec";
-                $track{$elm{'id'}} = \%elm;
-            }
-            elsif($elm{'id'} == EBMLID_TrackType) {
-                say "tracktype";
-                $elm{'value'} = unpack('C', $elm{'data'});
-                $track{$elm{'id'}} = \%elm;
-            }
-            elsif($elm{'id'} == EBMLID_TrackUID) {
-                say "trackuid";
-                $track{$elm{'id'}} = \%elm;
-            }
-            push @{$track{'elms'}}, \%elm;
-
-            ebml_skip($ebml);
-        }
-        push @tracks, \%track;
-    }
-    if(scalar(@tracks) == 0) {
-        $request->Send404;
-        return;
-    }
-    #print Dumper(@tracks);
-
-
-    # Build the Tracks element
-    for my $track (@tracks) {
-        say "Track codec: " . telmval($track, 'CodecID') . ' no ' . telmval($track, 'TrackNumber');
-
-        # remake the Track if it's audio and not in FLAC
-        if((telmval($track, 'TrackType') == 0x2) && (telmval($track, 'CodecID') ne 'A_FLAC')) {
-            my $flacpath = $video->{'out_location'} . '/' . $video->{'out_base'} . '.' . telmval($track, 'TrackNumber') . '.flac';
-            if(! -e $flacpath) {
-                mkdir($video->{'out_location'});
-                my @cmd = ('ffmpeg', '-i', $video->{'src_file'}{'filepath'}, '-map', '0:'.(telmval($track, 'TrackNumber')-1), $flacpath);
-                print Dumper(\@cmd);
-                if(!(system(@cmd) == 0)) {
-                    say "failed to extract audio track";
-                    $request->Send404;
-                    return;
-                }
-                say "converted";
-            }
-            # read the info necessary to make the new flac track
-            if(!open($track->{'fh'}, "<", $flacpath)) {
-                $request->Send404;
-                return;
-            }
-            my $flac = flac_read_to_audio($track->{'fh'});
-            if(! $flac) {
-                $request->Send404;
-                return;
-            }
-
-            # replace the track with the new flac track
-            my $oldelms = $track->{'elms'};
-            $track->{+EBMLID_CodecID}{'data'} = 'A_FLAC';
-            $track->{'elms'} = [
-                $track->{+EBMLID_TrackNumber},
-                $track->{+EBMLID_TrackUID},
-                $track->{+EBMLID_CodecID},
-                $track->{+EBMLID_TrackType},
-                {
-                    id => EBMLID_AudioTrack,
-                    elms => [
-                        {
-                            id => EBMLID_AudioChannels,
-                            data => pack('C', $flac->{'streaminfo'}{'NUMCHANNELS'})
-                        },
-                        {
-                            id => EBMLID_AudioSampleRate,
-                            data => pack('d>', $flac->{'streaminfo'}{'SAMPLERATE'})
-                        },
-                        {
-                            id => EBMLID_AudioBitDepth,
-                            data => pack('C', $flac->{'streaminfo'}{'BITSPERSAMPLE'})
-                        }
-                    ]
-                },
-                {
-                    id => EBMLID_CodecPrivData,
-                    data => ${$flac->{'buf'}}
-                }
-            ];
-        }
-    }
-    push @{$segment{'elms'}}, {
-        'id' => EBMLID_Tracks,
-        'elms' => \@tracks
-    };
-
-    my %elmhead = ('id' => EBMLID_EBMLHead, 'elms' => [
-        {
-            id => EBMLID_EBMLVersion,
-            data => pack('C', 1)
-        },
-        {
-            id => EBMLID_EBMLReadVersion,
-            data => pack('C', 1)
-        },
-        {
-            id => EBMLID_EBMLMaxIDLength,
-            data => pack('C', 4)
-        },
-        {
-            id => EBMLID_EBMLMaxSizeLength,
-            data => pack('C', 8)
-        },
-        {
-            id => EBMLID_EBMLDocType,
-            data => 'matroska'
-        },
-        {
-            id => EBMLID_EBMLDocTypeVer,
-            data => pack('C', 4)
-        },
-        {
-            id => EBMLID_EBMLDocTypeReadVer,
-            data => pack('C', 2)
-        },
-    ]);
-
-    #print Dumper(\%segment);
-    #die;
-
-    my $ebml_serialized = ebml_make_elms(\%elmhead, \%segment);
-    if(!$ebml_serialized) {
-        $request->Send404;
-        return;
-    }
-
-    # loop thorough the clusters
-    my @outclusters;
-    while(1) {
-        my $custer = ebml_find_id($ebml, EBMLID_Cluster);
-        last if(! $custer);
-
-        my %outcluster = ('id' => EBMLID_Cluster, elms => []);
-        for(;;) {
-            my $belm = ebml_read_element($ebml);
-            if(!$belm) {
-                ebml_skip($ebml);
-                last;
-            }
-            my %elm = ('id' => $belm->{'id'}, 'data' => '');
-            say "elm size " . $belm->{'size'};
-
-            ebml_read($ebml, $elm{'data'}, $belm->{'size'});
-            if(($elm{'id'} == EBMLID_SimpleBlock) || ($elm{'id'} == EBMLID_BlockGroup)) {
-                my $block = matroska_cluster_parse_simpleblock_or_blockgroup(\%elm);
-                print Dumper($block);
-                if($block && trackno_is_audio(\@tracks, $block->{'trackno'})) {
-                    say "block is audio";
-                    ebml_skip($ebml);
-                    next;
-                }
-            }
-
-            push @{$outcluster{'elms'}}, \%elm;
-            ebml_skip($ebml);
-        }
-        push @outclusters, \%outcluster;
-        #last;
-    }
-    my $serializedclusters = ebml_make_elms(@outclusters);
-    if(!$serializedclusters) {
-        $request->Send404;
-        return;
-    }
-    $$ebml_serialized .= $$serializedclusters;
-
-    $request->SendBytes('video/x-matroska', $$ebml_serialized, {'filename' => $video->{'out_base'} .'.mhfs.mkv'});
 }
 
 sub video_get_format {
