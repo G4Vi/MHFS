@@ -87,11 +87,17 @@
         console.log('seeking to ' + seektime);
         BaseTime = seektime;
         UpdateCurTime();
-        doJSON(rawurl+'/gop.json'+'?t='+seektime, function(gopjson) {
+        const jsonurl = new URL(rawurl);
+        jsonurl.searchParams.append('fmt', 'mkvinfo');
+        jsonurl.searchParams.append('mkvinfo_time', seektime);
+
+        doJSON(jsonurl, function(gopjson) {
             console.log('gopjson goptime' + gopjson.goptime);
             BaseTime = Number(gopjson.goptime);
             UpdateCurTime();
-            let videourl = rawurl + '/video.mp4?t='+gopjson.goptime;
+            const videourl = new URL(rawurl);
+            videourl.searchParams.append('fmt', 'fmp4');
+            videourl.searchParams.append('fmp4_time', gopjson.goptime);
             console.log('videourl ' + videourl);
             mainvideo.src =  videourl;
             onload();
@@ -105,9 +111,9 @@
         SBAR_UPDATING = 0;
 
         const seektime = Number(seekbar.value);
-        let rawurl = mainvideo.currentSrc;
-        let pat = /\/[^\/]+$/;
-        rawurl = rawurl.replace(pat, '');
+        const rawurl = new URL(mainvideo.currentSrc);
+        rawurl.searchParams.delete('fmt');
+        rawurl.searchParams.delete('fmp4_time');
         console.log('rawurl ' + rawurl);
 
         seekVideo(rawurl, seektime, function() {
@@ -211,37 +217,30 @@
 
     let pageurl = new URL(window.location);
     const videoname = pageurl.searchParams.get('name');
+    const sid = pageurl.searchParams.get('sid');
     console.log(videoname);
-    if(videoname) {
+    if(videoname && sid) {
         videotitle.textContent = videoname;
 
-        const rawurl = "../../video/fmp4/"+videoname;
-        let mp4url = rawurl+"/video.mp4";
+        const rawurl = new URL("../../get_video", pageurl);
+        rawurl.searchParams.append('name', videoname);
+        rawurl.searchParams.append('sid', sid);
+
+        const mp4url = new URL(rawurl);
+        mp4url.searchParams.append('fmt', 'fmp4');
 
         const starttime = pageurl.searchParams.get('t');
         if(starttime) {
             console.log(starttime);
-            console.log('first rawurl ' + rawurl);
             seekVideo(rawurl, Number(starttime), function(){});
-            //mp4url += '?t='+starttime;
-            //BaseTime = Number(starttime);
-            //UpdateCurTime();
-
-            /*
-            function toRemove() {
-                console.log('fired');
-                //mainvideo.currentTime = 3.792018;
-                mainvideo.removeEventListener('canplay', toRemove);
-            }
-            mainvideo.addEventListener('canplay', toRemove);
-            */
         }
         else {
-            mainvideo.src = mp4url;
+            mainvideo.src = mp4url.href;
         }
 
         // load the metadata
-        const jsonurl = rawurl+"/meta.json";
+        const jsonurl = new URL(rawurl);
+        jsonurl.searchParams.append('fmt', 'mkvinfo');
         doJSON(jsonurl, function(meta) {
             console.log('duration ' + meta.duration);
             seekbar.min = 0;
@@ -250,9 +249,6 @@
         });
 
     }
-
-
-
 
 </script>
 </body>

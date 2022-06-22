@@ -4089,7 +4089,7 @@ package MHFS::Plugin::BitTorrent::Tracker {
 
     sub createTorrent {
         my ($self, $request) = @_;
-        my $fileitem = App::MHFS::video_file_lookup($request->{'qs'}{'name'});
+        my $fileitem = App::MHFS::media_file_lookup($request->{'qs'}{'name'}, $request->{'qs'}{'sid'});
         if(!$fileitem) {
             $request->Send404;
             return;
@@ -4803,6 +4803,9 @@ my %VIDEOFORMATS = (
             }, 'ext' => 'mp4', 'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/mp4_player.html', 'minsize' => '1048576'},
 
             'noconv' => {'lock' => 0, 'ext' => '', 'player_html' => $SETTINGS->{'DOCUMENTROOT'} . '/static/noconv_player.html', },
+
+            'mkvinfo' => {'lock' => 0, 'ext' => ''},
+            'fmp4' => {'lock' => 0, 'ext' => ''},
 );
 
 # get_video formats from plugins
@@ -4822,18 +4825,9 @@ my @routes = (
         '/video', \&player_video
     ],
     [
-        '/video/*', sub {
+        '/video/', sub {
             my ($request) = @_;
-            if(rindex($request->{'path'}{'unsafepath'}, '/video/fmp4', 0) == 0) {
-                fmp4($request);
-                return;
-            }
-            if($request->{'path'}{'unsafepath'} eq '/video') {
-                $request->SendRedirect(301, '../video');
-            }
-            else {
-                $request->Send404;
-            }
+            $request->SendRedirect(301, '../video');
         }
     ],
     [
@@ -4896,97 +4890,20 @@ my @routes = (
 # finally start the server
 my $server = MHFS::HTTP::Server->new($SETTINGS, \@routes, \@plugins);
 
-sub fmp4 {
-    my ($request) = @_;
-
-    my $extpos = rindex($request->{'path'}{'unsafecollapse'}, '/');
-    if($extpos == -1) {
-        $request->Send404;
-        return;
-    }
-
-    # find the video file it refers to
-    my $withoutlastext = substr($request->{'path'}{'unsafecollapse'}, 0, $extpos);
-    say "withoutext: $withoutlastext";
-    my %libraries = (
-        "/video/fmp4/tv/" => $SETTINGS->{'MEDIALIBRARIES'}{'tv'},
-        "/video/fmp4/movies/" => $SETTINGS->{'MEDIALIBRARIES'}{'movies'}
-    );
-    my $fileabspath;
-    my $tmpname;
-    foreach my $lib (keys %libraries) {
-        next if(rindex($withoutlastext, $lib, length($lib)) == -1);
-        my $tname = substr($withoutlastext, length($lib));
-        my $tocheck = $libraries{$lib} .'/'. $tname;
-        say "tocheck $tocheck";
-        my $abspath = abs_path($tocheck);
-        last if(! $abspath);
-        last if(rindex($abspath, $libraries{$lib}, 0) != 0);
-        $fileabspath = $abspath;
-        $tmpname = $tname;
-    }
-    if(! $fileabspath) {
-        $request->Send404;
-        return;
-    }
-
-    # only mkv supported right now
-    if(index($fileabspath, '.mkv', length($fileabspath)-4) == -1) {
-        $request->Send404;
-        return;
-    }
-    my $fileinfo = { 'fileabspath' => $fileabspath, 'tmpname' => $tmpname};
-
-    if($request->{'path'}{'unsafecollapse'} =~ /.json$/) {
-        my $matroska = matroska_open($fileabspath);
-        if(! defined $request->{'qs'}{'t'}) {
-            my $obj = {
-                'duration' => $matroska->{'duration'}
-            };
-            $request->SendAsJSON($obj);
-        }
-        else {
-            my $track = matroska_get_video_track($matroska);
-            if(! $track) {
-                $request->Send404;
-                return;
-            }
-            my $gopinfo = matroska_get_gop($matroska, $track, $request->{'qs'}{'t'});
-            if(! $gopinfo) {
-                $request->Send404;
-                return;
-            }
-            $request->SendAsJSON($gopinfo);
-        }
-        return;
-    }
-
-
-
-    my @command = ('ffmpeg', '-loglevel', 'fatal');
-    if($request->{'qs'}{'t'}) {
-        my $formattedtime = hls_audio_formattime($request->{'qs'}{'t'});
-        push @command, ('-ss', $formattedtime);
-    }
-    push @command, ('-i', $fileinfo->{'fileabspath'}, '-c:v', 'copy', '-c:a', 'aac', '-f', 'mp4', '-movflags', 'frag_keyframe+empty_moov', '-');
-    my $evp = $request->{'client'}{'server'}{'evp'};
-    my $sent;
-    print "$_ " foreach @command;
-    $request->{'outheaders'}{'Accept-Ranges'} = 'none';
-
-    # avoid bookkeeping, have ffmpeg output straight to the socket
-    $request->{'outheaders'}{'Connection'} = 'close';
-    $request->{'outheaders'}{'Content-Type'} = 'video/mp4';
-    my $sock = $request->{'client'}{'sock'};
-    print  $sock  "HTTP/1.0 200 OK\r\n";
-    my $headtext = '';
-    foreach my $header (keys %{$request->{'outheaders'}}) {
-        $headtext .= "$header: " . $request->{'outheaders'}{$header} . "\r\n";
-    }
-    print $sock $headtext."\r\n";
-    $evp->remove($sock);
-    $request->{'client'} = undef;
-    MHFS::Process->cmd_to_sock(\@command, $sock);
+sub hls_audio_formattime {
+    my ($ttime) = @_;
+    my $hours = int($ttime / 3600);
+    $ttime -= ($hours * 3600);
+    my $minutes = int($ttime / 60);
+    $ttime -= ($minutes*60);
+    #my $seconds = int($ttime);
+    #$ttime -= $seconds;
+    #say "ttime $ttime";
+    #my $mili = int($ttime * 1000000);
+    #say "mili $mili";
+    #my $tstring = sprintf "%02d:%02d:%02d.%06d", $hours, $minutes, $seconds, $mili;
+    my $tstring = sprintf "%02d:%02d:%f", $hours, $minutes, $ttime;
+    return $tstring;
 }
 
 sub adts_get_packet_size {
@@ -5038,10 +4955,6 @@ sub get_video {
                 return undef;
             }
         }
-        # DEPRECATED, to be removed
-        elsif($video{'src_file'} = video_file_lookup($qs->{'name'})) {
-            #die;
-        }
         else {
             $request->Send404;
             return undef;
@@ -5052,6 +4965,14 @@ sub get_video {
             say "NOCONV: SEND IT";
             $request->SendFile($video{'src_file'}{'filepath'});
             return 1;
+        }
+        elsif($video{'out_fmt'} eq 'mkvinfo') {
+            get_video_mkvinfo($request, $video{'src_file'}{'filepath'});
+            return 1;
+        }
+        elsif($video{'out_fmt'} eq 'fmp4') {
+            get_video_fmp4($request, $video{'src_file'}{'filepath'});
+            return;
         }
 
         if(! -e $video{'src_file'}{'filepath'}) {
@@ -5156,6 +5077,63 @@ sub get_video {
         return undef;
     }
     return 1;
+}
+
+sub get_video_mkvinfo {
+    my ($request, $fileabspath) = @_;
+    my $matroska = matroska_open($fileabspath);
+    if(! $matroska) {
+        $request->Send404;
+        return;
+    }
+
+    my $obj;
+    if(defined $request->{'qs'}{'mkvinfo_time'}) {
+        my $track = matroska_get_video_track($matroska);
+        if(! $track) {
+            $request->Send404;
+            return;
+        }
+        my $gopinfo = matroska_get_gop($matroska, $track, $request->{'qs'}{'mkvinfo_time'});
+        if(! $gopinfo) {
+            $request->Send404;
+            return;
+        }
+        $obj = $gopinfo;
+    }
+    else {
+        $obj = {};
+    }
+    $obj->{duration} = $matroska->{'duration'};
+    $request->SendAsJSON($obj);
+}
+
+sub get_video_fmp4 {
+    my ($request, $fileabspath) = @_;
+    my @command = ('ffmpeg', '-loglevel', 'fatal');
+    if($request->{'qs'}{'fmp4_time'}) {
+        my $formattedtime = hls_audio_formattime($request->{'qs'}{'fmp4_time'});
+        push @command, ('-ss', $formattedtime);
+    }
+    push @command, ('-i', $fileabspath, '-c:v', 'copy', '-c:a', 'aac', '-f', 'mp4', '-movflags', 'frag_keyframe+empty_moov', '-');
+    my $evp = $request->{'client'}{'server'}{'evp'};
+    my $sent;
+    print "$_ " foreach @command;
+    $request->{'outheaders'}{'Accept-Ranges'} = 'none';
+
+    # avoid bookkeeping, have ffmpeg output straight to the socket
+    $request->{'outheaders'}{'Connection'} = 'close';
+    $request->{'outheaders'}{'Content-Type'} = 'video/mp4';
+    my $sock = $request->{'client'}{'sock'};
+    print  $sock  "HTTP/1.0 200 OK\r\n";
+    my $headtext = '';
+    foreach my $header (keys %{$request->{'outheaders'}}) {
+        $headtext .= "$header: " . $request->{'outheaders'}{$header} . "\r\n";
+    }
+    print $sock $headtext."\r\n";
+    $evp->remove($sock);
+    $request->{'client'} = undef;
+    MHFS::Process->cmd_to_sock(\@command, $sock);
 }
 
 sub ebml_read {
@@ -6216,24 +6194,6 @@ sub video_get_format {
     }
 
     return $fmt;
-}
-
-sub video_file_lookup {
-    my ($filename) = @_;
-    my @locations = ($SETTINGS->{'MEDIALIBRARIES'}{'movies'}, $SETTINGS->{'MEDIALIBRARIES'}{'tv'}, $SETTINGS->{'MEDIALIBRARIES'}{'music'});
-    my $filepath;
-    my $flocation;
-    foreach my $location (@locations) {
-        my $absolute = abs_path("$location/$filename");
-        if($absolute && -e $absolute  && ($absolute =~ /^$location/)) {
-            $filepath = $absolute;
-            $flocation = $location;
-            last;
-        }
-    }
-    return if(! $filepath);
-
-    return media_filepath_to_src_file($filepath, $flocation);
 }
 
 sub media_file_lookup {
