@@ -1,8 +1,38 @@
 # MHFS Changelog
 ## [Unreleased](https://github.com/G4Vi/MHFS/compare/v0.2.0...dev)
 ### Server
+#### Added
+- Added downloading media via torrent
+    - Added HTTP Torrent Tracker
+        - designed to handle clients on LAN and WAN without leaking LAN IPs outside
+    - Added creating torrents from media items
+    - When an item is requested, a torrent is created, added to the tracker, and added to rtorrent to start seeding, so it can be downloaded instantly.
+- Added improved client host validation with `X-MHFS-PROXY_KEY` for secure reverse proxying
+- Added automatic youtube-dl binary downloading and installing for MHFS use
+
 #### Changed
-- Refactored EventLoop::Poll into EventLoop::Poll::Base, EventLoop::Poll::Linux, and EventLoop::Poll
+- MHFS prefix was added to modules in server.pl, `MHFS::Plugin` prefix was added to plugins
+- `MEDIALIBRARIES` is now interpreted into `MEDIASOURCES` and supports mapping to multiple sources
+    * However, not all the code handles multiple sources yet
+- `MHFS::Plugin::MusicLibrary` now uses `MEDIASOURCES` instead of it's own sources
+- Broke up EventLoop::Poll into EventLoop::Poll::Base, EventLoop::Poll::Linux, and EventLoop::Poll
+- Made tarsize and libFLAC into Alien modules to ease building and installing
+- switched XS to vendored miniaudio submodule
+- temp directory now uses `$XDG_CACHE_HOME` or `~/.cache` by default
+    * cookies are now stored in temp directory, inaccessible to web routes
+- Torrent are now loaded into rtorrent from memory instead of writing to disk first
+- playlists are now accessed via `/playlist` route instead of `/get_video`
+- `/get_video` now uses a callback to generate the `create_cmd` instead of `eval`
+- `/video/fmp4` fmt was integrated to `/get_video` instead of having its own route
+- `/video/kodi` is now accessed via `/kodi`, kodi stuff was moved into `MHFS::Plugin::Kodi`
+- Open directories now managed by `MHFS::Plugin::OpenDirectory` and served from `/od`
+
+#### Fixed
+- JSMpeg's query string messing up its format
+
+#### Removed
+- search from `/get_video` to increase speed and accuracy
+- removed HLS on demand and several broken `/get_video` formats and players
 
 ## [0.2.0](https://github.com/G4Vi/MHFS/compare/v0.1.0...v0.2.0) - 2022-04-21
 ### AudioWorklet Player

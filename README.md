@@ -216,11 +216,11 @@ For convenience `M3U` playlist files are provided to ease streaming outside of t
 
 #### Kodi / XBMC
 
-The video subsystem is accessible via http sources in kodi. MHFS attempts to provide your libraries with kodi's desired naming structures, so that it will be organized with metadata accurately.
+Kodi may access media via http sources in kodi. MHFS attempts to provide your libraries with kodi's desired naming structures, so that it will be organized with metadata accurately.
 
-`/video/kodi/movies/` - Kodi formatted *Movies* directory listing
+`/kodi/movies/` - Kodi formatted *Movies* directory listing
 
-`/video/kodi/tv/` - Kodi formatted *TV* directory listing
+`/kodi/tv/` - Kodi formatted *TV* directory listing
 
 ## Development Info
 
