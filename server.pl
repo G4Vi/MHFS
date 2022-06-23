@@ -389,7 +389,6 @@ package MHFS::HTTP::Server {
         make_path($settings->{'SECRET_TMPDIR'}, {chmod => 0600});
         make_path($settings->{'DATADIR'}, $settings->{'MHFS_TRACKER_TORRENT_DIR'});
 
-
         my $sock = IO::Socket::INET->new(Listen => 10000, LocalAddr => $settings->{'HOST'}, LocalPort => $settings->{'PORT'}, Proto => 'tcp', Reuse => 1, Blocking => 0);
         if(! $sock) {
             say "server: Cannot create self socket";
@@ -424,6 +423,13 @@ package MHFS::HTTP::Server {
         bless \%self, $class;
 
         $evp->set($sock, \%self, POLLIN);
+
+        my $fs = MHFS::FS->new($settings->{'SOURCES'});
+        if(! $fs) {
+            say "failed to open MHFS::FS";
+            return undef;
+        }
+        $self{'fs'} = $fs;
 
         # load the plugins
         foreach my $pluginname (@{$plugins}) {
@@ -516,7 +522,7 @@ package MHFS::Util {
     use Cwd qw(abs_path getcwd);
     use Encode qw(decode encode);
     use URI::Escape qw(uri_escape);
-    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'shell_escape', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME', 'get_printable_utf8', 'small_url_encode', 'uri_escape_path', 'round', 'ceil_div');
+    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'shell_escape', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME', 'get_printable_utf8', 'small_url_encode', 'uri_escape_path', 'round', 'ceil_div', 'get_SI_size');
     # single threaded locks
     sub LOCK_GET_LOCKDATA {
         my ($filename) = @_;
@@ -928,6 +934,17 @@ package MHFS::Util {
 
     sub ceil_div {
         return int(($_[0] + $_[1] - 1) / $_[1]);
+    }
+
+    sub get_SI_size {
+        my ($bytes) = @_;
+        my $mebibytes = ($bytes / 1048576);
+        if($mebibytes >= 1024) {
+            return  sprintf("%.2f GiB", $bytes / 1073741824);
+        }
+        else {
+            return sprintf("%.2f MiB", $mebibytes);
+        }
     }
 
     1;
@@ -2373,7 +2390,12 @@ package MHFS::Process {
             }
         }
 
-        my $pid = open3(my $in, my $out, my $err = gensym, @$torun) or die "BAD process";
+        my ($pid, $in, $out, $err);
+        eval{ $pid = open3($in, $out, $err = gensym, @$torun); };
+        if($@) {
+            say "BAD process";
+            return undef;
+        }
         $self{'pid'} = $pid;
         say 'PID '. $pid . ' NEW PROCESS: ' . $torun->[0];
         if($env) {
@@ -3028,6 +3050,48 @@ package MHFS::BitTorrent::Metainfo {
         my $infodata = _bdictfind($tree, ['info'], 'd');
         return undef if(! $infodata);
         my %self = (tree => $tree, 'infohash' => sha1(bencode($infodata)));
+        bless \%self, $class;
+        return \%self;
+    }
+
+    1;
+}
+
+package MHFS::FS {
+    use strict; use warnings;
+    use feature 'say';
+    use Cwd qw(abs_path);
+    use File::Basename qw(fileparse);
+
+    sub lookup {
+        my ($self, $name, $sid) = @_;
+
+        if(! exists $self->{'sources'}{$sid}) {
+            return undef;
+        }
+
+        my $src = $self->{'sources'}{$sid};
+        if($src->{'type'} ne 'local') {
+            say "unhandled src type ". $src->{'type'};
+            return undef;
+        }
+        my $location = $src->{'folder'};
+        my $absolute = abs_path($location.'/'.$name);
+        return undef if( ! $absolute);
+        return undef if ($absolute !~ /^$location/);
+        return _media_filepath_to_src_file($absolute, $location);
+    }
+
+    sub _media_filepath_to_src_file {
+        my ($filepath, $flocation) = @_;
+        my ($name, $loc, $ext) = fileparse($filepath, '\.[^\.]*');
+        $ext =~ s/^\.//;
+        return { 'filepath' => $filepath, 'name' => $name, 'containingdir' => $loc, 'ext' => $ext, 'fullname' => substr($filepath, length($flocation)+1), 'root' => $flocation};
+    }
+
+    sub new {
+        my ($class, $sources) = @_;
+        my %self = ('sources' => $sources);
         bless \%self, $class;
         return \%self;
     }
@@ -4139,7 +4203,7 @@ package MHFS::Plugin::BitTorrent::Tracker {
 
     sub createTorrent {
         my ($self, $request) = @_;
-        my $fileitem = App::MHFS::media_file_lookup($request->{'qs'}{'name'}, $request->{'qs'}{'sid'});
+        my $fileitem = $self->{fs}->lookup($request->{'qs'}{'name'}, $request->{'qs'}{'sid'});
         if(!$fileitem) {
             $request->Send404;
             return;
@@ -4315,10 +4379,11 @@ package MHFS::Plugin::BitTorrent::Tracker {
     }
 
     sub new {
-        my ($class, $settings) = @_;
+        my ($class, $settings, $server) = @_;
         my $ai = ($settings->{'BitTorrent::Tracker'} && $settings->{'BitTorrent::Tracker'}{'announce_interval'}) ? $settings->{'BitTorrent::Tracker'}{'announce_interval'} : undef;
         $ai //= 1800;
-        my $self =  {'settings' => $settings, 'torrents' => \%{$settings->{'TORRENTS'}}, 'announce_interval' => $ai};
+
+        my $self =  {'settings' => $settings, 'torrents' => \%{$settings->{'TORRENTS'}}, 'announce_interval' => $ai, 'fs' => $server->{'fs'}};
         bless $self, $class;
         say __PACKAGE__.": announce interval: ".$self->{'announce_interval'};
 
@@ -4371,6 +4436,189 @@ package MHFS::Plugin::BitTorrent::Tracker {
                 }
                 return 1;
             }],
+        ];
+
+        return $self;
+    }
+
+    1;
+}
+
+package MHFS::Plugin::BitTorrent::Client::Interface {
+    use strict; use warnings;
+    use feature 'say';
+    MHFS::Util->import(qw(escape_html do_multiples get_SI_size));
+    use URI::Escape qw(uri_escape);
+
+    sub is_video {
+        my ($name) = @_;
+        my ($ext) = $name =~ /\.(mkv|avi|mp4|webm|flv|ts|mpeg|mpg|m2t|m2ts|wmv)$/i;
+        return $ext;
+    }
+
+    sub is_mhfs_music_playable {
+        my ($name) = @_;
+        return $name =~ /\.(?:flac|mp3|wav)$/i;
+    }
+
+    sub play_in_browser_link {
+        my ($file, $urlfile) = @_;
+        return '<a href="video?name=' . $urlfile . '&fmt=hls">HLS (Watch in browser)</a>' if(is_video($file));
+        return '<a href="music?ptrack=' . $urlfile . '">Play in MHFS Music</a>' if(is_mhfs_music_playable($file));
+        return 'N/A';
+    }
+
+    sub torrentview {
+        my ($request) = @_;
+        my $qs = $request->{'qs'};
+        my $evp = $request->{'client'}{'server'}{'evp'};
+        # dump out the status, if the torrent's infohash is provided
+        if(defined $qs->{'infohash'}) {
+            my $hash = $qs->{'infohash'};
+            do_multiples({
+            'bytes_done' => sub { App::MHFS::torrent_d_bytes_done($evp, $hash, @_); },
+            'size_bytes' => sub { App::MHFS::torrent_d_size_bytes($evp, $hash, @_); },
+            'name'       => sub { App::MHFS::torrent_d_name($evp, $hash, @_); },
+            }, sub {
+            if( ! defined $_[0]) { $request->Send404; return;}
+            my ($data) = @_;
+            my $torrent_raw = $data->{'name'};
+            my $bytes_done  = $data->{'bytes_done'};
+            my $size_bytes  = $data->{'size_bytes'};
+            # print out the current torrent status
+            my $torrent_name = ${escape_html($torrent_raw)};
+            my $size_print = get_SI_size($size_bytes);
+            my $done_print = get_SI_size($bytes_done);
+            my $percent_print = (sprintf "%u%%", ($bytes_done/$size_bytes)*100);
+            my $buf = '<h1>Torrent</h1>';
+            $buf  .=  '<h3><a href="../video">Video</a> | <a href="../music">Music</a></h3>';
+            $buf   .= '<table border="1" >';
+            $buf   .= '<thead><tr><th>Name</th><th>Size</th><th>Done</th><th>Downloaded</th></tr></thead>';
+            $buf   .= "<tbody><tr><td>$torrent_name</td><td>$size_print</td><td>$percent_print</td><td>$done_print</td></tr></tbody>";
+            $buf   .= '</table>';
+
+            # Assume we are downloading, if the bytes don't match
+            if($bytes_done < $size_bytes) {
+                $buf   .= '<meta http-equiv="refresh" content="3">';
+                $request->SendHTML($buf);
+            }
+            else {
+                # print out the files with usage options
+                App::MHFS::torrent_file_information($evp, $qs->{'infohash'}, $torrent_raw, sub {
+                if(! defined $_[0]){ $request->Send404; return; };
+                my ($tfi) = @_;
+                my @files = sort (keys %$tfi);
+                $buf .= '<br>';
+                $buf .= '<table border="1" >';
+                $buf .= '<thead><tr><th>File</th><th>Size</th><th>DL</th><th>Play in browser</th></tr></thead>';
+                $buf .= '<tbody';
+                foreach my $file (@files) {
+                    my $htmlfile = ${escape_html($file)};
+                    my $urlfile = uri_escape($file);
+                    my $link = '<a href="get_video?name=' . $urlfile . '&fmt=noconv">DL</a>';
+                    my $playlink = play_in_browser_link($file, $urlfile);
+                    $buf .= "<tr><td>$htmlfile</td><td>" . get_SI_size($tfi->{$file}{'size'}) . "</td><td>$link</td>";
+                    $buf .= "<td>$playlink</td>" if(!defined($qs->{'playinbrowser'}) || ($qs->{'playinbrowser'} == 1));
+                    $buf .= "</tr>";
+                }
+                $buf .= '</tbody';
+                $buf .= '</table>';
+
+                $request->SendHTML($buf);
+                });
+            }
+
+            });
+        }
+        else {
+            App::MHFS::torrent_list_torrents($evp, sub{
+                if(! defined $_[0]){ $request->Send404; return; };
+                my ($rtresponse) = @_;
+                my @lines = split( /\n/, $rtresponse);
+                my $buf = '<h1>Torrents</h1>';
+                $buf  .=  '<h3><a href="video?action=browsemovies">Browse Movies</a> | <a href="video">Video</a> | <a href="music">Music</a></h3>';
+                $buf   .= '<table border="1" >';
+                $buf   .= '<thead><tr><th>Name</th><th>Hash</th><th>Size</th><th>Done</th><th>Private</th></tr></thead>';
+                $buf   .= "<tbody>";
+                my $curtor = '';
+                while(1) {
+                    if($curtor =~ /^\[(u?)['"](.+)['"],\s'(.+)',\s([0-9]+),\s([0-9]+),\s([0-9]+)\]$/) {
+                        my %torrent;
+                        my $is_unicode = $1;
+                        $torrent{'name'} = $2;
+                        $torrent{'hash'} = $3;
+                        $torrent{'size_bytes'} = $4;
+                        $torrent{'bytes_done'} = $5;
+                        $torrent{'private'} = $6;
+                        if($is_unicode) {
+                            my $escaped_unicode = $torrent{'name'};
+                            $torrent{'name'} =~ s/\\u(.{4})/chr(hex($1))/eg;
+                            $torrent{'name'} =~ s/\\x(.{2})/chr(hex($1))/eg;
+                            my $decoded_as = $torrent{'name'};
+                            $torrent{'name'} = ${escape_html($torrent{'name'})};
+                            if($qs->{'logunicode'}) {
+                                say 'unicode escaped: ' . $escaped_unicode;
+                                say 'decoded as: ' . $decoded_as;
+                                say 'html escaped ' . $torrent{'name'};
+                            }
+                        }
+                        $buf .= '<tr><td>' . $torrent{'name'} . '</td><td>' . $torrent{'hash'} . '</td><td>' . $torrent{'size_bytes'} . '</td><td>' . $torrent{'bytes_done'} . '</td><td>' . $torrent{'private'} . '</td></tr>';
+                        $curtor = '';
+                    }
+                    else {
+                        my $line = shift @lines;
+                        if(! $line) {
+                            last;
+                        }
+                        $curtor .= $line;
+                    }
+                }
+                $buf   .= '</tbody></table>';
+                $request->SendHTML($buf);
+            });
+        }
+    }
+
+    sub torrentload {
+        my ($request) = @_;
+        my $packagename = __PACKAGE__;
+        my $self = $request->{'client'}{server}{'loaded_plugins'}{$packagename};
+
+        if((exists $request->{'qs'}{'dlsubsystem'}) && (exists $request->{'qs'}{'privdata'}) ) {
+            my $subsystem = $request->{'qs'}{'dlsubsystem'};
+            if(exists $self->{'dlsubsystems'}{$subsystem}) {
+                my $evp = $request->{'client'}{'server'}{'evp'};
+                $self->{'dlsubsystems'}{$subsystem}->dl($evp, $request->{'qs'}{'privdata'}, sub {
+                    my ($result, $destdir) = @_;
+                    if(! $result) {
+                        say "failed to dl torrent";
+                        $request->Send404;
+                        return;
+                    }
+                    App::MHFS::torrent_start($evp, \$result, $destdir, {
+                        'on_success' => sub {
+                            my ($hexhash) = @_;
+                            $request->SendRedirectRawURL(301, 'view?infohash=' . $hexhash);
+                        },
+                        'on_failure' => sub {
+                            $request->Send404;
+                        }
+                    });
+                });
+                return;
+            }
+        }
+        $request->Send404;
+    }
+
+    sub new {
+        my ($class, $settings) = @_;
+        my $self =  { 'dlsubsystems' => {}};
+        bless $self, $class;
+
+        $self->{'routes'} = [
+            [ '/torrent/view', \&torrentview ],
+            [ '/torrent/load', \&torrentload ]
         ];
 
         return $self;
@@ -4455,7 +4703,7 @@ M3U8END
     }
 
     sub new {
-        my ($class, $settings) = @_;
+        my ($class, $settings, $server) = @_;
         my $self =  {};
         bless $self, $class;
 
@@ -4474,7 +4722,7 @@ M3U8END
                                 my $sid = $pathcomponents[3];
                                 splice(@pathcomponents, 0, 4);
                                 my $nametolookup = join('/', @pathcomponents);
-                                $video{'src_file'} = App::MHFS::media_file_lookup($nametolookup, $sid);
+                                $video{'src_file'} = $server->{'fs'}->lookup($nametolookup, $sid);
                                 if( ! $video{'src_file'} ) {
                                     $request->Send404;
                                     return undef;
@@ -4837,8 +5085,9 @@ package MHFS::Plugin::GetVideo {
         my ($request) = @_;
         say "/get_video ---------------------------------------";
         my $packagename = __PACKAGE__;
-        my $self = $request->{'client'}{'server'}{'loaded_plugins'}{$packagename};
-        my $settings = $request->{'client'}{'server'}{'settings'};
+        my $server = $request->{'client'}{'server'};
+        my $self = $server->{'loaded_plugins'}{$packagename};
+        my $settings = $server->{'settings'};
         my $videoformats = $self->{VIDEOFORMATS};
         $request->{'responseopt'}{'cd_file'} = 'inline';
         my $qs = $request->{'qs'};
@@ -4846,7 +5095,7 @@ package MHFS::Plugin::GetVideo {
         my %video = ('out_fmt' => $self->video_get_format($qs->{'fmt'}));
         if(defined($qs->{'name'})) {
             if(defined($qs->{'sid'})) {
-                $video{'src_file'} = App::MHFS::media_file_lookup($qs->{'name'}, $qs->{'sid'});
+                $video{'src_file'} = $server->{'fs'}->lookup($qs->{'name'}, $qs->{'sid'});
                 if( ! $video{'src_file'} ) {
                     $request->Send404;
                     return undef;
@@ -6213,6 +6462,127 @@ package MHFS::Plugin::GetVideo {
     1;
 }
 
+package MHFS::Plugin::VideoLibrary {
+    use strict; use warnings;
+    use feature 'say';
+    use Encode qw(decode);
+    use URI::Escape qw (uri_escape);
+    MHFS::Util->import(qw(output_dir_versatile escape_html uri_escape_path));
+
+    sub player_video {
+        my ($request) = @_;
+        my $qs = $request->{'qs'};
+        my $server = $request->{'client'}{'server'};
+        my $packagename = __PACKAGE__;
+        my $settings = $server->{'settings'};
+        my $self = $request->{'client'}{'server'}{'loaded_plugins'}{$packagename};
+
+        my $buf =  "<html>";
+        $buf .= "<head>";
+        $buf .= '<style type="text/css">';
+        my $temp = $server->GetResource($settings->{'DOCUMENTROOT'} . '/static/' . 'video_style.css');
+        $buf .= $$temp;
+        $buf .= '.searchfield { width: 50%; margin: 30px;}';
+        $buf .= '</style>';
+        $buf .= "</head>";
+        $buf .= "<body>";
+
+        $qs->{'action'} //= 'library';
+
+        # action=library
+        $buf .= '<div id="medialist">';
+        $qs->{'library'} //= 'all';
+        $qs->{'library'} = lc($qs->{'library'});
+        my @libraries = ('movies', 'tv', 'other');
+        if($qs->{'library'} ne 'all') {
+            @libraries = ($qs->{'library'});
+        }
+        my %libraryprint = ( 'movies' => 'Movies', 'tv' => 'TV', 'other' => 'Other');
+        print "plugin $_\n" foreach keys %{$server->{'loaded_plugins'}};
+        my $fmt = $server->{'loaded_plugins'}{'MHFS::Plugin::GetVideo'}->video_get_format($qs->{'fmt'});
+        foreach my $library (@libraries) {
+            exists $settings->{'MEDIASOURCES'}{$library} or next;
+            my $lib = $settings->{'MEDIASOURCES'}{$library};
+            my $libhtmlcontent;
+            foreach my $sid (@$lib) {
+                my $sublib = $settings->{'SOURCES'}{$sid};
+                next if(! -d $sublib->{'folder'});
+                $libhtmlcontent .= ${video_library_html($sublib->{'folder'}, $library, $sid, {'fmt' => $fmt})};
+            }
+            next if(! $libhtmlcontent);
+            $buf .= "<h1>" . $libraryprint{$library} . "</h1><ul>\n";
+            $buf .= $libhtmlcontent.'</ul>';
+        }
+        $buf .= '</div>';
+
+        # add the video player
+        $temp = $server->GetResource($server->{'loaded_plugins'}{'MHFS::Plugin::GetVideo'}{'VIDEOFORMATS'}{$fmt}->{'player_html'});
+        $buf .= $$temp;
+        $buf .= '<script>';
+        $temp = $server->GetResource($settings->{'DOCUMENTROOT'} . '/static/' . 'setVideo.js');
+        $buf .= $$temp;
+        $buf .= '</script>';
+        $buf .= "</body>";
+        $buf .= "</html>";
+        $request->SendHTML($buf);
+    }
+    
+    sub video_library_html {
+        my ($dir, $lib, $sid, $opt) = @_;
+        my $fmt = $opt->{'fmt'};
+
+        my $urlconstant = 'lib='.$lib.'&sid='.$sid;
+        my $playlisturl = "playlist/video/$sid/";
+
+        my $buf;
+        output_dir_versatile($dir, {
+            'root' => $dir,
+            'min_file_size' => 100000,
+            'on_dir_start' => sub {
+                my ($realpath, $unsafe_relpath) = @_;
+                my $relpath = uri_escape($unsafe_relpath);
+                my $disppath = escape_html(decode('UTF-8', $unsafe_relpath));
+                $buf .= '<li><div class="row">';
+                $buf .= '<a href="#' . $relpath . '_hide" class="hide" id="' . $$disppath . '_hide">' . "$$disppath</a>";
+                $buf .= '<a href="#' . $relpath . '_show" class="show" id="' . $$disppath . '_show">' . "$$disppath</a>";
+                $buf .= '    <a href="'.$playlisturl . uri_escape_path($unsafe_relpath) . '?fmt=m3u8">M3U</a>';
+                $buf .= '<div class="list"><ul>';
+            },
+            'on_dir_end' => sub {
+                $buf .= '</ul></div></div></li>';
+            },
+            'on_file' => sub {
+                my ($realpath, $unsafe_relpath, $unsafe_name) = @_;
+                my $relpath = uri_escape($unsafe_relpath);
+                my $filename = escape_html(decode('UTF-8', $unsafe_name));
+                $buf .= '<li><a href="video?'.$urlconstant.'&name='.$relpath.'&fmt=' . $fmt . '" class="mediafile">' . $$filename . '</a>    <a href="get_video?'.$urlconstant.'&name=' . $relpath . '&fmt=' . $fmt . '">DL</a>    <a href="'.$playlisturl . uri_escape_path($unsafe_relpath) . '?fmt=m3u8">M3U</a></li>';
+            }
+        });
+        return \$buf;
+    }
+
+    sub new {
+        my ($class, $settings) = @_;
+        my $self =  {};
+        bless $self, $class;
+
+        $self->{'routes'} = [
+            [
+                '/video', \&player_video
+            ],
+            [
+                '/video/', sub {
+                    my ($request) = @_;
+                    $request->SendRedirect(301, '../video');
+                }
+            ],
+        ];
+        return $self;
+    }
+
+    1;
+}
+
 package App::MHFS; #Media Http File Server
 use version; our $VERSION = version->declare("v0.2.0");
 unless (caller) {
@@ -6271,18 +6641,6 @@ my $SETTINGS = MHFS::Settings::load(abs_path(__FILE__));
 
 # web server routes
 my @routes = (
-    [
-        '/video', \&player_video
-    ],
-    [
-        '/video/', sub {
-            my ($request) = @_;
-            $request->SendRedirect(301, '../video');
-        }
-    ],
-    [
-        '/torrent', \&torrent
-    ],
     sub {
         my ($request) = @_;
 
@@ -6330,72 +6688,15 @@ my @routes = (
 
 # finally start the server
 my $server = MHFS::HTTP::Server->new($SETTINGS, \@routes,
-['MHFS::Plugin::MusicLibrary', 'MHFS::Plugin::GetVideo', 'MHFS::Plugin::Youtube', 'MHFS::Plugin::BitTorrent::Tracker', 'MHFS::Plugin::OpenDirectory', 'MHFS::Plugin::Playlist', 'MHFS::Plugin::Kodi']);
-
-sub media_file_lookup {
-    my ($name, $sid) = @_;
-
-    if(! exists $SETTINGS->{'SOURCES'}{$sid}) {
-        return undef;
-    }
-
-    my $src = $SETTINGS->{'SOURCES'}{$sid};
-    if($src->{'type'} ne 'local') {
-        say "unhandled src type ". $src->{'type'};
-        return undef;
-    }
-    my $location = $src->{'folder'};
-    my $absolute = abs_path($location.'/'.$name);
-    return undef if( ! $absolute);
-    return undef if ($absolute !~ /^$location/);
-    return media_filepath_to_src_file($absolute, $location);
-}
-
-sub media_filepath_to_src_file {
-    my ($filepath, $flocation) = @_;
-    my ($name, $loc, $ext) = fileparse($filepath, '\.[^\.]*');
-    $ext =~ s/^\.//;
-    return { 'filepath' => $filepath, 'name' => $name, 'containingdir' => $loc, 'ext' => $ext, 'fullname' => substr($filepath, length($flocation)+1), 'root' => $flocation};
-}
-
-sub ptp_request {
-    my ($evp, $url, $handler, $tried_login) = @_;
-    my $atbuf;
-    my $ptpdir = $SETTINGS->{'SECRET_TMPDIR'}.'/ptp';
-    make_path($ptpdir);
-    my $cookie = $ptpdir . '/cookie';
-    my @cmd = ('curl', '-s', '-v', '-b', $cookie, '-c', $cookie, $SETTINGS->{'PTP'}{'url'}.'/' . $url);
-
-    my $process;
-    $process    = MHFS::Process->new_output_process($evp, \@cmd, sub {
-        my ($output, $error) = @_;
-        if($output) {
-            #say 'ptprequest output: ' . $output;
-            $handler->($output);
-        }
-        else {
-            say 'ptprequest error: ' . $error;
-            if($tried_login) {
-                $handler->(undef);
-                return;
-            }
-            $tried_login = 1;
-            my $postdata = 'username=' . $SETTINGS->{'PTP'}{'username'} . '&password=' . $SETTINGS->{'PTP'}{'password'} . '&passkey=' . $SETTINGS->{'PTP'}{'passkey'};
-            my $ptpdir = $SETTINGS->{'SECRET_TMPDIR'}.'/ptp';
-            make_path($ptpdir);
-            my $cookie = $ptpdir . '/cookie';
-            my @logincmd = ('curl', '-s', '-v', '-b', $cookie, '-c', $cookie, '-d', $postdata, $SETTINGS->{'PTP'}{'url'}.'/ajax.php?action=login');
-            $process = MHFS::Process->new_output_process($evp, \@logincmd, sub {
-                 my ($output, $error) = @_;
-                 # todo error handling
-                 ptp_request($evp, $url, $handler, 1);
-
-            });
-
-        }
-    });
-    return $process;
-}
+['MHFS::Plugin::MusicLibrary',
+'MHFS::Plugin::GetVideo',
+'MHFS::Plugin::VideoLibrary',
+'MHFS::Plugin::Youtube',
+'MHFS::Plugin::BitTorrent::Tracker',
+'MHFS::Plugin::OpenDirectory',
+'MHFS::Plugin::Playlist',
+'MHFS::Plugin::Kodi',
+'MHFS::Plugin::BitTorrent::Client::Interface']);
 
 sub rtxmlrpc {
     my ($evp, $params, $cb, $inputdata) = @_;
@@ -6409,6 +6710,11 @@ sub rtxmlrpc {
         #say 'rtxmlrpc output: ' . $output;
         $cb->($output);
     }, $inputdata);
+
+    if(! $process) {
+        $cb->(undef);
+    }
+
     return $process;
 }
 
@@ -6619,18 +6925,6 @@ sub torrent_list_torrents {
     });
 }
 
-
-sub get_SI_size {
-    my ($bytes) = @_;
-    my $mebibytes = ($bytes / 1048576);
-    if($mebibytes >= 1024) {
-        return  sprintf("%.2f GiB", $bytes / 1073741824);
-    }
-    else {
-        return sprintf("%.2f MiB", $mebibytes);
-    }
-}
-
 sub torrent_file_information {
     my ($evp, $infohash, $name, $cb) = @_;
     rtxmlrpc($evp, ['f.multicall', $infohash, '', 'f.path=', 'f.size_bytes='], sub {
@@ -6691,27 +6985,6 @@ sub torrent_file_information {
     });
 }
 
-
-
-sub is_video {
-    my ($name) = @_;
-    my ($ext) = $name =~ /\.(mkv|avi|mp4|webm|flv|ts|mpeg|mpg|m2t|m2ts|wmv)$/i;
-    return $ext;
-}
-
-# is supported by mhfs music
-sub is_mhfs_music_playable {
-    my ($name) = @_;
-    return $name =~ /\.(?:flac|mp3|wav)$/i;
-}
-
-sub play_in_browser_link {
-    my ($file, $urlfile) = @_;
-    return '<a href="video?name=' . $urlfile . '&fmt=hls">HLS (Watch in browser)</a>' if(is_video($file));
-    return '<a href="music?ptrack=' . $urlfile . '">Play in MHFS Music</a>' if(is_mhfs_music_playable($file));
-    return 'N/A';
-}
-
 sub torrent_start {
     my ($evp, $torrentData, $saveto, $cb) = @_;
     my $torrent = MHFS::BitTorrent::Metainfo::Parse($torrentData);
@@ -6753,321 +7026,6 @@ sub torrent_start {
         })});
     }
     });
-}
-
-# if an infohash is provided and it exists in rtorrent it reports the status of it
-    # starting or stopping it if requested.
-# if an id is provided, it downloads the torrent file to lookup the infohash and adds it to rtorrent if necessary
-    # by default it starts it.
-sub torrent {
-    my ($request) = @_;
-    my $qs = $request->{'qs'};
-    my $evp = $request->{'client'}{'server'}{'evp'};
-    # dump out the status, if the torrent's infohash is provided
-    if(defined $qs->{'infohash'}) {
-        my $hash = $qs->{'infohash'};
-        do_multiples({
-        'bytes_done' => sub { torrent_d_bytes_done($evp, $hash, @_); },
-        'size_bytes' => sub { torrent_d_size_bytes($evp, $hash, @_); },
-        'name'       => sub { torrent_d_name($evp, $hash, @_); },
-        }, sub {
-        if( ! defined $_[0]) { $request->Send404; return;}
-        my ($data) = @_;
-        my $torrent_raw = $data->{'name'};
-        my $bytes_done  = $data->{'bytes_done'};
-        my $size_bytes  = $data->{'size_bytes'};
-        # print out the current torrent status
-        my $torrent_name = ${escape_html($torrent_raw)};
-        my $size_print = get_SI_size($size_bytes);
-        my $done_print = get_SI_size($bytes_done);
-        my $percent_print = (sprintf "%u%%", ($bytes_done/$size_bytes)*100);
-        my $buf = '<h1>Torrent</h1>';
-        $buf  .=  '<h3><a href="video?action=browsemovies">Browse Movies</a> | <a href="video">Video</a> | <a href="music">Music</a></h3>';
-        $buf   .= '<table border="1" >';
-        $buf   .= '<thead><tr><th>Name</th><th>Size</th><th>Done</th><th>Downloaded</th></tr></thead>';
-        $buf   .= "<tbody><tr><td>$torrent_name</td><td>$size_print</td><td>$percent_print</td><td>$done_print</td></tr></tbody>";
-        $buf   .= '</table>';
-
-        # Assume we are downloading, if the bytes don't match
-        if($bytes_done < $size_bytes) {
-            $buf   .= '<meta http-equiv="refresh" content="3">';
-            $request->SendHTML($buf);
-        }
-        else {
-        # print out the files with usage options
-            torrent_file_information($evp, $qs->{'infohash'}, $torrent_raw, sub {
-            if(! defined $_[0]){ $request->Send404; return; };
-            my ($tfi) = @_;
-            my @files = sort (keys %$tfi);
-            $buf .= '<br>';
-            $buf .= '<table border="1" >';
-            $buf .= '<thead><tr><th>File</th><th>Size</th><th>DL</th><th>Play in browser</th></tr></thead>';
-            $buf .= '<tbody';
-            foreach my $file (@files) {
-                my $htmlfile = ${escape_html($file)};
-                my $urlfile = uri_escape($file);
-                my $link = '<a href="get_video?name=' . $urlfile . '&fmt=noconv">DL</a>';
-                my $playlink = play_in_browser_link($file, $urlfile);
-                $buf .= "<tr><td>$htmlfile</td><td>" . get_SI_size($tfi->{$file}{'size'}) . "</td><td>$link</td>";
-                $buf .= "<td>$playlink</td>" if(!defined($qs->{'playinbrowser'}) || ($qs->{'playinbrowser'} == 1));
-                $buf .= "</tr>";
-            }
-            $buf .= '</tbody';
-            $buf .= '</table>';
-
-            $request->SendHTML($buf);
-            });
-        }
-
-        });
-    }
-    # convert id to infohash (by downloading it and adding it to rtorrent if necessary
-    elsif(defined $qs->{'ptpid'}) {
-        ptp_request($evp, 'torrents.php?action=download&id=' . $qs->{'ptpid'}, sub {
-            my ($result) = @_;
-            if(! $result) {
-                say "failed to dl torrent";
-                $request->Send404;
-                return;
-            }
-            torrent_start($evp, \$result, $SETTINGS->{'MEDIALIBRARIES'}{'movies'}, {
-                'on_success' => sub {
-                    my ($hexhash) = @_;
-                    $request->SendRedirectRawURL(301, 'torrent?infohash=' . $hexhash);
-                },
-                'on_failure' => sub {
-                    $request->Send404;
-                }
-            });
-        });
-    }
-    elsif(defined $qs->{'list'}) {
-        torrent_list_torrents($evp, sub{
-            if(! defined $_[0]){ $request->Send404; return; };
-            my ($rtresponse) = @_;
-            my @lines = split( /\n/, $rtresponse);
-            my $buf = '<h1>Torrents</h1>';
-            $buf  .=  '<h3><a href="video?action=browsemovies">Browse Movies</a> | <a href="video">Video</a> | <a href="music">Music</a></h3>';
-            $buf   .= '<table border="1" >';
-            $buf   .= '<thead><tr><th>Name</th><th>Hash</th><th>Size</th><th>Done</th><th>Private</th></tr></thead>';
-            $buf   .= "<tbody>";
-            my $curtor = '';
-            while(1) {
-                if($curtor =~ /^\[(u?)['"](.+)['"],\s'(.+)',\s([0-9]+),\s([0-9]+),\s([0-9]+)\]$/) {
-                    my %torrent;
-                    my $is_unicode = $1;
-                    $torrent{'name'} = $2;
-                    $torrent{'hash'} = $3;
-                    $torrent{'size_bytes'} = $4;
-                    $torrent{'bytes_done'} = $5;
-                    $torrent{'private'} = $6;
-                    if($is_unicode) {
-                        my $escaped_unicode = $torrent{'name'};
-                        $torrent{'name'} =~ s/\\u(.{4})/chr(hex($1))/eg;
-                        $torrent{'name'} =~ s/\\x(.{2})/chr(hex($1))/eg;
-                        my $decoded_as = $torrent{'name'};
-                        $torrent{'name'} = ${escape_html($torrent{'name'})};
-                        if($qs->{'logunicode'}) {
-                            say 'unicode escaped: ' . $escaped_unicode;
-                            say 'decoded as: ' . $decoded_as;
-                            say 'html escaped ' . $torrent{'name'};
-                        }
-                    }
-                    $buf .= '<tr><td>' . $torrent{'name'} . '</td><td>' . $torrent{'hash'} . '</td><td>' . $torrent{'size_bytes'} . '</td><td>' . $torrent{'bytes_done'} . '</td><td>' . $torrent{'private'} . '</td></tr>';
-                    $curtor = '';
-                }
-                else {
-                    my $line = shift @lines;
-                    if(! $line) {
-                        last;
-                    }
-                    $curtor .= $line;
-                }
-            }
-            $buf   .= '</tbody></table>';
-            $request->SendHTML($buf);
-        });
-    }
-    else {
-        $request->Send404;
-    }
-}
-
-sub player_video_browsemovies {
-    my ($request, $buf) = @_;
-    my $evp = $request->{'client'}{'server'}{'evp'};
-    my $qs = $request->{'qs'};
-    $buf .= '<h1>Browse Movies</h1>';
-    $buf .= '<h3><a href="video">Video</a> | <a href="music">Music</a></h3>';
-    $buf .= '<form action="video" method="GET">';
-    $buf .= '<input type="hidden" name="action" value="browsemovies">';
-    $buf .= '<input type="text" placeholder="Search" name="searchstr" class="searchfield">';
-    $buf .= '<button type="submit">Search</button>';
-    $buf .= '</form>';
-    $qs->{'searchstr'} //= '';
-    my $url = 'torrents.php?searchstr=' . $qs->{'searchstr'} . '&json=noredirect';
-    if( $qs->{'page'}) {
-        $qs->{'page'} = int($qs->{'page'});
-        $url .= '&page=' . $qs->{'page'} ;
-    }
-    ptp_request($evp, $url, sub {
-        my ($result) = @_;
-        if(! $result) {
-            $buf .= '<h2>Search Failed</h2>';
-        }
-        else {
-            # get a list of movies on disk
-            my $moviedir;
-            my @dlmovies;
-            if(opendir($moviedir, $SETTINGS->{'MEDIALIBRARIES'}{'movies'})) {
-                while(my $movie = readdir($moviedir)) {
-                    if(! -d ($SETTINGS->{'MEDIALIBRARIES'}{'movies'} . '/' . $movie)) {
-                        $movie =~ s/\.[^.]+$//;
-                    }
-                    push @dlmovies, $movie;
-                }
-                closedir($moviedir);
-            }
-
-            # compare with the search results and display
-            my $json = decode_json($result);
-            my $numresult = $json->{'TotalResults'};
-            my $numpages = ceil($numresult/50);
-            say "numresult $numresult pages $numpages";
-            foreach my $movie (@{$json->{'Movies'}}) {
-                $buf .= '<table class="tbl_movie" border="1"><tbody>';
-                $buf .= '<tr><th>' . $movie->{'Title'} . ' [' . $movie->{'Year'} . ']</th><th>Time</th><th>Size</th><th>Snatches</th><th>Seeds</th><th>Leeches</th></tr>';
-                foreach my $torrent ( @{$movie->{'Torrents'}}) {
-                    $buf .= '<tr><td>' . $torrent->{'Codec'} . ' / ' . $torrent->{'Container'} . ' / ' . $torrent->{'Source'} . ' / ' . $torrent->{'Resolution'};
-                    ($buf .= ' / ' . $torrent->{'Scene'}) if $torrent->{'Scene'} eq 'true';
-                    ($buf .= ' / ' . $torrent->{'RemasterTitle'}) if $torrent->{'RemasterTitle'};
-                    ($buf .= ' / ' . $torrent->{'GoldenPopcorn'}) if $torrent->{'GoldenPopcorn'} eq 'true';
-                    my $sizeprint = get_SI_size($torrent->{'Size'});
-                    my $viewtext = '[DL]';
-                    # attempt to note already downloaded movies. this has false postive matches
-                    # todo compare sizes
-                    my $releasename = $torrent->{'ReleaseName'};
-                    say 'testing releasename ' . $releasename;
-                    foreach my $dlmovie (@dlmovies) {
-                        if($dlmovie eq $releasename) {
-                            $viewtext = '[VIEW]';
-                            say 'match with ' . $dlmovie;
-                            last;
-                        }
-                    }
-                    $buf .= '<a href="torrent?ptpid=' . $torrent->{'Id'} . '">' . $viewtext . '</a></td><td>' . $torrent->{'UploadTime'} . '</td><td>' . $sizeprint . '</td><td>' . $torrent->{'Snatched'} . '</td><td>' .  $torrent->{'Seeders'} . '</td><td>' .  $torrent->{'Leechers'} . '</td></tr>';
-                }
-                $buf .= '<tbody></table><br>';
-            }
-
-            # navigation between pages of search results
-            $qs->{'page'} ||= 1;
-            if( $qs->{'page'} > 1) {
-                $buf .= '<a href="video?action=browsemovies&searchstr=' .  $qs->{'searchstr'} . '&page=1">' . ${escape_html('<<First')}  .'</a> |';
-                $buf .= '<a href="video?action=browsemovies&searchstr=' .  $qs->{'searchstr'} . '&page=' . ($qs->{'page'} - 1) . '">' . ${escape_html('<Prev')} . '</a>';
-            }
-            if ($qs->{'page'} < $numpages) {
-                $buf .= '<a href="video?action=browsemovies&searchstr=' .  $qs->{'searchstr'} . '&page=' . ($qs->{'page'} + 1) . '">' . ${escape_html('Next>')} . '</a> |';
-                $buf .= '<a href="video?action=browsemovies&searchstr=' .  $qs->{'searchstr'} . '&page=' . $numpages . '">' . ${escape_html('Last>>')} . '</a>';
-            }
-        }
-        $buf .= "</body>";
-        $buf .= "</html>";
-        $request->SendHTML($buf);
-    });
-}
-
-sub player_video {
-    my ($request) = @_;
-    my $qs = $request->{'qs'};
-    my $server = $request->{'client'}{'server'};
-
-    my $buf =  "<html>";
-    $buf .= "<head>";
-    $buf .= '<style type="text/css">';
-    my $temp = $server->GetResource($SETTINGS->{'DOCUMENTROOT'} . '/static/' . 'video_style.css');
-    $buf .= $$temp;
-    $buf .= '.searchfield { width: 50%; margin: 30px;}';
-    $buf .= '</style>';
-    $buf .= "</head>";
-    $buf .= "<body>";
-
-    $qs->{'action'} //= 'library';
-    if($qs->{'action'} eq 'browsemovies') {
-        player_video_browsemovies($request, $buf);
-        return;
-    }
-
-    # action=library
-    $buf .= '<div id="medialist">';
-    $qs->{'library'} //= 'all';
-    $qs->{'library'} = lc($qs->{'library'});
-    my @libraries = ('movies', 'tv', 'other');
-    if($qs->{'library'} ne 'all') {
-        @libraries = ($qs->{'library'});
-    }
-    my %libraryprint = ( 'movies' => 'Movies', 'tv' => 'TV', 'other' => 'Other');
-    print "plugin $_\n" foreach keys %{$server->{'loaded_plugins'}};
-    my $fmt = $server->{'loaded_plugins'}{'MHFS::Plugin::GetVideo'}->video_get_format($qs->{'fmt'});
-    foreach my $library (@libraries) {
-        exists $SETTINGS->{'MEDIASOURCES'}{$library} or next;
-        my $lib = $SETTINGS->{'MEDIASOURCES'}{$library};
-        my $libhtmlcontent;
-        foreach my $sid (@$lib) {
-            my $sublib = $SETTINGS->{'SOURCES'}{$sid};
-            next if(! -d $sublib->{'folder'});
-            $libhtmlcontent .= ${video_library_html($sublib->{'folder'}, $library, $sid, {'fmt' => $fmt})};
-        }
-        next if(! $libhtmlcontent);
-        $buf .= "<h1>" . $libraryprint{$library} . "</h1><ul>\n";
-        $buf .= $libhtmlcontent.'</ul>';
-    }
-    $buf .= '</div>';
-
-    # add the video player
-    $temp = $server->GetResource($server->{'loaded_plugins'}{'MHFS::Plugin::GetVideo'}{'VIDEOFORMATS'}{$fmt}->{'player_html'});
-    $buf .= $$temp;
-    $buf .= '<script>';
-    $temp = $server->GetResource($SETTINGS->{'DOCUMENTROOT'} . '/static/' . 'setVideo.js');
-    $buf .= $$temp;
-    $buf .= '</script>';
-    $buf .= "</body>";
-    $buf .= "</html>";
-    $request->SendHTML($buf);
-}
-
-sub video_library_html {
-    my ($dir, $lib, $sid, $opt) = @_;
-    my $fmt = $opt->{'fmt'};
-
-    my $urlconstant = 'lib='.$lib.'&sid='.$sid;
-    my $playlisturl = "playlist/video/$sid/";
-
-    my $buf;
-    output_dir_versatile($dir, {
-        'root' => $dir,
-        'min_file_size' => 100000,
-        'on_dir_start' => sub {
-            my ($realpath, $unsafe_relpath) = @_;
-            my $relpath = uri_escape($unsafe_relpath);
-            my $disppath = escape_html(decode('UTF-8', $unsafe_relpath));
-            $buf .= '<li><div class="row">';
-            $buf .= '<a href="#' . $relpath . '_hide" class="hide" id="' . $$disppath . '_hide">' . "$$disppath</a>";
-            $buf .= '<a href="#' . $relpath . '_show" class="show" id="' . $$disppath . '_show">' . "$$disppath</a>";
-            $buf .= '    <a href="'.$playlisturl . uri_escape_path($unsafe_relpath) . '?fmt=m3u8">M3U</a>';
-            $buf .= '<div class="list"><ul>';
-        },
-        'on_dir_end' => sub {
-            $buf .= '</ul></div></div></li>';
-        },
-        'on_file' => sub {
-            my ($realpath, $unsafe_relpath, $unsafe_name) = @_;
-            my $relpath = uri_escape($unsafe_relpath);
-            my $filename = escape_html(decode('UTF-8', $unsafe_name));
-            $buf .= '<li><a href="video?'.$urlconstant.'&name='.$relpath.'&fmt=' . $fmt . '" class="mediafile">' . $$filename . '</a>    <a href="get_video?'.$urlconstant.'&name=' . $relpath . '&fmt=' . $fmt . '">DL</a>    <a href="'.$playlisturl . uri_escape_path($unsafe_relpath) . '?fmt=m3u8">M3U</a></li>';
-        }
-    });
-    return \$buf;
 }
 
 }
