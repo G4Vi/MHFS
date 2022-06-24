@@ -27,8 +27,6 @@ package MHFS::EventLoop::Poll::Linux::Timer {
 
     sub new {
         my ($class, $evp) = @_;
-        say 'timerfd_create ' . SYS_timerfd_create();
-        say "timerfd_settime " . SYS_timerfd_settime();
         my $timerfd = syscall(SYS_timerfd_create(), _clock_MONOTONIC, $TFD_NONBLOCK | $TFD_CLOEXEC);
         $timerfd != -1 or die("failed to create timerfd: $!");
         my $timerhandle = IO::Handle->new_from_fd($timerfd, "r");
@@ -305,7 +303,7 @@ package MHFS::EventLoop::Poll::Linux {
         my ($self, $start) = @_;
         shift @_;
         if($self->SUPER::add_timer(@_) == 0) {
-            say "add_timer, updating linux timer to $start";
+            say __PACKAGE__.": add_timer, updating linux timer to $start";
             $self->{'evp_timer'}->settime_linux($start, 0);
         }
     };
@@ -316,7 +314,7 @@ package MHFS::EventLoop::Poll::Linux {
         my ($timers, $current_time) = @_;
         if(@{$self->{'timers'}}) {
             my $start = $self->{'timers'}[0]{'desired'} - $current_time;
-            say "requeue_timers, updating linux timer to $start";
+            say __PACKAGE__.": requeue_timers, updating linux timer to $start";
             $self->{'evp_timer'}->settime_linux($start, 0);
         }
     };
@@ -327,7 +325,7 @@ package MHFS::EventLoop::Poll::Linux {
         my $poll = $self->{'poll'};
         for(;;)
         {
-            print "do_poll LINUX_X86_64 $$";
+            print __PACKAGE__.": do_poll LINUX_X86_64 $$";
             if($self->{'timers'}) {
                 say " timers " . scalar(@{$self->{'timers'}}) . ' handles ' . scalar($self->{'poll'}->handles());
             }
@@ -346,7 +344,7 @@ package MHFS::EventLoop::Poll {
     use feature 'say';
     BEGIN {
     use Config;
-    say 'archname: '. $Config{archname};
+    say __PACKAGE__.': archname: '. $Config{archname};
     my $isLoaded;
     if(index($Config{archname}, 'x86_64-linux') != -1) {
         if(! main::HAS_EventLoop_Poll_Linux_Timer) {
@@ -382,7 +380,7 @@ package MHFS::HTTP::Server {
     MHFS::Util->import();
 
     sub new {
-        my ($class, $settings, $routes, $plugins) = @_;
+        my ($class, $settings, $plugins, $routes) = @_;
 
         # make the temp dirs
         make_path($settings->{'VIDEO_TMPDIR'}, $settings->{'MUSIC_TMPDIR'}, $settings->{'RUNTIME_DIR'}, $settings->{'GENERIC_TMPDIR'});
@@ -418,7 +416,7 @@ package MHFS::HTTP::Server {
             $sock->setsockopt(IPPROTO_TCP, TCP_QUICKACK, 1) or die("Failed to set TCP_QUICKACK");
         }
         my $evp = MHFS::EventLoop::Poll->new;
-        my %self = ( 'settings' => $settings, 'routes' => $routes, 'route_default' => pop @$routes, 'plugins' => $plugins, 'sock' => $sock, 'evp' => $evp, 'uploaders' => [], 'sesh' =>
+        my %self = ( 'settings' => $settings, 'routes' => $routes, 'route_default' => sub { $_[0]->SendDirectory($settings->{'DOCUMENTROOT'}); }, 'plugins' => $plugins, 'sock' => $sock, 'evp' => $evp, 'uploaders' => [], 'sesh' =>
         { 'newindex' => 0, 'sessions' => {}}, 'resources' => {}, 'loaded_plugins' => {});
         bless \%self, $class;
 
@@ -1681,7 +1679,50 @@ package MHFS::HTTP::Server::Client::Request {
         });
     }
 
-    sub SendOpenDirectory {
+    sub SendDirectory {
+        my ($request, $droot) = @_;
+
+        # otherwise attempt to send a file from droot
+        my $requestfile = abs_path($droot . $request->{'path'}{'unsafecollapse'});
+        say "abs requestfile: $requestfile" if(defined $requestfile);
+
+        # not a file or is outside of the document root
+        if(( ! defined $requestfile) ||
+        (rindex($requestfile, $droot, 0) != 0)){
+            $request->Send404;
+        }
+        # is regular file
+        elsif (-f $requestfile) {
+            if(index($request->{'path'}{'unsafecollapse'}, '/', length($request->{'path'}{'unsafecollapse'})-1) == -1) {
+                $request->SendFile($requestfile);
+            }
+            else {
+                $request->Send404;
+            }
+        }
+        # is directory
+        elsif (-d _) {
+            # ends with slash
+            if(index($request->{'path'}{'unescapepath'}, '/', length($request->{'path'}{'unescapepath'})-1) != -1) {
+                my $index = $requestfile.'/index.html';
+                if(-f $index) {
+                    $request->SendFile($index);
+                    return;
+                }
+                $request->Send404;
+            }
+            else {
+                # redirect to slash path
+                my $bn = basename($requestfile);
+                $request->SendRedirect(301, $bn.'/');
+            }
+        }
+        else {
+            $request->Send404;
+        }
+    }
+
+    sub SendDirectoryListing {
         my ($self, $absdir, $urldir) = @_;
         my $urf = $absdir .'/'.substr($self->{'path'}{'unsafepath'}, length($urldir));
         my $requestfile = abs_path($urf);
@@ -2777,7 +2818,6 @@ package MHFS::Settings {
             defined($ip) or die("Invalid rule: " . $rule->[0]);
             $cidr >= 0 && $cidr <= 32  or die("Invalid rule: " . $rule->[0]);
             my $mask = (0xFFFFFFFF << (32-$cidr)) & 0xFFFFFFFF;
-            say "ip: $ip cidr: $cidr subnetmask $mask";
             my %ariphost = (
                 'ip' => $ip,
                 'subnetmask' => $mask
@@ -2792,7 +2832,6 @@ package MHFS::Settings {
             }
             # store whether to trust connections with this host
             if($rule->[3]) {
-                say "set X-MHFS-PROXY-KEY for host";
                 $ariphost{'X-MHFS-PROXY-KEY'} = $rule->[3];
             }
             push @{ $SETTINGS->{'ARIPHOSTS_PARSED'}}, \%ariphost;
@@ -4958,7 +4997,7 @@ package MHFS::Plugin::OpenDirectory {
                     my ($request) = @_;
                     foreach my $key (keys %{$odmappings}) {
                         if(rindex($request->{'path'}{'unsafepath'}, '/od/'.$key, 0) == 0) {
-                            $request->SendOpenDirectory($odmappings->{$key}, '/od/'.$key);
+                            $request->SendDirectoryListing($odmappings->{$key}, '/od/'.$key);
                             return;
                         }
                     }
@@ -5350,6 +5389,11 @@ package MHFS::Plugin::GetVideo {
     use Scalar::Util qw(weaken);
     use URI::Escape qw (uri_escape);
     use Devel::Peek qw(Dump);
+    no warnings "portable";
+BEGIN {
+    use Config;
+    die('Integers are too small!') if($Config{ivsize} < 8);
+}
     MHFS::Util->import();
 
     sub new {
@@ -6895,107 +6939,33 @@ package App::MHFS; #Media Http File Server
 use version; our $VERSION = version->declare("v0.2.0");
 unless (caller) {
 use strict; use warnings;
-no warnings "portable";
-BEGIN {
-    use Config;
-    die('Integers are too small!') if($Config{ivsize} < 8);
-}
 use feature 'say';
-use feature 'state';
-use Data::Dumper;
-use IO::Socket::INET;
-use File::Basename;
-use Cwd qw(abs_path getcwd);
-use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
-use IO::Poll qw(POLLIN POLLOUT POLLHUP);
-use Errno qw(EINTR EIO :POSIX);
-use Fcntl qw(:seek :mode);
-BEGIN {
-    if( ! (eval "use JSON; 1")) {
-        eval "use JSON::PP; 1" or die "No implementation of JSON available, see doc/dependencies.txt";
-        warn __PACKAGE__.": Using PurePerl version of JSON (JSON::PP), see doc/dependencies.txt about installing faster version";
-    }
-}
-use IPC::Open3;
-use File::stat;
-use File::Find;
-use File::Path qw(make_path);
-use File::Copy;
-use POSIX;
-use Encode qw(decode encode find_encoding);
-use URI::Escape;
-use Encode;
-use Devel::Peek;
-use Symbol 'gensym';
-binmode(STDOUT, ":utf8");
-binmode(STDERR, ":utf8");
-
-MHFS::Util->import();
+use Cwd qw(abs_path);
 
 $SIG{PIPE} = sub {
     print STDERR "SIGPIPE @_\n";
 };
 
+binmode(STDOUT, ":utf8");
+binmode(STDERR, ":utf8");
+
 # parse command line args
+say __PACKAGE__ .": parsing command line args";
 if(scalar(@ARGV) >= 1 ) {
     if($ARGV[0] eq 'flush') {
+        say __PACKAGE__.": setting autoflush on STDOUT and STDERR";
         STDOUT->autoflush(1);
         STDERR->autoflush(1);
     }
 }
 
 # load settings
+say __PACKAGE__.": loading settings";
 my $SETTINGS = MHFS::Settings::load(abs_path(__FILE__));
 
-# web server routes
-my @routes = (
-    sub {
-        my ($request) = @_;
-
-        # otherwise attempt to send a file from droot
-        my $droot = $SETTINGS->{'DOCUMENTROOT'};
-        my $requestfile = abs_path($droot . $request->{'path'}{'unsafecollapse'});
-        say "abs requestfile: $requestfile" if(defined $requestfile);
-
-        # not a file or is outside of the document root
-        if(( ! defined $requestfile) ||
-        (rindex($requestfile, $droot, 0) != 0)){
-            $request->Send404;
-        }
-        # is regular file
-        elsif (-f $requestfile) {
-            if(index($request->{'path'}{'unsafecollapse'}, '/', length($request->{'path'}{'unsafecollapse'})-1) == -1) {
-                $request->SendFile($requestfile);
-            }
-            else {
-                $request->Send404;
-            }
-        }
-        # is directory
-        elsif (-d _) {
-            # ends with slash
-            if(index($request->{'path'}{'unescapepath'}, '/', length($request->{'path'}{'unescapepath'})-1) != -1) {
-                my $index = $requestfile.'/index.html';
-                if(-f $index) {
-                    $request->SendFile($index);
-                    return;
-                }
-                $request->Send404;
-            }
-            else {
-                # redirect to slash path
-                my $bn = basename($requestfile);
-                $request->SendRedirect(301, $bn.'/');
-            }
-        }
-        else {
-            $request->Send404;
-        }
-    }
-);
-
-# finally start the server
-my $server = MHFS::HTTP::Server->new($SETTINGS, \@routes,
+# start the server (blocks)
+say __PACKAGE__.": starting MHFS::HTTP::Server";
+my $server = MHFS::HTTP::Server->new($SETTINGS,
 ['MHFS::Plugin::MusicLibrary',
 'MHFS::Plugin::GetVideo',
 'MHFS::Plugin::VideoLibrary',
@@ -7004,7 +6974,8 @@ my $server = MHFS::HTTP::Server->new($SETTINGS, \@routes,
 'MHFS::Plugin::OpenDirectory',
 'MHFS::Plugin::Playlist',
 'MHFS::Plugin::Kodi',
-'MHFS::Plugin::BitTorrent::Client::Interface']);
+'MHFS::Plugin::BitTorrent::Client::Interface'],
+);
 
 }
 1;
