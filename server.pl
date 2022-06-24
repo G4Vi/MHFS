@@ -2999,9 +2999,37 @@ package MHFS::BitTorrent::Metainfo {
         return MHFS::BitTorrent::Metainfo->_new($tree->[0]);
     }
 
+    sub mktor {
+        my ($evp, $params, $cb) = @_;
+        my $process;
+        my @cmd = ('mktor', @$params);
+        $process    = MHFS::Process->new_output_process($evp, \@cmd, sub {
+            my ($output, $error) = @_;
+            chomp $output;
+            say 'mktor output: ' . $output;
+            $cb->($output);
+        });
+        return $process;
+    }
+
     sub Create {
-        my ($srcpath) = @_;
-        return undef;
+        my ($evp, $opt, $cb) = @_;
+
+        if((! exists $opt->{src}) || (! exists $opt->{dest_metafile}) || (! exists $opt->{tracker})) {
+            say "MHFS::BitTorrent::Metainfo::Create - Invalid opts";
+            $cb->(undef);
+            return;
+        }
+
+        my @params;
+        push @params, '-p' if($opt->{private});
+        push @params, ('-o', $opt->{dest_metafile});
+        push @params, $opt->{src};
+        push @params, $opt->{tracker};
+        print "$_ " foreach @params;
+        print "\n";
+
+        mktor($evp, \@params, $cb);
     }
 
     sub InfohashAsHex {
@@ -3094,6 +3122,283 @@ package MHFS::FS {
         my %self = ('sources' => $sources);
         bless \%self, $class;
         return \%self;
+    }
+
+    1;
+}
+
+package MHFS::BitTorrent::Client {
+    use strict; use warnings;
+    use feature 'say';
+
+    sub rtxmlrpc {
+        my ($server, $params, $cb, $inputdata) = @_;
+        my $process;
+        my @cmd = ('rtxmlrpc', @$params, '--config-dir', $server->{settings}{'CFGDIR'} . '/.pyroscope/');
+        print "$_ " foreach @cmd;
+        print "\n";
+        $process    = MHFS::Process->new_io_process($server->{evp}, \@cmd, sub {
+            my ($output, $error) = @_;
+            chomp $output;
+            #say 'rtxmlrpc output: ' . $output;
+            $cb->($output);
+        }, $inputdata);
+
+        if(! $process) {
+            $cb->(undef);
+        }
+
+        return $process;
+    }
+
+    sub torrent_d_bytes_done {
+        my ($server, $infohash, $callback) = @_;
+        rtxmlrpc($server, ['d.bytes_done', $infohash ], sub {
+            my ($output) = @_;
+            if($output =~ /ERROR/) {
+                $output = undef;
+            }
+            $callback->($output);
+        });
+    }
+
+    sub torrent_d_size_bytes {
+        my ($server, $infohash, $callback) = @_;
+        rtxmlrpc($server, ['d.size_bytes', $infohash ],sub {
+            my ($output) = @_;
+            if($output =~ /ERROR/) {
+                $output = undef;
+            }
+            $callback->($output);
+        });
+    }
+
+    sub torrent_load_verbose {
+        my ($server, $filename, $callback) = @_;
+        rtxmlrpc($server, ['load.verbose', '', $filename], sub {
+            my ($output) = @_;
+            if($output =~ /ERROR/) {
+                $output = undef;
+            }
+            $callback->($output);
+        });
+    }
+
+    sub torrent_load_raw_verbose {
+        my ($server, $data, $callback) = @_;
+        rtxmlrpc($server, ['load.raw_verbose', '', '@-'], sub {
+            my ($output) = @_;
+            if($output =~ /ERROR/) {
+                $output = undef;
+            }
+            $callback->($output);
+        }, $data);
+    }
+
+    sub torrent_d_directory_set {
+        my ($server, $infohash, $directory, $callback) = @_;
+        rtxmlrpc($server, ['d.directory.set', $infohash, $directory], sub {
+            my ($output) = @_;
+            if($output =~ /ERROR/) {
+                $output = undef;
+            }
+            $callback->($output);
+        });
+    }
+
+    sub torrent_d_start {
+        my ($server, $infohash, $callback) = @_;
+        rtxmlrpc($server, ['d.start', $infohash], sub {
+            my ($output) = @_;
+            if($output =~ /ERROR/) {
+                $output = undef;
+            }
+            $callback->($output);
+        });
+    }
+
+    sub torrent_d_delete_tied {
+        my ($server, $infohash, $callback) = @_;
+        rtxmlrpc($server, ['d.delete_tied', $infohash], sub {
+            my ($output) = @_;
+            if($output =~ /ERROR/) {
+                $output = undef;
+            }
+            $callback->($output);
+        });
+    }
+
+
+    sub torrent_d_name {
+        my ($server, $infohash, $callback) = @_;
+        rtxmlrpc($server, ['d.name', $infohash], sub {
+            my ($output) = @_;
+            if($output =~ /ERROR/) {
+                $output = undef;
+            }
+            $callback->($output);
+        });
+    }
+
+    sub torrent_d_is_multi_file {
+        my ($server, $infohash, $callback) = @_;
+        rtxmlrpc($server, ['d.is_multi_file', $infohash], sub {
+            my ($output) = @_;
+            if($output =~ /ERROR/) {
+                $output = undef;
+            }
+            $callback->($output);
+        });
+    }
+
+
+    sub torrent_set_priority {
+        my ($server, $infohash, $priority, $callback) = @_;
+        rtxmlrpc($server, ['f.multicall', $infohash, '', 'f.priority.set=' . $priority], sub {
+        my ($output) = @_;
+        if($output =~ /ERROR/) {
+            $callback->(undef);
+            return;
+        }
+        rtxmlrpc($server, ['d.update_priorities', $infohash], sub {
+        if($output =~ /ERROR/) {
+            $output = undef;
+        }
+        $callback->($output);
+        })});
+    }
+
+
+    # lookup the findex for the file and then set the priority on it
+    # ENOTIMPLEMENTED
+    sub torrent_set_file_priority {
+        my ($server, $infohash, $file, $priority, $callback) = @_;
+        rtxmlrpc($server, ['f.multicall', $infohash, '', 'f.path='], sub {
+        my ($output) = @_;
+        if($output =~ /ERROR/) {
+            $callback->(undef);
+            return;
+        }
+        say "torrent_set_file_priority";
+        say $output;
+        die;
+
+        $callback->($output);
+        });
+    }
+
+    sub torrent_list_torrents {
+        my ($server, $callback) = @_;
+        rtxmlrpc($server, ['d.multicall2', '', 'default', 'd.name=', 'd.hash=', 'd.size_bytes=', 'd.bytes_done=', 'd.is_private='], sub {
+            my ($output) = @_;
+            if($output =~ /ERROR/) {
+                $output = undef;
+            }
+            $callback->($output);
+        });
+    }
+
+    sub torrent_file_information {
+        my ($server, $infohash, $name, $cb) = @_;
+        rtxmlrpc($server, ['f.multicall', $infohash, '', 'f.path=', 'f.size_bytes='], sub {
+        my ($output) = @_;
+        if($output =~ /ERROR/) {
+            $output = undef;
+        }
+
+        # pase the name and size arrays
+        my %files;
+        my @lines = split(/\n/, $output);
+        while(1) {
+            my $line = shift @lines;
+            last if(!defined $line);
+            if(substr($line, 0, 1) ne '[') {
+                say "fail parse";
+                $cb->(undef);
+                return;
+            }
+            while(substr($line, -1) ne ']') {
+                my $newline = shift @lines;
+                if(!defined $newline) {
+                    say "fail parse";
+                    $cb->(undef);
+                    return;
+                }
+                $line .= $newline;
+            }
+            my ($file, $size) = $line =~ /^\[.(.+).,\s(\d+)\]$/;
+            if((! defined $file) || (!defined $size)) {
+                say "fail parse";
+                $cb->(undef);
+                return;
+            }
+            $files{$file} = {'size' => $size};
+        }
+
+        my @fkeys = (keys %files);
+        if(@fkeys == 1) {
+            my $key = $fkeys[0];
+            torrent_d_is_multi_file($server, $infohash, sub {
+            my ($res) = @_;
+            if(! defined $res) {
+                $cb->(undef);
+            }
+            if($res == 1) {
+                %files = (   $name . '/' . $key => $files{$key});
+            }
+            $cb->(\%files);
+            });
+            return;
+        }
+        my %newfiles;
+        foreach my $key (@fkeys) {
+            $newfiles{$name . '/' . $key} = $files{$key};
+        }
+        $cb->(\%newfiles);
+        });
+    }
+
+    sub torrent_start {
+        my ($server, $torrentData, $saveto, $cb) = @_;
+        my $torrent = MHFS::BitTorrent::Metainfo::Parse($torrentData);
+        if(! $torrent) {
+            $cb->{on_failure}->(); return;
+        }
+        my $asciihash = $torrent->InfohashAsHex();
+        say 'infohash ' . $asciihash;
+
+        # see if the hash is already in rtorrent
+        torrent_d_bytes_done($server, $asciihash, sub {
+        my ($bytes_done) = @_;
+        if(! defined $bytes_done) {
+            # load, set directory, and download it (race condition)
+            # 02/05/2020 what race condition?
+            torrent_load_raw_verbose($server, $$torrentData, sub {
+            if(! defined $_[0]) { $cb->{on_failure}->(); return;}
+
+            torrent_d_directory_set($server, $asciihash, $saveto, sub {
+            if(! defined $_[0]) { $cb->{on_failure}->(); return;}
+
+            torrent_d_start($server, $asciihash, sub {
+            if(! defined $_[0]) { $cb->{on_failure}->(); return;}
+
+            say 'starting ' . $asciihash;
+            $cb->{on_success}->($asciihash);
+            })})});
+        }
+        else {
+            # set the priority and download
+            torrent_set_priority($server, $asciihash, '1', sub {
+            if(! defined $_[0]) { $cb->{on_failure}->(); return;}
+
+            torrent_d_start($server, $asciihash, sub {
+            if(! defined $_[0]) { $cb->{on_failure}->(); return;}
+
+            say 'starting (existing) ' . $asciihash;
+            $cb->{on_success}->($asciihash);
+            })});
+        }
+        });
     }
 
     1;
@@ -4215,11 +4520,13 @@ package MHFS::Plugin::BitTorrent::Tracker {
         }
         print Dumper($fileitem);
         my $outputname = $self->{'settings'}{'MHFS_TRACKER_TORRENT_DIR'}.'/'.$fileitem->{'name'}.'.torrent';
-        my @params = ('-p', '-o', $outputname, $fileitem->{filepath}, $absurl.'/torrent/tracker');
-        print "$_ " foreach @params;
-        print "\n";
-        my $evp = $request->{'client'}{'server'}{'evp'};
-        App::MHFS::mktor($evp, \@params, sub {
+        my %maketorrent = ( private => 1,
+        dest_metafile => $outputname,
+        src => $fileitem->{filepath},
+        tracker => $absurl.'/torrent/tracker');
+        my $server = $request->{'client'}{'server'};
+        my $evp = $server->{'evp'};
+        MHFS::BitTorrent::Metainfo::Create($evp, \%maketorrent, sub {
 
         my $torrentData = MHFS::Util::read_file($outputname);
         if(!$torrentData) {
@@ -4233,7 +4540,7 @@ package MHFS::Plugin::BitTorrent::Tracker {
         say "asciihash: $asciihash";
         $self->{'torrents'}{pack('H*', $asciihash)} //= {};
 
-        App::MHFS::torrent_start($evp, \$torrentData, $fileitem->{'containingdir'}, {
+        MHFS::BitTorrent::Client::torrent_start($server, \$torrentData, $fileitem->{'containingdir'}, {
             'on_success' => sub {
                 $request->{'responseopt'}{'cd_file'} = 'attachment';
                 $request->SendLocalFile($outputname, 'applications/x-bittorrent');
@@ -4471,14 +4778,15 @@ package MHFS::Plugin::BitTorrent::Client::Interface {
     sub torrentview {
         my ($request) = @_;
         my $qs = $request->{'qs'};
-        my $evp = $request->{'client'}{'server'}{'evp'};
+        my $server = $request->{'client'}{'server'};
+        my $evp = $server->{'evp'};
         # dump out the status, if the torrent's infohash is provided
         if(defined $qs->{'infohash'}) {
             my $hash = $qs->{'infohash'};
             do_multiples({
-            'bytes_done' => sub { App::MHFS::torrent_d_bytes_done($evp, $hash, @_); },
-            'size_bytes' => sub { App::MHFS::torrent_d_size_bytes($evp, $hash, @_); },
-            'name'       => sub { App::MHFS::torrent_d_name($evp, $hash, @_); },
+            'bytes_done' => sub { MHFS::BitTorrent::Client::torrent_d_bytes_done($server, $hash, @_); },
+            'size_bytes' => sub { MHFS::BitTorrent::Client::torrent_d_size_bytes($server, $hash, @_); },
+            'name'       => sub { MHFS::BitTorrent::Client::torrent_d_name($server, $hash, @_); },
             }, sub {
             if( ! defined $_[0]) { $request->Send404; return;}
             my ($data) = @_;
@@ -4504,7 +4812,7 @@ package MHFS::Plugin::BitTorrent::Client::Interface {
             }
             else {
                 # print out the files with usage options
-                App::MHFS::torrent_file_information($evp, $qs->{'infohash'}, $torrent_raw, sub {
+                MHFS::BitTorrent::Client::torrent_file_information($server, $qs->{'infohash'}, $torrent_raw, sub {
                 if(! defined $_[0]){ $request->Send404; return; };
                 my ($tfi) = @_;
                 my @files = sort (keys %$tfi);
@@ -4531,7 +4839,7 @@ package MHFS::Plugin::BitTorrent::Client::Interface {
             });
         }
         else {
-            App::MHFS::torrent_list_torrents($evp, sub{
+            MHFS::BitTorrent::Client::torrent_list_torrents($server, sub{
                 if(! defined $_[0]){ $request->Send404; return; };
                 my ($rtresponse) = @_;
                 my @lines = split( /\n/, $rtresponse);
@@ -4587,15 +4895,15 @@ package MHFS::Plugin::BitTorrent::Client::Interface {
         if((exists $request->{'qs'}{'dlsubsystem'}) && (exists $request->{'qs'}{'privdata'}) ) {
             my $subsystem = $request->{'qs'}{'dlsubsystem'};
             if(exists $self->{'dlsubsystems'}{$subsystem}) {
-                my $evp = $request->{'client'}{'server'}{'evp'};
-                $self->{'dlsubsystems'}{$subsystem}->dl($evp, $request->{'qs'}{'privdata'}, sub {
+                my $server = $request->{'client'}{'server'};
+                $self->{'dlsubsystems'}{$subsystem}->dl($server, $request->{'qs'}{'privdata'}, sub {
                     my ($result, $destdir) = @_;
                     if(! $result) {
                         say "failed to dl torrent";
                         $request->Send404;
                         return;
                     }
-                    App::MHFS::torrent_start($evp, \$result, $destdir, {
+                    MHFS::BitTorrent::Client::torrent_start($server, \$result, $destdir, {
                         'on_success' => sub {
                             my ($hexhash) = @_;
                             $request->SendRedirectRawURL(301, 'view?infohash=' . $hexhash);
@@ -4742,7 +5050,7 @@ M3U8END
                                     $request->SendText('application/x-mpegURL', $$m3u8, {'filename' => $video{'src_file'}{'name'} . $video{'src_file'}{'ext'} . '.m3u8'});
                                     return 1;
                                 }
-                            }                  
+                            }
                         }
                     }
                     $request->Send404;
@@ -5730,11 +6038,11 @@ package MHFS::Plugin::GetVideo {
     }
 
     sub telmval {
-            my ($track, $stringid) = @_;
-            my $constname = "EBMLID_$stringid";
-            my $id = App::MHFS->$constname;
-            return $track->{$id}{'value'}  // $track->{$id}{'data'};
-            #return $track->{"$stringid"}}{'value'} // $track->{$EBMLID->{$stringid}}{'data'};
+        my ($track, $stringid) = @_;
+        my $constname = "EBMLID_$stringid";
+        my $id = __PACKAGE__->$constname;
+        return $track->{$id}{'value'}  // $track->{$id}{'data'};
+        #return $track->{"$stringid"}}{'value'} // $track->{$EBMLID->{$stringid}}{'data'};
     }
 
     sub trackno_is_audio {
@@ -6526,7 +6834,7 @@ package MHFS::Plugin::VideoLibrary {
         $buf .= "</html>";
         $request->SendHTML($buf);
     }
-    
+
     sub video_library_html {
         my ($dir, $lib, $sid, $opt) = @_;
         my $fmt = $opt->{'fmt'};
@@ -6697,336 +7005,6 @@ my $server = MHFS::HTTP::Server->new($SETTINGS, \@routes,
 'MHFS::Plugin::Playlist',
 'MHFS::Plugin::Kodi',
 'MHFS::Plugin::BitTorrent::Client::Interface']);
-
-sub rtxmlrpc {
-    my ($evp, $params, $cb, $inputdata) = @_;
-    my $process;
-    my @cmd = ('rtxmlrpc', @$params, '--config-dir', $SETTINGS->{'CFGDIR'} . '/.pyroscope/');
-    print "$_ " foreach @cmd;
-    print "\n";
-    $process    = MHFS::Process->new_io_process($evp, \@cmd, sub {
-        my ($output, $error) = @_;
-        chomp $output;
-        #say 'rtxmlrpc output: ' . $output;
-        $cb->($output);
-    }, $inputdata);
-
-    if(! $process) {
-        $cb->(undef);
-    }
-
-    return $process;
-}
-
-sub lstor {
-    my ($evp, $params, $cb) = @_;
-    my $process;
-    my @cmd = ('lstor', '-q', @$params);
-    $process    = MHFS::Process->new_output_process($evp, \@cmd, sub {
-        my ($output, $error) = @_;
-        chomp $output;
-        say 'lstor output: ' . $output;
-        $cb->($output);
-    });
-    return $process;
-}
-
-sub mktor {
-    my ($evp, $params, $cb) = @_;
-    my $process;
-    my @cmd = ('mktor', @$params);
-    $process    = MHFS::Process->new_output_process($evp, \@cmd, sub {
-        my ($output, $error) = @_;
-        chomp $output;
-        say 'mktor output: ' . $output;
-        $cb->($output);
-    });
-    return $process;
-}
-
-sub torrent_file_hash_pyroscope {
-my $pyroscope_get_info_hash = <<'END_pyroscope_get_info_hash';
-__requires__ = 'pyrocore'
-import re
-import sys
-
-from pyrobase import bencode
-from pyrocore.util import fmt, metafile
-
-if __name__ == '__main__':
-    raw_data = sys.stdin.read()
-    data = bencode.bdecode(raw_data)
-    if raw_data != bencode.bencode(data):
-        raise ValueError("Bad bencoded data - dict keys out of order?")
-    print metafile.info_hash(data)
-END_pyroscope_get_info_hash
-    my ($evp, $torrent_data, $cb) = @_;
-    my $python2 = $SETTINGS->{'Torrent'}{'pyroscope'}.'/bin/python2';
-    my $process;
-    my @cmd = ($python2, '-c', $pyroscope_get_info_hash);
-    print "$_ " foreach @cmd;
-    print "\n";
-    $process    = MHFS::Process->new_io_process($evp, \@cmd, sub {
-        my ($output, $error) = @_;
-        chomp $output;
-        $cb->($output);
-    }, $torrent_data);
-    return $process;
-}
-
-sub torrent_file_hash {
-    goto &torrent_file_hash_pyroscope;
-}
-
-sub torrent_d_bytes_done {
-    my ($evp, $infohash, $callback) = @_;
-    rtxmlrpc($evp, ['d.bytes_done', $infohash ], sub {
-        my ($output) = @_;
-        if($output =~ /ERROR/) {
-            $output = undef;
-        }
-        $callback->($output);
-    });
-}
-
-sub torrent_d_size_bytes {
-    my ($evp, $infohash, $callback) = @_;
-    rtxmlrpc($evp, ['d.size_bytes', $infohash ],sub {
-        my ($output) = @_;
-        if($output =~ /ERROR/) {
-            $output = undef;
-        }
-        $callback->($output);
-    });
-}
-
-sub torrent_load_verbose {
-    my ($evp, $filename, $callback) = @_;
-    rtxmlrpc($evp, ['load.verbose', '', $filename], sub {
-        my ($output) = @_;
-        if($output =~ /ERROR/) {
-            $output = undef;
-        }
-        $callback->($output);
-    });
-}
-
-sub torrent_load_raw_verbose {
-    my ($evp, $data, $callback) = @_;
-    rtxmlrpc($evp, ['load.raw_verbose', '', '@-'], sub {
-        my ($output) = @_;
-        if($output =~ /ERROR/) {
-            $output = undef;
-        }
-        $callback->($output);
-    }, $data);
-}
-
-sub torrent_d_directory_set {
-    my ($evp, $infohash, $directory, $callback) = @_;
-    rtxmlrpc($evp, ['d.directory.set', $infohash, $directory], sub {
-        my ($output) = @_;
-        if($output =~ /ERROR/) {
-            $output = undef;
-        }
-        $callback->($output);
-    });
-}
-
-sub torrent_d_start {
-    my ($evp, $infohash, $callback) = @_;
-    rtxmlrpc($evp, ['d.start', $infohash], sub {
-        my ($output) = @_;
-        if($output =~ /ERROR/) {
-            $output = undef;
-        }
-        $callback->($output);
-    });
-}
-
-sub torrent_d_delete_tied {
-    my ($evp, $infohash, $callback) = @_;
-    rtxmlrpc($evp, ['d.delete_tied', $infohash], sub {
-        my ($output) = @_;
-        if($output =~ /ERROR/) {
-            $output = undef;
-        }
-        $callback->($output);
-    });
-}
-
-
-sub torrent_d_name {
-    my ($evp, $infohash, $callback) = @_;
-    rtxmlrpc($evp, ['d.name', $infohash], sub {
-        my ($output) = @_;
-        if($output =~ /ERROR/) {
-            $output = undef;
-        }
-        $callback->($output);
-    });
-}
-
-sub torrent_d_is_multi_file {
-    my ($evp, $infohash, $callback) = @_;
-    rtxmlrpc($evp, ['d.is_multi_file', $infohash], sub {
-        my ($output) = @_;
-        if($output =~ /ERROR/) {
-            $output = undef;
-        }
-        $callback->($output);
-    });
-}
-
-
-sub torrent_set_priority {
-    my ($evp, $infohash, $priority, $callback) = @_;
-    rtxmlrpc($evp, ['f.multicall', $infohash, '', 'f.priority.set=' . $priority], sub {
-    my ($output) = @_;
-    if($output =~ /ERROR/) {
-        $callback->(undef);
-        return;
-    }
-    rtxmlrpc($evp, ['d.update_priorities', $infohash], sub {
-    if($output =~ /ERROR/) {
-        $output = undef;
-    }
-    $callback->($output);
-    })});
-}
-
-
-# lookup the findex for the file and then set the priority on it
-# ENOTIMPLEMENTED
-sub torrent_set_file_priority {
-    my ($evp, $infohash, $file, $priority, $callback) = @_;
-    rtxmlrpc($evp, ['f.multicall', $infohash, '', 'f.path='], sub {
-    my ($output) = @_;
-    if($output =~ /ERROR/) {
-        $callback->(undef);
-        return;
-    }
-    say "torrent_set_file_priority";
-    say $output;
-    die;
-
-    $callback->($output);
-    });
-}
-
-sub torrent_list_torrents {
-    my ($evp, $callback) = @_;
-    rtxmlrpc($evp, ['d.multicall2', '', 'default', 'd.name=', 'd.hash=', 'd.size_bytes=', 'd.bytes_done=', 'd.is_private='], sub {
-        my ($output) = @_;
-        if($output =~ /ERROR/) {
-            $output = undef;
-        }
-        $callback->($output);
-    });
-}
-
-sub torrent_file_information {
-    my ($evp, $infohash, $name, $cb) = @_;
-    rtxmlrpc($evp, ['f.multicall', $infohash, '', 'f.path=', 'f.size_bytes='], sub {
-    my ($output) = @_;
-    if($output =~ /ERROR/) {
-        $output = undef;
-    }
-
-    # pase the name and size arrays
-    my %files;
-    my @lines = split(/\n/, $output);
-    while(1) {
-        my $line = shift @lines;
-        last if(!defined $line);
-        if(substr($line, 0, 1) ne '[') {
-            say "fail parse";
-            $cb->(undef);
-            return;
-        }
-        while(substr($line, -1) ne ']') {
-            my $newline = shift @lines;
-            if(!defined $newline) {
-                say "fail parse";
-                $cb->(undef);
-                return;
-            }
-            $line .= $newline;
-        }
-        my ($file, $size) = $line =~ /^\[.(.+).,\s(\d+)\]$/;
-        if((! defined $file) || (!defined $size)) {
-            say "fail parse";
-            $cb->(undef);
-            return;
-        }
-        $files{$file} = {'size' => $size};
-    }
-
-    my @fkeys = (keys %files);
-    if(@fkeys == 1) {
-        my $key = $fkeys[0];
-        torrent_d_is_multi_file($evp, $infohash, sub {
-        my ($res) = @_;
-        if(! defined $res) {
-            $cb->(undef);
-        }
-        if($res == 1) {
-            %files = (   $name . '/' . $key => $files{$key});
-        }
-        $cb->(\%files);
-        });
-        return;
-    }
-    my %newfiles;
-    foreach my $key (@fkeys) {
-        $newfiles{$name . '/' . $key} = $files{$key};
-    }
-    $cb->(\%newfiles);
-    });
-}
-
-sub torrent_start {
-    my ($evp, $torrentData, $saveto, $cb) = @_;
-    my $torrent = MHFS::BitTorrent::Metainfo::Parse($torrentData);
-    if(! $torrent) {
-        $cb->{on_failure}->(); return;
-    }
-    my $asciihash = $torrent->InfohashAsHex();
-    say 'infohash ' . $asciihash;
-
-    # see if the hash is already in rtorrent
-    torrent_d_bytes_done($evp, $asciihash, sub {
-    my ($bytes_done) = @_;
-    if(! defined $bytes_done) {
-        # load, set directory, and download it (race condition)
-        # 02/05/2020 what race condition?
-        torrent_load_raw_verbose($evp, $$torrentData, sub {
-        if(! defined $_[0]) { $cb->{on_failure}->(); return;}
-
-        torrent_d_directory_set($evp, $asciihash, $saveto, sub {
-        if(! defined $_[0]) { $cb->{on_failure}->(); return;}
-
-        torrent_d_start($evp, $asciihash, sub {
-        if(! defined $_[0]) { $cb->{on_failure}->(); return;}
-
-        say 'starting ' . $asciihash;
-        $cb->{on_success}->($asciihash);
-        })})});
-    }
-    else {
-        # set the priority and download
-        torrent_set_priority($evp, $asciihash, '1', sub {
-        if(! defined $_[0]) { $cb->{on_failure}->(); return;}
-
-        torrent_d_start($evp, $asciihash, sub {
-        if(! defined $_[0]) { $cb->{on_failure}->(); return;}
-
-        say 'starting (existing) ' . $asciihash;
-        $cb->{on_success}->($asciihash);
-        })});
-    }
-    });
-}
 
 }
 1;
