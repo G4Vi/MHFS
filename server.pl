@@ -380,7 +380,23 @@ package MHFS::HTTP::Server {
     MHFS::Util->import();
 
     sub new {
-        my ($class, $settings, $plugins, $routes) = @_;
+        my ($class, $launchsettings, $plugins, $routes) = @_;
+
+        $SIG{PIPE} = sub {
+            print STDERR "SIGPIPE @_\n";
+        };
+
+        binmode(STDOUT, ":utf8");
+        binmode(STDERR, ":utf8");
+
+        # load settings
+        say __PACKAGE__.": loading settings";
+        my $settings = MHFS::Settings::load($launchsettings);
+        if((exists $settings->{'flush'}) && ($settings->{'flush'})) {
+            say __PACKAGE__.": setting autoflush on STDOUT and STDERR";
+            STDOUT->autoflush(1);
+            STDERR->autoflush(1);
+        }
 
         # make the temp dirs
         make_path($settings->{'VIDEO_TMPDIR'}, $settings->{'MUSIC_TMPDIR'}, $settings->{'RUNTIME_DIR'}, $settings->{'GENERIC_TMPDIR'});
@@ -2666,6 +2682,7 @@ package MHFS::Settings {
     use File::Basename;
     use Digest::MD5 qw(md5_hex);
     use Storable qw(freeze);
+    use Cwd qw(abs_path);
     MHFS::Util->import();
 
     sub write_settings_file {
@@ -2763,7 +2780,8 @@ package MHFS::Settings {
     }
 
     sub load {
-        my ($scriptpath) = @_;
+        my ($launchsettings) = @_;
+        my $scriptpath = abs_path(__FILE__);
         # locate files based on appdir
         my $SCRIPTDIR = dirname($scriptpath);
         my $APPDIR = $SCRIPTDIR;
@@ -2786,7 +2804,7 @@ package MHFS::Settings {
         my $useappdirconfig = -d $appdirconfig;
         $CFGDIR ||= ($useappdirconfig ? $appdirconfig : ($XDG_CONFIG_HOME.'/mhfs'));
 
-        # load the settings
+        # load from the settings file
         my $SETTINGS_FILE = $CFGDIR . '/settings.pl';
         my $SETTINGS = do ($SETTINGS_FILE);
         if(! $SETTINGS) {
@@ -2795,6 +2813,12 @@ package MHFS::Settings {
             warn("No settings file found, using default settings");
             $SETTINGS = {};
         }
+
+        # launchsettings overrides
+        foreach my $key (keys %{$launchsettings}) {
+            $SETTINGS->{$key} = $launchsettings->{$key};
+        }
+
         # load defaults for unset values
         $SETTINGS->{'HOST'} ||= "127.0.0.1";
         $SETTINGS->{'PORT'} ||= 8000;
@@ -6937,46 +6961,40 @@ package MHFS::Plugin::VideoLibrary {
 
 package App::MHFS; #Media Http File Server
 use version; our $VERSION = version->declare("v0.2.0");
-unless (caller) {
 use strict; use warnings;
 use feature 'say';
-use Cwd qw(abs_path);
 
-$SIG{PIPE} = sub {
-    print STDERR "SIGPIPE @_\n";
-};
+sub run {
+    binmode(STDOUT, ":utf8");
+    binmode(STDERR, ":utf8");
 
-binmode(STDOUT, ":utf8");
-binmode(STDERR, ":utf8");
+    # parse command line args into launchsettings
+    my %launchsettings;
+    say __PACKAGE__ .": parsing command line args";
 
-# parse command line args
-say __PACKAGE__ .": parsing command line args";
-if(scalar(@ARGV) >= 1 ) {
-    if($ARGV[0] eq 'flush') {
-        say __PACKAGE__.": setting autoflush on STDOUT and STDERR";
-        STDOUT->autoflush(1);
-        STDERR->autoflush(1);
+    if(scalar(@ARGV) >= 1 ) {
+        if($ARGV[0] eq 'flush') {
+            $launchsettings{'flush'} = 1;
+        }
     }
+
+    # start the server (blocks)
+    say __PACKAGE__.": starting MHFS::HTTP::Server";
+    my $server = MHFS::HTTP::Server->new(\%launchsettings,
+    ['MHFS::Plugin::MusicLibrary',
+    'MHFS::Plugin::GetVideo',
+    'MHFS::Plugin::VideoLibrary',
+    'MHFS::Plugin::Youtube',
+    'MHFS::Plugin::BitTorrent::Tracker',
+    'MHFS::Plugin::OpenDirectory',
+    'MHFS::Plugin::Playlist',
+    'MHFS::Plugin::Kodi',
+    'MHFS::Plugin::BitTorrent::Client::Interface'],
+    );
 }
 
-# load settings
-say __PACKAGE__.": loading settings";
-my $SETTINGS = MHFS::Settings::load(abs_path(__FILE__));
-
-# start the server (blocks)
-say __PACKAGE__.": starting MHFS::HTTP::Server";
-my $server = MHFS::HTTP::Server->new($SETTINGS,
-['MHFS::Plugin::MusicLibrary',
-'MHFS::Plugin::GetVideo',
-'MHFS::Plugin::VideoLibrary',
-'MHFS::Plugin::Youtube',
-'MHFS::Plugin::BitTorrent::Tracker',
-'MHFS::Plugin::OpenDirectory',
-'MHFS::Plugin::Playlist',
-'MHFS::Plugin::Kodi',
-'MHFS::Plugin::BitTorrent::Client::Interface'],
-);
-
+unless (caller) {
+    run();
 }
 1;
 
