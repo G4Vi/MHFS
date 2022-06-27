@@ -2784,27 +2784,29 @@ package MHFS::Settings {
     sub load {
         my ($launchsettings) = @_;
         my $scriptpath = abs_path(__FILE__);
-        # locate files based on appdir
-        my $SCRIPTDIR = dirname($scriptpath);
-        my $APPDIR = dist_dir('App-MHFS');
 
-        # set the settings dir to the first that exists of $XDG_CONFIG_HOME and $XDG_CONFIG_DIRS
-        # if none exist and $APPDIR/.conf use that
-        # https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
-        my $XDG_CONFIG_HOME = $ENV{'XDG_CONFIG_HOME'} || ($ENV{'HOME'} . '/.config');
-        my @configdirs = ($XDG_CONFIG_HOME);
-        my $XDG_CONFIG_DIRS = $ENV{'XDG_CONFIG_DIRS'} || '/etc/xdg';
-        push @configdirs, split(':', $XDG_CONFIG_DIRS);
+        # determine the settings dir
         my $CFGDIR;
-        foreach my $cfgdir (@configdirs) {
-            if(-d "$cfgdir/mhfs") {
-                $CFGDIR = "$cfgdir/mhfs";
-                last;
-            }
+        if($launchsettings->{CFGDIR}) {
+            -d $launchsettings->{CFGDIR} or die("Bad CFGDIR provided");
+            $CFGDIR = $launchsettings->{CFGDIR};
+            delete $launchsettings->{CFGDIR};
         }
-        my $appdirconfig = $APPDIR . '/.conf';
-        my $useappdirconfig = -d $appdirconfig;
-        $CFGDIR ||= ($useappdirconfig ? $appdirconfig : ($XDG_CONFIG_HOME.'/mhfs'));
+        else {
+            # set the settings dir to the first that exists of $XDG_CONFIG_HOME and $XDG_CONFIG_DIRS
+            # https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
+            my $XDG_CONFIG_HOME = $ENV{'XDG_CONFIG_HOME'} || ($ENV{'HOME'} . '/.config');
+            my @configdirs = ($XDG_CONFIG_HOME);
+            my $XDG_CONFIG_DIRS = $ENV{'XDG_CONFIG_DIRS'} || '/etc/xdg';
+            push @configdirs, split(':', $XDG_CONFIG_DIRS);
+            foreach my $cfgdir (@configdirs) {
+                if(-d "$cfgdir/mhfs") {
+                    $CFGDIR = "$cfgdir/mhfs";
+                    last;
+                }
+            }
+            $CFGDIR ||= ($XDG_CONFIG_HOME.'/mhfs');
+        }
 
         # load from the settings file
         my $SETTINGS_FILE = $CFGDIR . '/settings.pl';
@@ -2863,19 +2865,10 @@ package MHFS::Settings {
             push @{ $SETTINGS->{'ARIPHOSTS_PARSED'}}, \%ariphost;
         }
 
-        # $APPDIR in $SETTINGS takes precedence over previous value
-        if($SETTINGS->{'APPDIR'}) {
-            if($useappdirconfig && ($APPDIR ne $SETTINGS->{'APPDIR'})) {
-                warn('Using $APPDIR different from config path');
-                warn("was $APPDIR, changing to $SETTINGS->{'APPDIR'}");
-            }
-            $APPDIR = $SETTINGS->{'APPDIR'};
-        }
-        else {
-            $SETTINGS->{'APPDIR'} = $APPDIR;
-        }
-        say __PACKAGE__.": using APPDIR " . $SETTINGS->{'APPDIR'};
-
+        # locate files based on appdir
+        my $APPDIR = $SETTINGS->{'APPDIR'} || dist_dir('App-MHFS');
+        say __PACKAGE__.": using APPDIR " . $APPDIR;
+        $SETTINGS->{'APPDIR'} = $APPDIR;
 
         if( ! $SETTINGS->{'DOCUMENTROOT'}) {
             $SETTINGS->{'DOCUMENTROOT'} = "$APPDIR/public_html";
@@ -2935,7 +2928,7 @@ package MHFS::Settings {
 
         $SETTINGS->{'BINDIR'} ||= $APPDIR . '/bin';
         $SETTINGS->{'DOCDIR'} ||= $APPDIR . '/doc';
-        $SETTINGS->{'CFGDIR'} ||= $CFGDIR;
+        $SETTINGS->{'CFGDIR'} = $CFGDIR;
 
         # specify timeouts in seconds
         $SETTINGS->{'TIMEOUT'} ||= 75;
@@ -6968,9 +6961,19 @@ sub run {
     my %launchsettings;
     say __PACKAGE__ .": parsing command line args";
 
-    if(scalar(@ARGV) >= 1 ) {
-        if($ARGV[0] eq 'flush') {
+    for(my $i = 0; $i < scalar(@ARGV); $i++) {
+        if($ARGV[$i] eq 'flush') {
             $launchsettings{'flush'} = 1;
+        }
+        else {
+            defined($ARGV[$i+1]) or die("Missing PARAM");
+            if($ARGV[$i] eq '--cfgdir') {
+                $launchsettings{'CFGDIR'} = $ARGV[$i+1];
+            }
+            else {
+                die("Unknown PARAM");
+            }
+            $i++;
         }
     }
 

@@ -1,20 +1,20 @@
 # source ~/emsdk/emsdk_env.sh
 SHELL := /bin/sh
-DECODERDIR:=public_html/static/music_worklet_inprogress/decoder
-PLAYERDIR:=public_html/static/music_worklet_inprogress/player
-MUSICINCDIR=public_html/static/music_inc
+DECODERDIR:=App-MHFS/share/public_html/static/music_worklet_inprogress/decoder
+PLAYERDIR:=App-MHFS/share/public_html/static/music_worklet_inprogress/player
+MUSICINCDIR=App-MHFS/share/public_html/static/music_inc
 
 # build everything
 .PHONY: all
-all: XS music_worklet music_inc tarsize
+all: XS music_worklet music_inc tarsize App-MHFS
 
 # build everything, but XS
 .PHONY: noxs
-noxs: music_worklet music_inc tarsize
+noxs: music_worklet music_inc tarsize App-MHFS
 
 # clean everything
 .PHONY: clean
-clean: XS_clean music_worklet_clean music_inc_clean tarsize_clean
+clean: XS_clean music_worklet_clean music_inc_clean tarsize_clean App-MHFS_clean
 
 # tarsize
 Alien-Tar-Size/Makefile: Alien-Tar-Size/Makefile.PL Alien-Tar-Size/alienfile
@@ -62,6 +62,19 @@ XS: XS/Makefile
 XS_clean: Alien-libFLAC_clean
 	$(MAKE) -C XS clean || [ ! -f XS/Makefile ]
 	rm XS/Makefile.old || [ ! -f XS/Makefile.old ]
+
+# App-MHFS
+App-MHFS/Makefile: App-MHFS/Makefile.PL
+	cd App-MHFS && perl Makefile.PL
+
+.PHONY: App-MHFS
+App-MHFS: App-MHFS/Makefile
+	$(MAKE) -C App-MHFS
+
+.PHONY: App-MHFS_clean
+App-MHFS_clean:
+	$(MAKE) -C App-MHFS clean || [ ! -f App-MHFS/Makefile ]
+	rm App-MHFS/Makefile.old || [ ! -f App-MHFS/Makefile.old ]
 
 # Web music players
 .PHONY: music_worklet
