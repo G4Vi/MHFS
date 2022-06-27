@@ -197,9 +197,7 @@ The music player is by default accessed with `/music`.
 
 `/music?fmt=legacy` - Legacy browser player. Uses html audio tag to load and play audio.
 
-`/music?fmt=gapless` - Gapless player. Uses server-side audio segmenting to allow gapless streaming with `AudioBufferSourceNode`s without downloading the whole track first.
-
-`/music?fmt=musicinc` - Incremental gapless player. Like the gapless player, but only buffers a fixed amount ahead instead of buffering the whole track.
+`/music?fmt=musicinc` - Incremental gapless player. Uses server-side audio segmenting to allow gapless streaming with `AudioBufferSourceNode`s without downloading the whole track first.
 
 #### API
 `/music` Request a music player or the music library in a variety of formats. See `MusicLibrary::SendLibrary`.

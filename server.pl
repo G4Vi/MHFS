@@ -1056,6 +1056,8 @@ package MHFS::HTTP::Server::Client::Request {
 
                 ## Querystring
                 my %qsStruct;
+                # In the querystring spaces are sometimes encoded as + for legacy reasons unfortunately
+                $querystring =~ s/\+/%20/g;
                 my @qsPairs = split('&', $querystring);
                 foreach my $pair (@qsPairs) {
                     my($key, $value) = split('=', $pair);
@@ -3626,11 +3628,6 @@ package MHFS::Plugin::MusicLibrary {
         $legacy_template->param(musicdb => $buf);
         $self->{'html'} = encode('UTF-8', $legacy_template->output, Encode::FB_CROAK);
 
-        my $gapless_template = HTML::Template->new(filename => 'templates/music_gapless.html', path => $self->{'settings'}{'APPDIR'} );
-        $gapless_template->param(INLINE => 1);
-        $gapless_template->param(musicdb => $buf);
-        #$gapless_template->param(musicdb => '');
-        $self->{'html_gapless'} = encode('UTF-8', $gapless_template->output, Encode::FB_CROAK);
         $self->{'musicdbhtml'} = encode('UTF-8', $buf, Encode::FB_CROAK);
         $self->{'musicdbjson'} = toJSON($self);
     }
@@ -3657,7 +3654,7 @@ package MHFS::Plugin::MusicLibrary {
         my $fmt = $request->{'qs'}{'fmt'};
         if(! $fmt) {
             $fmt = 'worklet';
-            my $fallback = 'gapless';
+            my $fallback = 'musicinc';
             if($request->{'header'}{'User-Agent'} =~ /Chrome\/([^\.]+)/) {
                 my $ver = $1;
                 # SharedArrayBuffer support with spectre/meltdown fixes was added in 68
@@ -3697,7 +3694,8 @@ package MHFS::Plugin::MusicLibrary {
             return $request->SendBytes("text/html; charset=utf-8", $self->{'musicdbhtml'});
         }
         elsif($fmt eq 'gapless') {
-            return $request->SendBytes("text/html; charset=utf-8", $self->{'html_gapless'});
+            $qs->{fmt} = 'musicinc';
+            return $request->SendRedirect(301, "music", $qs);
         }
         elsif($fmt eq 'musicinc') {
             return $request->SendRedirect(307, 'static/music_inc/', $qs);
@@ -4159,7 +4157,7 @@ package MHFS::Plugin::MusicLibrary {
             my ($datachannel) = @_;
 
             # save references to before
-            my @potentialupdates = ('html_gapless', 'html', 'musicdbhtml', 'musicdbjson');
+            my @potentialupdates = ('html', 'musicdbhtml', 'musicdbjson');
             my %before;
             foreach my $pupdate (@potentialupdates) {
                 $before{$pupdate} = $self->{$pupdate};
@@ -4216,7 +4214,6 @@ package MHFS::Plugin::MusicLibrary {
 
         # no sources until loaded
         $self->{'sources'} = [];
-        $self->{'html_gapless'} = __PACKAGE__.' not loaded';
         $self->{'html'} = __PACKAGE__.' not loaded';
         $self->{'musicdbhtml'} = __PACKAGE__.' not loaded';
         $self->{'musicdbjson'} = '{}';
