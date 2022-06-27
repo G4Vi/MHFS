@@ -2,10 +2,10 @@ tmp
 tmp/*
 .conf
 .conf/*
-public_html/static/music_inc/drflac.js
-public_html/static/music_inc/drflac.wasm
-public_html/static/music_worklet_inprogress/decoder/bin
-public_html/static/music_worklet_inprogress/player/worklet_processor_ff.js
+App-MHFS/share/public_html/static/music_inc/drflac.js
+App-MHFS/share/public_html/static/music_inc/drflac.wasm
+App-MHFS/share/public_html/static/music_worklet_inprogress/decoder/bin
+App-MHFS/share/public_html/static/music_worklet_inprogress/player/worklet_processor_ff.js
 XS/thirdparty
 XS/Makefile.old
 XS/MYMETA.json

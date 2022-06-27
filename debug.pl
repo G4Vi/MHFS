@@ -28,4 +28,4 @@ chdir($FindBin::Bin) or die("Failed to change to script location");
 system('make') == 0 or die("Failed to build MHFS");
 
 # run the server
-exec('perl', 'server.pl', 'flush');
+exec('perl', 'runintree.pl', 'flush');

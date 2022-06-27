@@ -993,7 +993,6 @@ package MHFS::HTTP::Server::Client::Request {
     }
 
     # Optional dependency, Alien::Tar::Size
-    use lib File::Spec->catdir($FindBin::Bin, 'Alien-Tar-Size', 'blib', 'lib');
     BEGIN {
         use constant HAS_Alien_Tar_Size => (eval "use Alien::Tar::Size; 1");
         if(! HAS_Alien_Tar_Size) {
@@ -3503,8 +3502,6 @@ package MHFS::Plugin::MusicLibrary {
     use HTML::Template;
 
     # Optional dependency, MHFS::XS
-    use lib File::Spec->catdir($FindBin::Bin, 'XS', 'blib', 'lib');
-    use lib File::Spec->catdir($FindBin::Bin, 'XS', 'blib', 'arch');
     BEGIN {
         use constant HAS_MHFS_XS => (eval "use MHFS::XS; 1");
         if(! HAS_MHFS_XS) {
