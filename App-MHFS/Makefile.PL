@@ -2,6 +2,9 @@ use 5.006;
 use strict;
 use warnings;
 use ExtUtils::MakeMaker;
+use File::ShareDir::Install;
+
+install_share 'share';
 
 my %WriteMakefileArgs = (
     NAME             => 'App::MHFS',
@@ -12,6 +15,7 @@ my %WriteMakefileArgs = (
     MIN_PERL_VERSION => '5.006',
     CONFIGURE_REQUIRES => {
         'ExtUtils::MakeMaker' => '0',
+        "File::ShareDir::Install" => "0.13"
     },
     TEST_REQUIRES => {
         'Test::More' => '0',
@@ -19,7 +23,9 @@ my %WriteMakefileArgs = (
     PREREQ_PM => {
         "URI::Escape" => "5.09",
         "HTML::Template" => "2.97",
+        "File::ShareDir" => 0,
     },
+    EXE_FILES => ['bin/mhfs'],
     dist  => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
     clean => { FILES => 'App-MHFS-*' },
 );
@@ -43,3 +49,8 @@ delete $WriteMakefileArgs{LICENSE}
     unless eval { ExtUtils::MakeMaker->VERSION('6.31'); 1 };
 
 WriteMakefile(%WriteMakefileArgs);
+{
+package
+MY;
+use File::ShareDir::Install qw(postamble);
+}

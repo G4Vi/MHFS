@@ -2684,6 +2684,7 @@ package MHFS::Settings {
     use Digest::MD5 qw(md5_hex);
     use Storable qw(freeze);
     use Cwd qw(abs_path);
+    use File::ShareDir qw(dist_dir);
     MHFS::Util->import();
 
     sub write_settings_file {
@@ -2785,7 +2786,7 @@ package MHFS::Settings {
         my $scriptpath = abs_path(__FILE__);
         # locate files based on appdir
         my $SCRIPTDIR = dirname($scriptpath);
-        my $APPDIR = $SCRIPTDIR;
+        my $APPDIR = dist_dir('App-MHFS');
 
         # set the settings dir to the first that exists of $XDG_CONFIG_HOME and $XDG_CONFIG_DIRS
         # if none exist and $APPDIR/.conf use that
@@ -2873,6 +2874,7 @@ package MHFS::Settings {
         else {
             $SETTINGS->{'APPDIR'} = $APPDIR;
         }
+        say __PACKAGE__.": using APPDIR " . $SETTINGS->{'APPDIR'};
 
 
         if( ! $SETTINGS->{'DOCUMENTROOT'}) {
