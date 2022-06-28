@@ -2,7 +2,7 @@
 use strict; use warnings;
 use FindBin;
 
-my @libdirs = ('Alien-Tar-Size/blib/lib', 'XS/blib/arch', 'XS/lib', 'App-MHFS/lib');
+my @libdirs = ('Alien-Tar-Size/blib/lib', 'MHFS-XS/blib/arch', 'MHFS-XS/lib', 'App-MHFS/lib');
 
 my @include;
 foreach my $libdir (@libdirs) {

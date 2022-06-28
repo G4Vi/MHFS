@@ -23,6 +23,7 @@
 \bpm_to_blib$
 \bblibdirs\.ts$         # 6.18 through 6.25 generated this
 \b_eumm/                # 7.05_05 and above
+^MANIFEST\.SKIP$
 
 # Avoid Module::Build generated and utility files.
 \bBuild$
@@ -61,3 +62,6 @@
 
 # Avoid MYMETA files
 ^MYMETA\.
+
+# unused miniaudio files
+miniaudio\/(?!((?:miniaudio\.h)|(?:LICENSE)))

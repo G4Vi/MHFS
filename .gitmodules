@@ -1,5 +1,5 @@
 [submodule "XS/miniaudio"]
-	path = XS/miniaudio
+	path = MHFS-XS/miniaudio
 	url = https://github.com/G4Vi/miniaudio
 [submodule "public_html/static/music_worklet_inprogress/decoder/deps/miniaudio"]
 	path = App-MHFS/share/public_html/static/music_worklet_inprogress/decoder/deps/miniaudio
