@@ -1,8 +1,0 @@
-Changes
-Makefile.PL
-MANIFEST
-XS.xs
-ppport.h
-README
-t/Mytest.t
-lib/MHFS/XS.pm
