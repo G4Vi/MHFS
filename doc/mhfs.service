@@ -6,9 +6,8 @@ After=network.target
 [Service]
 Type=simple
 User=mhfs
-WorkingDirectory=/home/mhfs/MHFS
-# include the local::lib
-ExecStart=/usr/bin/perl -I/home/mhfs/perl5/lib/perl5 server.pl
+WorkingDirectory=/home/mhfs
+ExecStart=/bin/bash -ac 'eval "$(perl -I/home/mhfs/perl5/lib/perl5 -Mlocal::lib)"; exec mhfs'
 Restart=on-failure
 
 [Install]
