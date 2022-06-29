@@ -344,20 +344,19 @@ package MHFS::EventLoop::Poll {
     use feature 'say';
     BEGIN {
     use Config;
-    say __PACKAGE__.': archname: '. $Config{archname};
     my $isLoaded;
     if(index($Config{archname}, 'x86_64-linux') != -1) {
         if(! main::HAS_EventLoop_Poll_Linux_Timer) {
             warn "MHFS::EventLoop::Poll: Failed to load MHFS::EventLoop::Poll::Linux::Timer NOT enabling timerfd support!";
         }
         else {
-            say "MHFS::EventLoop::Poll: enabling timerfd support";
+            warn "MHFS::EventLoop::Poll: enabling timerfd support";
             $isLoaded = 1;
             eval "use parent -norequire, 'MHFS::EventLoop::Poll::Linux'";
         }
     }
     else {
-        say "MHFS::EventLoop::Poll no timerfd support for ".$Config{archname};
+        warn "MHFS::EventLoop::Poll no timerfd support for ".$Config{archname};
     }
     if(! $isLoaded) {
         eval "use parent -norequire, 'MHFS::EventLoop::Poll::Base'";
@@ -987,8 +986,8 @@ package MHFS::HTTP::Server::Client::Request {
     use File::Spec;
     BEGIN {
         if( ! (eval "use JSON; 1")) {
-            eval "use JSON::PP; 1" or die "No implementation of JSON available, see doc/dependencies.txt";
-            warn __PACKAGE__.": Using PurePerl version of JSON (JSON::PP), see doc/dependencies.txt about installing faster version";
+            eval "use JSON::PP; 1" or die "No implementation of JSON available";
+            warn __PACKAGE__.": Using PurePerl version of JSON (JSON::PP)";
         }
     }
 
@@ -3478,8 +3477,8 @@ package MHFS::Plugin::MusicLibrary {
     MHFS::Util->import();
     BEGIN {
         if( ! (eval "use JSON; 1")) {
-            eval "use JSON::PP; 1" or die "No implementation of JSON available, see doc/dependencies.txt";
-            warn __PACKAGE__.": Using PurePerl version of JSON (JSON::PP), see doc/dependencies.txt about installing faster version";
+            eval "use JSON::PP; 1" or die "No implementation of JSON available";
+            warn __PACKAGE__.": Using PurePerl version of JSON (JSON::PP)";
         }
     }
     use Encode qw(decode encode);
@@ -4265,8 +4264,8 @@ package MHFS::Plugin::Youtube {
     MHFS::Util->import();
     BEGIN {
         if( ! (eval "use JSON; 1")) {
-            eval "use JSON::PP; 1" or die "No implementation of JSON available, see doc/dependencies.txt";
-            warn __PACKAGE__.": Using PurePerl version of JSON (JSON::PP), see doc/dependencies.txt about installing faster version";
+            eval "use JSON::PP; 1" or die "No implementation of JSON available";
+            warn __PACKAGE__.": Using PurePerl version of JSON (JSON::PP)";
         }
     }
 

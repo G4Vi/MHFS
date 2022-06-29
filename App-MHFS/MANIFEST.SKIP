@@ -16,7 +16,8 @@
 
 # Avoid Makemaker generated and utility files.
 \bMANIFEST\.bak
-\bMakefile$
+#\bMakefile$
+^Makefile$
 \bblib/
 \bMakeMaker-\d
 \bpm_to_blib\.ts$
@@ -62,3 +63,9 @@
 
 # Avoid MYMETA files
 ^MYMETA\.
+
+# unused miniaudio files
+share\/public_html\/static\/music_worklet_inprogress\/decoder\/deps\/miniaudio\/(?!((?:miniaudio\.h)|(?:LICENSE)))
+
+# unused dr_flac files
+share\/public_html\/static\/music_worklet_inprogress\/decoder\/deps\/dr_libs\/(?!((?:dr_flac\.h)|(?:LICENSE)))

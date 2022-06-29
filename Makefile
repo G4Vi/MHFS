@@ -4,6 +4,8 @@ DECODERDIR:=App-MHFS/share/public_html/static/music_worklet_inprogress/decoder
 PLAYERDIR:=App-MHFS/share/public_html/static/music_worklet_inprogress/player
 MUSICINCDIR=App-MHFS/share/public_html/static/music_inc
 
+MHFSVERSION := $(shell perl -I App-MHFS/lib -MApp::MHFS -e 'print substr($$App::MHFS::VERSION, 1)' 2>/dev/null)
+
 # build everything
 .PHONY: all
 all: Alien-Tar-Size Alien-libFLAC.dummy MHFS-XS music_worklet music_inc App-MHFS
@@ -35,6 +37,26 @@ unsafedists: Alien-Tar-Size/Makefile Alien-libFLAC/Makefile MHFS-XS/Makefile mus
 .PHONY: dists
 dists: clean
 	$(MAKE) unsafedists
+
+.PHONY: MHFS_$(MHFSVERSION)
+MHFS_$(MHFSVERSION): dists
+	[ ! -f $@.tar ]
+	[ ! -d $@ ]
+	rm -rf $@
+	mkdir -p $@
+	mv Alien-libFLAC/Alien-libFLAC-*.tar.gz $@/
+	mv Alien-Tar-Size/Alien-Tar-Size-*.tar.gz $@/
+	mv MHFS-XS/MHFS-XS-*.tar.gz $@/
+	mv App-MHFS/App-MHFS-*.tar.gz $@/
+	cp LICENSE $@/
+	cp README.md $@/
+	cp CHANGELOG.md $@/
+	cp -r doc $@/
+	cp MHFS_music_2022_04-21_smaller.png $@/
+	tar -cf $@.tar $@ --owner=0 --group=0
+
+.PHONY: release
+release: MHFS_$(MHFSVERSION)
 
 # Alien-Tar-Size
 Alien-Tar-Size/Makefile: Alien-Tar-Size/Makefile.PL Alien-Tar-Size/alienfile

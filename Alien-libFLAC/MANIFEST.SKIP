@@ -62,3 +62,6 @@
 
 # Avoid MYMETA files
 ^MYMETA\.
+
+# Alien
+^_alien\/
