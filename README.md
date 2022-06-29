@@ -149,7 +149,7 @@ Reload apache2 `# service apache2 reload`. If it fails install `mod_headers`:  m
 A sample service set to use the local::lib is provided.
 
 ```bash
-cp doc/mhfs.service /etc/systemd/system/mhfs.service
+cp resources/mhfs.service /etc/systemd/system/mhfs.service
 systemctl daemon-reload
 systemctl enable mhfs.service
 systemctl start mhfs.service

@@ -1,6 +1,5 @@
 # MHFS Changelog
 ## [Unreleased](https://github.com/G4Vi/MHFS/compare/v0.2.0...dev)
-### Server
 #### Added
 - Added downloading media via torrent
     - Added HTTP Torrent Tracker
@@ -9,6 +8,8 @@
     - When an item is requested, a torrent is created, added to the tracker, and added to rtorrent to start seeding, so it can be downloaded instantly.
 - Added improved client host validation with `X-MHFS-PROXY_KEY` for secure reverse proxying
 - Added automatic youtube-dl binary downloading and installing for MHFS use
+- Added installation and packaging via cpan distributions
+  - Added using File::ShareDir for APPDIR
 
 #### Changed
 - MHFS prefix was added to modules in server.pl, `MHFS::Plugin` prefix was added to plugins
@@ -25,7 +26,7 @@
 - `/get_video` now uses a callback to generate the `create_cmd` instead of `eval`
 - `/video/fmp4` fmt was integrated to `/get_video` instead of having its own route
 - `/video/kodi` is now accessed via `/kodi`, kodi stuff was moved into `MHFS::Plugin::Kodi`
-- Open directories now managed by `MHFS::Plugin::OpenDirectory` and served from `/od`
+- Open directories are now managed by `MHFS::Plugin::OpenDirectory` and served from `/od`
 
 #### Fixed
 - JSMpeg's query string messing up its format
@@ -33,6 +34,7 @@
 #### Removed
 - search from `/get_video` to increase speed and accuracy
 - removed HLS on demand and several broken `/get_video` formats and players
+- gapless music player
 
 ## [0.2.0](https://github.com/G4Vi/MHFS/compare/v0.1.0...v0.2.0) - 2022-04-21
 ### AudioWorklet Player

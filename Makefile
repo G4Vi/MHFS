@@ -51,7 +51,7 @@ MHFS_$(MHFSVERSION): dists
 	cp LICENSE $@/
 	cp README.md $@/
 	cp CHANGELOG.md $@/
-	cp -r doc $@/
+	cp -r resources $@/
 	cp MHFS_music_2022_04-21_smaller.png $@/
 	tar -cf $@.tar $@ --owner=0 --group=0
 
