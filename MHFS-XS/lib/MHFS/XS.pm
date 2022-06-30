@@ -3,6 +3,7 @@ package MHFS::XS;
 use 5.020002;
 use strict;
 use warnings;
+our $VERSION = '0.01';
 
 require Exporter;
 
@@ -25,7 +26,7 @@ our @EXPORT = qw(
 	
 );
 
-our $VERSION = '0.01';
+
 
 require XSLoader;
 XSLoader::load('MHFS::XS', $VERSION);
@@ -33,54 +34,43 @@ XSLoader::load('MHFS::XS', $VERSION);
 # Preloaded methods go here.
 
 1;
+
 __END__
-# Below is stub documentation for your module. You'd better edit it!
+
+=pod
+
+=encoding utf-8
 
 =head1 NAME
 
-MHFS::XS - Perl extension for blah blah blah
+MHFS::XS - XS extension module for Media HTTP File Server, for server
+side media encoding.
 
 =head1 SYNOPSIS
 
-  use MHFS::XS;
-  blah blah blah
-
-=head1 DESCRIPTION
-
-Stub documentation for MHFS::XS, created by h2xs. It looks like the
-author of the extension was negligent enough to leave the stub
-unedited.
-
-Blah blah blah.
-
-=head2 EXPORT
-
-None by default.
-
-
-
-=head1 SEE ALSO
-
-Mention other useful documentation such as the documentation of
-related modules or operating system documentation (such as man pages
-in UNIX), or any relevant external documentation such as RFCs or
-standards.
-
-If you have a mailing list set up for your module, mention it here.
-
-If you have a web site set up for your module, mention it here.
+    use MHFS::XS;
+    my $mf = MHFS::XS::new('/path/to/musicfile');
+    my $flacBuffer = MHFS::XS::get_flac($mf, 0, 44100);
+    my $waveBuffer = MHFS::XS::wavvfs_read_range($mf, 44, 176444);  
 
 =head1 AUTHOR
 
-Sample Text, E<lt>sample@E<gt>
+Gavin Hayes, C<< <gavin at computoid.com> >>
 
-=head1 COPYRIGHT AND LICENSE
+=head1 SUPPORT AND DOCUMENTATION
 
-Copyright (C) 2020 by Sample Text
+You can find documentation for this module with the perldoc command.
 
-This library is free software; you can redistribute it and/or modify
-it under the same terms as Perl itself, either Perl version 5.20.2 or,
-at your option, any later version of Perl 5 you may have available.
+    perldoc MHFS::XS
 
+Additional documentation, support, and bug reports can be found at the
+MHFS repository L<https://github.com/G4Vi/MHFS>
+
+=head1 LICENSE AND COPYRIGHT
+
+This software is copyright (c) 2022 by Gavin Hayes.
+
+This is free software; you can redistribute it and/or modify it under
+the same terms as the Perl 5 programming language system itself.
 
 =cut

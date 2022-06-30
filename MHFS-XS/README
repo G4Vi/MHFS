@@ -1,40 +1,31 @@
-Mytest version 0.01
-===================
+MHFS-XS
 
-The README is used to introduce the module and provide instructions on
-how to install the module, any machine dependencies it may have (for
-example C compilers and installed libraries) and any other information
-that should be provided before the module is installed.
+XS extension module for Media HTTP File Server, for server side media encoding.
 
-A README file is required for CPAN modules since CPAN extracts the
-README file from a module distribution so that people browsing the
-archive can use it get an idea of the modules uses. It is usually a
-good idea to provide version information here so that people can
-decide whether fixes for the module are worth downloading.
 
 INSTALLATION
 
-To install this module type the following:
+To install this module, run the following commands:
 
-   perl Makefile.PL
-   make
-   make test
-   make install
+	perl Makefile.PL
+	make
+	make test
+	make install
 
-DEPENDENCIES
+SUPPORT AND DOCUMENTATION
 
-This module requires these other modules and libraries:
+After installing, you can find documentation for this module with the
+perldoc command.
 
-  blah blah blah
+    perldoc MHFS::XS
 
-COPYRIGHT AND LICENCE
+Additional documentation, support, and bug reports can be found at the MHFS
+repository https://github.com/G4Vi/MHFS
 
-Put the correct copyright and licence information here.
+LICENSE AND COPYRIGHT
 
-Copyright (C) 2020 by Sample Text
+This software is copyright (c) 2020-2022 by Gavin Hayes.
 
-This library is free software; you can redistribute it and/or modify
-it under the same terms as Perl itself, either Perl version 5.20.2 or,
-at your option, any later version of Perl 5 you may have available.
-
+This is free software; you can redistribute it and/or modify it under
+the same terms as the Perl 5 programming language system itself.
 

@@ -6991,8 +6991,42 @@ sub run {
     );
 }
 
-unless (caller) {
-    run();
-}
 1;
 
+__END__
+
+=pod
+
+=encoding utf-8
+
+=head1 NAME
+
+App::MHFS - A Media HTTP File Server. Stream your own music and video
+library via your browser and standard media players.
+
+=head1 SYNOPSIS
+
+    use App::MHFS;
+    App::MHFS->run;
+
+=head1 AUTHOR
+
+Gavin Hayes, C<< <gavin at computoid.com> >>
+
+=head1 SUPPORT AND DOCUMENTATION
+
+You can find documentation for this module with the perldoc command.
+
+    perldoc App::MHFS
+
+Additional documentation, support, and bug reports can be found at the
+MHFS repository L<https://github.com/G4Vi/MHFS>
+
+=head1 LICENSE AND COPYRIGHT
+
+This software is copyright (c) 2022 by Gavin Hayes.
+
+This is free software; you can redistribute it and/or modify it under
+the same terms as the Perl 5 programming language system itself.
+
+=cut

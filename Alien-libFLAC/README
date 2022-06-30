@@ -1,15 +1,6 @@
 Alien-libFLAC
 
-The README is used to introduce the module and provide instructions on
-how to install the module, any machine dependencies it may have (for
-example C compilers and installed libraries) and any other information
-that should be provided before the module is installed.
-
-A README file is required for CPAN modules since CPAN extracts the README
-file from a module distribution so that people browsing the archive
-can use it to get an idea of the module's uses. It is usually a good idea
-to provide version information here so that people can decide whether
-fixes for the module are worth downloading.
+Alien package to find or build and install libFLAC with development dependencies
 
 
 INSTALLATION
@@ -28,23 +19,13 @@ perldoc command.
 
     perldoc Alien::libFLAC
 
-You can also look for information at:
-
-    RT, CPAN's request tracker (report bugs here)
-        https://rt.cpan.org/NoAuth/Bugs.html?Dist=Alien-libFLAC
-
-    CPAN Ratings
-        https://cpanratings.perl.org/d/Alien-libFLAC
-
-    Search CPAN
-        https://metacpan.org/release/Alien-libFLAC
-
+Additional documentation, support, and bug reports can be found at the MHFS
+repository https://github.com/G4Vi/MHFS
 
 LICENSE AND COPYRIGHT
 
-This software is Copyright (c) 2022 by Gavin Hayes.
+This software is copyright (c) 2022 by Gavin Hayes.
 
-This is free software, licensed under:
-
-  The Artistic License 2.0 (GPL Compatible)
+This is free software; you can redistribute it and/or modify it under
+the same terms as the Perl 5 programming language system itself.
 

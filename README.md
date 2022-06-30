@@ -209,5 +209,9 @@ emscripten is required to build Wasm.  A full build is done with `make -j4`.
 ## Thanks
 [Tejas Rao](https://github.com/trao1011) for source code review early on. [mackron](https://github.com/mackron) for great audio libraries and answering questions.
 
-## License
-GPL v2.0 unless otherwise noted, see LICENSE.
+## LICENSE AND COPYRIGHT
+
+This software is copyright (c) 2018-2022 by Gavin Hayes.
+
+This is free software; you can redistribute it and/or modify it under
+the same terms as the Perl 5 programming language system itself. See LICENSE.

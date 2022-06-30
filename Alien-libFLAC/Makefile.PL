@@ -13,7 +13,7 @@ $abmm->mm_args (
     AUTHOR           => q{Gavin Hayes <TODO@invalid.invalid>},
     VERSION_FROM     => 'lib/Alien/libFLAC.pm',
     ABSTRACT_FROM    => 'lib/Alien/libFLAC.pm',
-    LICENSE          => 'artistic_2',
+    LICENSE          => 'perl_5',
     MIN_PERL_VERSION => '5.006',
     CONFIGURE_REQUIRES => {
         'ExtUtils::MakeMaker' => '0',
