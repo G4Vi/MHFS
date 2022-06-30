@@ -85,6 +85,10 @@ The settings file is created  at [$XDG_CONFIG_DIRS](https://specifications.freed
 ],
 ```
 
+`NETMAP`- a HACK for deciphering routing netmap shenigans, where clients on LAN connect with an alternative address than their real LAN address. Currently just used by `MHFS::Plugin::BitTorrent::Tracker` to properly allow peers to work both on the LAN and the internet. `[FAKE_IPV4_START, REAL_IPV4_START]`, i.e. `[10, 192]`.
+
+`PUBLICIP` - Currently just used by `MHFS::Plugin::BitTorrent::Tracker` to expose LAN peers to the internet with the external IP address of network, i.e. `'1.1.1.1'`
+
 `MEDIALIBRARIES` - hash of library to folder path mapping.
 ```perl
 'MEDIALIBRARIES' => {
