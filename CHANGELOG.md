@@ -1,5 +1,5 @@
 # MHFS Changelog
-## [Unreleased](https://github.com/G4Vi/MHFS/compare/v0.2.0...dev)
+## [0.3.0](https://github.com/G4Vi/MHFS/compare/v0.2.0...v0.3.0)
 #### Added
 - Added downloading media via torrent
     - Added HTTP Torrent Tracker

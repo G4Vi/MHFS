@@ -59,7 +59,7 @@ Download from [releases](https://github.com/G4Vi/MHFS/releases) and extract.
 
 ### Install Perl Modules
 
-`cd MHFS-VERSIONHERE && cpanm *.tar.gz`
+`cd MHFS-VERSIONHERE && cpanm Alien-Tar-Size*.tar.gz Alien-libFLAC*.tar.gz MHFS-XS*.tar.gz App-MHFS*.tar.gz`
 
 Only `App-MHFS` is required, but the other modules are highly recommended.
 
@@ -113,6 +113,8 @@ In the case of a `mhfs` account, you can just take ownership of it's home direct
 `# chown -R YOURUSERNAME:YOURUSERNAME /home/mhfs` - allow your account to manage the files in the `mhfs` account instead
 
 `# mkdir -p /home/mhfs/.cache/mhfs && chown -R mhfs:nogroup /home/mhfs/.cache/mhfs`- allow mhfs to manage temp files
+
+`# mkdir -p /home/mhfs/.local/share/mhfs && chown -R mhfs:nogroup /home/mhfs/.local/share/mhfs`- allow mhfs to save permanent files
 
 ## Usage
 

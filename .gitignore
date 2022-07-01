@@ -16,6 +16,7 @@ MHFS-XS/XS.c
 MHFS-XS/XS.o
 MHFS-XS/blib
 MHFS-XS/pm_to_blib
+MHFS-XS/MANIFEST
 Alien-Tar-Size/tarsize/*.so
 .vscode
 Alien-*/MYMETA.json
@@ -25,6 +26,7 @@ Alien-*/Makefile.old
 Alien-*/_alien
 Alien-*/blib
 Alien-*/pm_to_blib
+Alien-*/MANIFEST
 *.dummy
 App-MHFS/MANIFEST
 App-MHFS/Makefile.old
