@@ -39,6 +39,20 @@ typedef struct {
 
 } MHFS_XS_Track;
 
+typedef struct {
+    #ifdef MULTIPLICITY
+    tTHX context;
+    #endif
+    SV *returnData;
+} MHFS_XS_Track_meta_userData;
+#ifdef MULTIPLICITY
+#define MHFS_XS_Track_meta_save_context(X) (X)->context = aTHX
+#define MHFS_XS_Track_meta_load_context(X) pTHX = (X)->context
+#else
+#define MHFS_XS_Track_meta_save_context(X)
+#define MHFS_XS_Track_meta_load_context(X)
+#endif
+
 #define MIN(a,b) (((a)<(b))?(a):(b))
 
 MHFS_XS_Track *_MHFS_XS_Track_new(const char *filename, malloc_ptr mymalloc, free_ptr myfree, realloc_ptr myrealloc)
@@ -408,7 +422,8 @@ void * _MHFS_XS_Track_get_wav_seg(MHFS_XS_Track *track, uint64_t start, size_t c
 
 void _MHFS_XS_Track_on_meta(void* pUserData, drflac_metadata* pMetadata)
 {
-    pTHX = *(tTHX*)pUserData;
+    MHFS_XS_Track_meta_userData *pMetaUserData = pUserData;
+    MHFS_XS_Track_meta_load_context(pMetaUserData);
     if(pMetadata->type == DRFLAC_METADATA_BLOCK_TYPE_VORBIS_COMMENT)
     {
         fprintf(stderr, "Found vorbiscomment\n");
@@ -428,7 +443,7 @@ void _MHFS_XS_Track_on_meta(void* pUserData, drflac_metadata* pMetadata)
             SV *theSV = newSVpv(buf, tocopy);
             av_push(array, theSV);
         }
-        *(AV**)pUserData = array;        
+        pMetaUserData->returnData = (SV*)array;
     }
 }
 
@@ -559,13 +574,12 @@ AV *
 get_vorbis_comments(filename)
         const char *filename
 	CODE:
-        void *thedata = aTHX;
-    	drflac *pFlac = drflac_open_file_with_metadata(filename, &_MHFS_XS_Track_on_meta, &thedata, NULL);
+        MHFS_XS_Track_meta_userData metaUserData;
+        MHFS_XS_Track_meta_save_context(&metaUserData);
+        metaUserData.returnData = &PL_sv_undef;
+        drflac *pFlac = drflac_open_file_with_metadata(filename, &_MHFS_XS_Track_on_meta, &metaUserData, NULL);
         drflac_close(pFlac);
-        if(thedata == aTHX) {
-            thedata = &PL_sv_undef;
-        }
-    RETVAL = thedata;
+    RETVAL = (AV*)metaUserData.returnData;
     sv_2mortal((SV*)RETVAL);
     OUTPUT:
         RETVAL

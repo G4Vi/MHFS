@@ -1,0 +1,108 @@
+
+# GitHub Actions CI script for MHFS
+# (C) 2022 Gavin Hayes
+
+name: Build MHFS
+on:   [ push, pull_request ]
+
+jobs:
+  build-linux:
+    name:    Build MHFS
+    runs-on: ubuntu-latest
+    steps:
+    - name: Fetch repo and submodules
+      uses: actions/checkout@v3
+      with:
+        path: 'MHFS'
+        submodules: 'true'
+    - name: Install System Prerequisites
+      run: |
+        sudo apt-get update -y
+        sudo apt-get install -y --no-install-recommends build-essential wget curl libflac-dev
+    - name: Install Perl and MHFS Perl dependencies
+      uses: shogo82148/actions-setup-perl@v1
+      with:
+        perl-version: '5.36'
+        working-directory: MHFS
+        install-modules-with: cpanm
+        install-modules-args: --with-develop --with-configure
+    - name: Setup emscripten
+      uses: mymindstorm/setup-emsdk@v11
+      with:
+        version: 1.40.1
+        actions-cache-folder: 'emsdk-cache'
+    - name: Build and package MHFS
+      run: |
+        cd MHFS
+        make release
+    - name: Archive CPAN logs
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@v3
+      with:
+        name: cpan_log
+        path: /home/runner/.cpanm/work/*/build.log
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: MHFS
+        path: MHFS/MHFS_*.tar
+
+  test-release:
+    needs:   [ build-linux ]
+    strategy:
+      matrix:
+        os: ['ubuntu-latest']
+        perl: [ '5.36', '5.34', '5.20' ]
+    runs-on: ${{ matrix.os }}
+    name: Test release with ${{ matrix.perl }} on ${{ matrix.os }}
+    steps:
+    - name: Fetch build artifacts
+      uses: actions/download-artifact@v3
+    - name: Extract MHFS and rename to unversioned filenames
+      run: |
+        mv MHFS/*.tar MHFS.tar
+        tar -xvf MHFS.tar
+        rm -r MHFS MHFS.tar
+        mv MHFS_* MHFS
+        cd MHFS
+        mv Alien-Tar-Size*.tar.gz Alien-Tar-Size.tar.gz
+        mv Alien-libFLAC*.tar.gz Alien-libFLAC.tar.gz
+        mv MHFS-XS*.tar.gz MHFS-XS.tar.gz
+        mv App-MHFS*.tar.gz App-MHFS.tar.gz
+    - name: Install System Prerequisites
+      run: |
+        sudo apt-get update -y
+        sudo apt-get install -y --no-install-recommends build-essential wget curl libflac-dev
+    - name: Install Perl and MHFS using cpanm
+      uses: shogo82148/actions-setup-perl@v1
+      with:
+        perl-version: ${{ matrix.perl }}
+        working-directory: MHFS
+        install-modules-with: cpanm
+        install-modules: Alien-Tar-Size.tar.gz Alien-libFLAC.tar.gz MHFS-XS.tar.gz App-MHFS.tar.gz
+    - name: Try loading App::MHFS
+      run: |
+        perl -MApp::MHFS  -e 'print $App::MHFS::VERSION . "\n";'
+    - name: Archive CPAN logs
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@v3
+      with:
+        name: cpan_log
+        path: /home/runner/.cpanm/work/*/build.log
+
+  create-release:
+    name:    Create release
+    runs-on: ubuntu-latest
+    needs:   [ build-linux, test-release ]
+    steps:
+    - name: Fetch build artifacts
+      if:   ${{ github.ref_type == 'tag' }}
+      uses: actions/download-artifact@v3
+    - name: Publish release
+      if:   ${{ github.ref_type == 'tag' }}
+      uses: softprops/action-gh-release@v1
+      with:
+        fail_on_unmatched_files: true
+        draft: true
+        files: |
+          MHFS/MHFS_*.tar
