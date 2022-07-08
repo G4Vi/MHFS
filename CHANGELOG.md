@@ -1,4 +1,13 @@
 # MHFS Changelog
+## [Unreleased 0.4.0](https://github.com/G4Vi/MHFS/compare/v0.3.0...dev) - 2022-07-XX
+### Added
+- Automated builds via github ci `.github/workflows/build.yml`
+- cpanfile for easier dev and ci operation
+- instructions for installing from cpan to README.md
+
+### Fixed
+- Compile error when building MHFS::XS with non-MULTIPLICITY perl
+
 ## [0.3.0](https://github.com/G4Vi/MHFS/compare/v0.2.0...v0.3.0) - 2022-06-30
 #### Added
 - Added downloading media via torrent

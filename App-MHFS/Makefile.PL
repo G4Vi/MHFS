@@ -8,7 +8,7 @@ install_share 'share';
 
 my %WriteMakefileArgs = (
     NAME             => 'App::MHFS',
-    AUTHOR           => q{Gavin Hayes <TODO@invalid.invalid>},
+    AUTHOR           => "Gavin Hayes <gahayes\@cpan.org>",
     VERSION_FROM     => 'lib/App/MHFS.pm',
     ABSTRACT_FROM    => 'lib/App/MHFS.pm',
     LICENSE          => 'perl_5',
@@ -28,6 +28,28 @@ my %WriteMakefileArgs = (
     EXE_FILES => ['bin/mhfs'],
     dist  => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
     clean => { FILES => 'App-MHFS-*' },
+    META_MERGE => {
+        'meta-spec' => { version => 2 },
+        resources => {
+            repository => {
+                type => 'git',
+                url  => 'https://github.com/G4Vi/MHFS.git',
+                web  => 'https://github.com/G4Vi/MHFS',
+            },
+            bugtracker => {
+                web => 'https://github.com/G4Vi/MHFS/issues'
+            },
+            homepage   => 'https://github.com/G4Vi/MHFS',
+        },
+        prereqs => {
+            runtime => {
+                recommends => {
+                    'MHFS::XS' => '0',
+                    'Alien::Tar::Size' => '0'
+                }
+            }
+        }
+    },
 );
 
 # Compatibility with old versions of ExtUtils::MakeMaker

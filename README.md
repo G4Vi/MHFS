@@ -49,19 +49,13 @@ or<br>
 `cd /usr/include/x86_64-linux-gnu/ && h2ph -r -l . && cd sys && h2ph syscall.h && cd ABSPATHTOREPO` where `/usr/include/x86_64-linux-gnu` is the kernel header files and `ABSPATHTOREPO` is the absolute path to the repo used before.
 </details>
 
-### Download MHFS
+### Download and install MHFS
 
-Download from [releases](https://github.com/G4Vi/MHFS/releases) and extract.
+###### Only `App-MHFS` is required, but the other modules are highly recommended.
 
-`wget https://github.com/G4Vi/MHFS/releases/download/vVERSIONHERE/MHFS-VERSIONHERE.tar`
+From cpan [Recommended]: `cpanm --with-recommends App::MHFS`
 
-`tar -xvf MHFS-VERSIONHERE.tar`
-
-### Install Perl Modules
-
-`cd MHFS-VERSIONHERE && cpanm Alien-Tar-Size*.tar.gz Alien-libFLAC*.tar.gz MHFS-XS*.tar.gz App-MHFS*.tar.gz`
-
-Only `App-MHFS` is required, but the other modules are highly recommended.
+From github: Download from [releases](https://github.com/G4Vi/MHFS/releases) and extract (`tar -xvf MHFS-VERSIONHERE.tar`). Install the perl modules: `cd MHFS-VERSIONHERE && cpanm Alien-Tar-Size*.tar.gz Alien-libFLAC*.tar.gz MHFS-XS*.tar.gz App-MHFS*.tar.gz`
 
 ### Configure settings
 Start the server, `mhfs` to create the settings file: `settings.pl`
@@ -202,7 +196,11 @@ Kodi may access media via http sources in kodi. MHFS attempts to provide your li
 
 ## Development Info
 
-emscripten is required to build Wasm.  A full build is done with `make -j4`.
+Install the perl dependencies from `cpanfile` with `cpanm --installdeps .`
+
+emscripten is required to build the web music players (they use Wasm).
+
+A full build is done with `make -j4`.
 
 `./runintree.pl` allows running MHFS directly from this source code tree
 

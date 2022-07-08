@@ -10,7 +10,7 @@ my %WriteMakefileArgs = (
     $abmm->mm_args (
     DISTNAME         => 'Alien-Tar-Size',
     NAME             => 'Alien::Tar::Size',
-    AUTHOR           => q{Gavin Hayes <TODO@invalid.invalid>},
+    AUTHOR           => "Gavin Hayes <gahayes\@cpan.org>",
     VERSION_FROM     => 'lib/Alien/Tar/Size.pm',
     ABSTRACT_FROM    => 'lib/Alien/Tar/Size.pm',
     LICENSE          => 'perl_5',
@@ -32,6 +32,20 @@ my %WriteMakefileArgs = (
     },
     dist  => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
     clean => { FILES => 'Alien-Tar-Size-*' },
+    META_MERGE => {
+        'meta-spec' => { version => 2 },
+        resources => {
+            repository => {
+                type => 'git',
+                url  => 'https://github.com/G4Vi/MHFS.git',
+                web  => 'https://github.com/G4Vi/MHFS',
+            },
+            bugtracker => {
+                web => 'https://github.com/G4Vi/MHFS/issues'
+            },
+            homepage   => 'https://github.com/G4Vi/MHFS',
+        },
+    },
 ));
 
 # Compatibility with old versions of ExtUtils::MakeMaker

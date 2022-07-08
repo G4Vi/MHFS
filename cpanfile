@@ -3,6 +3,8 @@ on 'configure' => sub {
     requires "Alien::Build" => "0";
     requires "File::ShareDir::Install" => "0";
     requires "Sort::Versions" => "0";
+    requires "IO::Socket::SSL" => "1.56";
+    requires "Net::SSLeay" => "1.49";
 };
 
 on 'runtime' => sub {

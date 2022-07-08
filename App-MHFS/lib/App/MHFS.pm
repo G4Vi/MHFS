@@ -7011,7 +7011,7 @@ library via your browser and standard media players.
 
 =head1 AUTHOR
 
-Gavin Hayes, C<< <gavin at computoid.com> >>
+Gavin Hayes, C<< <gahayes at cpan.org> >>
 
 =head1 SUPPORT AND DOCUMENTATION
 

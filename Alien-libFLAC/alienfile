@@ -3,7 +3,7 @@ use alienfile;
 probe [ 'pkg-config --exists flac' ];
 
 share {
-    start_url 'http://downloads.xiph.org/releases/flac/';
+    start_url 'https://downloads.xiph.org/releases/flac/';
     plugin 'Download' => (
         filter => qr/^flac-.*\.tar\.xz$/,
         version => qr/([0-9\.]+)/,

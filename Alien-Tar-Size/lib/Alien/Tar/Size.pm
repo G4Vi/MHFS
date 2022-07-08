@@ -21,7 +21,7 @@ without reading and writing, provided as Alien package
 
 =head1 AUTHOR
 
-Gavin Hayes, C<< <gavin at computoid.com> >>
+Gavin Hayes, C<< <gahayes at cpan.org> >>
 
 =head1 SUPPORT AND DOCUMENTATION
 

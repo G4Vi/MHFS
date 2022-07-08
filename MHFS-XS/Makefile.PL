@@ -6,13 +6,27 @@ use Alien::Base::Wrapper ();
 
 my %stuff = Alien::Base::Wrapper->new('Alien::libFLAC')->mm_args2(
     NAME              => 'MHFS::XS',
-    VERSION_FROM      => 'lib/MHFS/XS.pm', # finds $VERSION, requires EU::MM from perl >= 5.5
-    PREREQ_PM         => {}, # e.g., Module::Name => 1.1
-    ABSTRACT_FROM     => 'lib/MHFS/XS.pm', # retrieve abstract from module
-    AUTHOR            => 'G4Vi',
+    VERSION_FROM      => 'lib/MHFS/XS.pm',
+    PREREQ_PM         => {},
+    ABSTRACT_FROM     => 'lib/MHFS/XS.pm',
+    AUTHOR            => "Gavin Hayes <gahayes\@cpan.org>",
     LICENSE           => 'perl_5',
     CCFLAGS           => '-Wall -std=c11',
     dist  => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
     clean => { FILES => 'MHFS-XS-*' },
+    META_MERGE => {
+        'meta-spec' => { version => 2 },
+        resources => {
+            repository => {
+                type => 'git',
+                url  => 'https://github.com/G4Vi/MHFS.git',
+                web  => 'https://github.com/G4Vi/MHFS',
+            },
+            bugtracker => {
+                web => 'https://github.com/G4Vi/MHFS/issues'
+            },
+            homepage   => 'https://github.com/G4Vi/MHFS',
+        },
+    },
 );
 WriteMakefile(%stuff);
