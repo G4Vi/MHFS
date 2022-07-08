@@ -17,6 +17,7 @@
 - A C compiler (needed for building MHFS::XS encoding module and Alien::Tar::Size library). `apt-get install build-essential`
 - `ffmpeg` and `sox` somewhere into path. `ffmpeg` is used for transcoding in the MusicLibrary subsystem and for videos in the video subsystem. `sox` is used for resampling in the MusicLibrary subsystem. `apt-get install ffmpeg sox`
 - libFLAC with headers. libFLAC is required to build the XS module [needed for server-side audio decoding and encoding]. `Alien::libFLAC` will download and build libFLAC from source if not found. `apt-get install libflac-dev`
+- ssl dev libraries. needed to fetch libFLAC sources using `IO::Socket::SSL` and `Net::SSLeay`, for building the XS module if `libflac-dev` is not installed. `apt-get install libssl-dev libz-dev`
 
 ### [Recommended, Security] Create user account for MHFS
 
@@ -196,7 +197,7 @@ Kodi may access media via http sources in kodi. MHFS attempts to provide your li
 
 ## Development Info
 
-Install the perl dependencies from `cpanfile` with `cpanm --installdeps .`
+Install the perl dependencies from `cpanfile` with `cpanm --with-develop --with-configure --installdeps .`
 
 emscripten is required to build the web music players (they use Wasm).
 
