@@ -1,5 +1,5 @@
 # MHFS Changelog
-## [Unreleased 0.4.0](https://github.com/G4Vi/MHFS/compare/v0.3.0...dev) - 2022-07-XX
+## [0.4.0](https://github.com/G4Vi/MHFS/compare/v0.3.0...v0.4.0) - 2022-07-11
 ### Added
 - Automated builds via github ci `.github/workflows/build.yml`
 - cpanfile for easier dev and ci operation
