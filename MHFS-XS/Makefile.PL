@@ -11,7 +11,7 @@ my %stuff = Alien::Base::Wrapper->new('Alien::libFLAC')->mm_args2(
     ABSTRACT_FROM     => 'lib/MHFS/XS.pm',
     AUTHOR            => "Gavin Hayes <gahayes\@cpan.org>",
     LICENSE           => 'perl_5',
-    CCFLAGS           => '-Wall -std=c11',
+    MIN_PERL_VERSION => '5.020002',
     dist  => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
     clean => { FILES => 'MHFS-XS-*' },
     META_MERGE => {

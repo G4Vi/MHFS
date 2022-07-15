@@ -1,4 +1,7 @@
 Revision history for MHFS-XS, note the CHANGELOG.md of the repository is much more comprehensive
+v0.2.1  2022-07-XX
+        Stop messing with CCFLAGS
+
 v0.2.0  2022-07-11
         Fixed compile error when building with non-MULTIPLICITY perl
 
