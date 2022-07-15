@@ -83,6 +83,7 @@ jobs:
     - name: Try loading App::MHFS
       run: |
         perl -MApp::MHFS  -e 'print $App::MHFS::VERSION . "\n";'
+        perl -MMHFS::XS  -e 'print $MHFS::XS::VERSION . "\n";'
     - name: Archive CPAN logs
       if: ${{ failure() }}
       uses: actions/upload-artifact@v3
