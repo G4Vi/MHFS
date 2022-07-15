@@ -52,7 +52,7 @@ jobs:
     strategy:
       matrix:
         os: ['ubuntu-latest']
-        perl: [ '5.36', '5.34', '5.20' ]
+        perl: [ '5.36', '5.34', '5.20', '5.14.0' ]
     runs-on: ${{ matrix.os }}
     name: Test release with ${{ matrix.perl }} on ${{ matrix.os }}
     steps:

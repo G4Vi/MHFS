@@ -1,4 +1,13 @@
 # MHFS Changelog
+## [0.4.1](https://github.com/G4Vi/MHFS/compare/v0.3.0...dev) - 2022-07-XX
+### Added
+- OS check by importing `Time::HiRes::clock_gettime` in Makefile.PL
+### Fixed
+- unsufficient Perl version checks in Makefile.PL, now requires perl 5.14.0 or greater
+### Changed
+- integer size check in `MHFS::Plugin::GetVideo` is now a plugin loading error instead of a
+compile time error for MHFS.
+
 ## [0.4.0](https://github.com/G4Vi/MHFS/compare/v0.3.0...v0.4.0) - 2022-07-11
 ### Added
 - Automated builds via github ci `.github/workflows/build.yml`
