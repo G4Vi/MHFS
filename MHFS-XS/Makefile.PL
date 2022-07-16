@@ -5,6 +5,15 @@ use Cwd qw(abs_path);
 use Config;
 use Alien::Base::Wrapper ();
 
+
+my @mmargs;
+# Failed test 'use MHFS::XS;' at t/MHFS-XS.t line 12.
+# Tried to use 'MHFS::XS'.
+# Error:  Can't load 'XS.so' for module MHFS::XS: XS.so: Undefined symbol "pthread_create" at /perl-5.20.2/lib/5.20.2/arch/DynaLoader.pm line 193.
+if((!$Config{usemultiplicity}) && ("$]" < 5.20003)) {
+    push @mmargs, LIBS => [ '-lpthread' ];
+}
+
 my %stuff = Alien::Base::Wrapper->new('Alien::libFLAC')->mm_args2(
     NAME              => 'MHFS::XS',
     VERSION_FROM      => 'lib/MHFS/XS.pm',
@@ -29,12 +38,11 @@ my %stuff = Alien::Base::Wrapper->new('Alien::libFLAC')->mm_args2(
             homepage   => 'https://github.com/G4Vi/MHFS',
         },
     },
+    @mmargs,
 );
 
-# Failed test 'use MHFS::XS;' at t/MHFS-XS.t line 12.
-# Tried to use 'MHFS::XS'.
-# Error:  Can't load 'XS.so' for module MHFS::XS: XS.so: Undefined symbol "pthread_create" at /perl-5.20.2/lib/5.20.2/arch/DynaLoader.pm line 193.
-push (@{$stuff{LIBS}}, '-lpthread') if((!$Config{usemultiplicity}) && ("$]" < 5.20003));
+
+
 use Data::Dumper qw(Dumper);
 print Dumper(%stuff);
 
