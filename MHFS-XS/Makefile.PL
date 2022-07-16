@@ -2,6 +2,7 @@ use 5.020002;
 use ExtUtils::MakeMaker;
 use File::Basename;
 use Cwd qw(abs_path);
+use Config;
 use Alien::Base::Wrapper ();
 
 my %stuff = Alien::Base::Wrapper->new('Alien::libFLAC')->mm_args2(
@@ -29,4 +30,12 @@ my %stuff = Alien::Base::Wrapper->new('Alien::libFLAC')->mm_args2(
         },
     },
 );
+
+# Failed test 'use MHFS::XS;' at t/MHFS-XS.t line 12.
+# Tried to use 'MHFS::XS'.
+# Error:  Can't load 'XS.so' for module MHFS::XS: XS.so: Undefined symbol "pthread_create" at /perl-5.20.2/lib/5.20.2/arch/DynaLoader.pm line 193.
+push (@{$stuff{LIBS}}, '-lpthread') if((!$Config{usemultiplicity}) && ("$]" < 5.20003));
+use Data::Dumper qw(Dumper);
+print Dumper(%stuff);
+
 WriteMakefile(%stuff);
