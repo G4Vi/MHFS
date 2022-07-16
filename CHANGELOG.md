@@ -1,12 +1,17 @@
 # MHFS Changelog
-## [0.4.1](https://github.com/G4Vi/MHFS/compare/v0.3.0...dev) - 2022-07-XX
-### Added
+## [0.4.1](https://github.com/G4Vi/MHFS/compare/v0.4.0...v0.4.1) - 2022-07-15
+### App-MHFS
+#### Added
 - OS check by importing `Time::HiRes::clock_gettime` in Makefile.PL
-### Fixed
+#### Fixed
 - unsufficient Perl version checks in Makefile.PL, now requires perl 5.14.0 or greater
-### Changed
+#### Changed
 - integer size check in `MHFS::Plugin::GetVideo` is now a plugin loading error instead of a
 compile time error for MHFS.
+### MHFS-XS
+#### Fixed
+- Stopped overriding CCFLAGS to fix perl being built with different settings
+- builds with non-MULTIPLICITY 5.20.2 perl; `-lpthread` added to libs
 
 ## [0.4.0](https://github.com/G4Vi/MHFS/compare/v0.3.0...v0.4.0) - 2022-07-11
 ### Added
