@@ -347,8 +347,8 @@ package MHFS::EventLoop::Poll {
     use strict; use warnings;
     use feature 'say';
 
+    my $selbackend;
     BEGIN {
-    my $isLoaded;
     my @backends;
     if(main::HAS_EventLoop_Poll_Linux_Timer) {
         push @backends, "-norequire, 'MHFS::EventLoop::Poll::Linux'";
@@ -357,12 +357,15 @@ package MHFS::EventLoop::Poll {
 
     foreach my $backend (@backends) {
         if(eval "use parent $backend; 1;") {
-            $isLoaded = 1;
-            say __PACKAGE__.": backend \"$backend\" loaded";
+            $selbackend = $backend;
             last;
         }
     }
-    $isLoaded or die("Failed to load MHFS::EventLoop::Poll backend");
+    $selbackend or die("Failed to load MHFS::EventLoop::Poll backend");
+    }
+
+    sub backend {
+        return $selbackend;
     }
 1;
 }
