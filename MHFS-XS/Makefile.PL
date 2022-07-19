@@ -28,6 +28,13 @@ my %stuff = Alien::Base::Wrapper->new('Alien::libFLAC')->mm_args2(
             },
             homepage   => 'https://github.com/G4Vi/MHFS',
         },
+        prereqs => {
+            configure => {
+                requires => {
+                    "Alien::libFLAC" => "v0.2.0",
+                }
+            }
+        },
     },
 );
 
@@ -39,7 +46,5 @@ if((!$Config{usemultiplicity}) && ("$]" < 5.020003)) {
     print "adding pthread: $]\n";
     $stuff{LIBS}[0] .= ' -lpthread';
 }
-use Data::Dumper qw(Dumper);
-print Dumper(\%stuff);
 
 WriteMakefile(%stuff);

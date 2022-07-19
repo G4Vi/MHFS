@@ -1,4 +1,8 @@
 # MHFS Changelog
+## [Unreleased](https://github.com/G4Vi/MHFS/compare/v0.4.1...dev) - XXXX-XX-XX
+### Alien-libFLAC
+#### Fixed insufficient dependency gathering (switched to `pkg-config`)
+
 ## [0.4.1](https://github.com/G4Vi/MHFS/compare/v0.4.0...v0.4.1) - 2022-07-15
 ### App-MHFS
 #### Added
