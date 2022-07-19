@@ -10,6 +10,10 @@ package MHFS::EventLoop::Poll::Linux::Timer {
     use POSIX qw/floor/;
     use Devel::Peek;
     use feature 'say';
+    use Config;
+    if(index($Config{archname}, 'x86_64-linux') == -1) {
+        die("Unsupported arch: " . $Config{archname});
+    }
     use constant {
         _clock_REALTIME  => 0,
         _clock_MONOTONIC => 1,
@@ -342,25 +346,23 @@ package MHFS::EventLoop::Poll::Linux {
 package MHFS::EventLoop::Poll {
     use strict; use warnings;
     use feature 'say';
+
     BEGIN {
-    use Config;
     my $isLoaded;
-    if(index($Config{archname}, 'x86_64-linux') != -1) {
-        if(! main::HAS_EventLoop_Poll_Linux_Timer) {
-            warn "MHFS::EventLoop::Poll: Failed to load MHFS::EventLoop::Poll::Linux::Timer NOT enabling timerfd support!";
-        }
-        else {
-            warn "MHFS::EventLoop::Poll: enabling timerfd support";
+    my @backends;
+    if(main::HAS_EventLoop_Poll_Linux_Timer) {
+        push @backends, "-norequire, 'MHFS::EventLoop::Poll::Linux'";
+    }
+    push @backends, "-norequire, 'MHFS::EventLoop::Poll::Base'";
+
+    foreach my $backend (@backends) {
+        if(eval "use parent $backend; 1;") {
             $isLoaded = 1;
-            eval "use parent -norequire, 'MHFS::EventLoop::Poll::Linux'";
+            say __PACKAGE__.": backend \"$backend\" loaded";
+            last;
         }
     }
-    else {
-        warn "MHFS::EventLoop::Poll no timerfd support for ".$Config{archname};
-    }
-    if(! $isLoaded) {
-        eval "use parent -norequire, 'MHFS::EventLoop::Poll::Base'";
-    }
+    $isLoaded or die("Failed to load MHFS::EventLoop::Poll backend");
     }
 1;
 }

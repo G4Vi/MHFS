@@ -3,11 +3,7 @@ use strict;
 use warnings;
 # Fails on non-unix like
 BEGIN {
-my $res = eval {
-    use Time::HiRes qw( clock_gettime );
-    1;
-};
-unless($res) {
+if( ! (eval "use Time::HiRes qw( clock_gettime ); 1")) {
     die('OS unsupported');
 }
 };

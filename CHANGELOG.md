@@ -4,6 +4,11 @@
 #### Fixed insufficient dependency gathering (switched to `pkg-config`)
 ### Alien-Tar-Size
 #### Fixed BSD builds by making libdl optional
+### App-MHFS
+#### Fixed
+- Makefile.PL OS check erroring out with wrong message
+#### Changed
+- moved MHFS::EventLoop::Poll::Linux archname check to MHFS::EventLoop::Poll::Linux::Timer
 
 ## [0.4.1](https://github.com/G4Vi/MHFS/compare/v0.4.0...v0.4.1) - 2022-07-15
 ### App-MHFS
