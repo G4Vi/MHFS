@@ -125,6 +125,7 @@ jobs:
     - name: Fetch build artifacts
       uses: actions/download-artifact@v3
     - name: Extract MHFS and rename to unversioned filenames
+      shell: bash
       run: |
         mv MHFS/*.tar MHFS.tar
         tar -xvf MHFS.tar
@@ -133,6 +134,8 @@ jobs:
         cd MHFS
         mv Alien-Tar-Size*.tar.gz Alien-Tar-Size.tar.gz
         mv Alien-libFLAC*.tar.gz Alien-libFLAC.tar.gz
+        tar -xvf Alien-Tar-Size*.tar.gz
+        rm Alien-Tar-Size*.tar.gz
     - name: Install Perl and Alien-libFLAC using cpanm
       uses: shogo82148/actions-setup-perl@v1
       with:
@@ -148,10 +151,7 @@ jobs:
     - name: Verify installing Alien-Tar-Size fails as expected
       shell: cmd
       run: |
-        cd MHFS
-        tar -xvf Alien-Tar-Size.tar.gz
-        rm Alien-Tar-Size.tar.gz
-        cd Alien-Tar-Size
+        cd MHFS/Alien-Tar-Size*
         perl Makefile.PL
         EXIT /B 1
         IF %ERRORLEVEL% EQ 0 (
