@@ -19,6 +19,13 @@ $(TARGET): $(SRCDIR)/mhfs_cl.c $(DRFLACDIR)/dr_flac.h $(MINIAUDIODIR)/miniaudio.
 	mkdir -p $(OUTDIR)
 	$(CC) $(CFLAGS) -o $@ $<
 
+DEBUG_LVL?=0
+DEBUG_LEVEL_GE_ONE:=$(shell [ $(DEBUG_LVL) -ge 1 ] )
+
+ifeq ($(DEBUG_LEVEL_GE_ONE), true)
+	$(shell echo 'dbg1')
+endif
+
 debug: CFLAGS += -O0 -g4 --source-map-base ./ -s SAFE_HEAP=1 -DMHFSCLTR_PRINT_ON=1 -DMHFSCLDEC_PRINT_ON=1
 debug: $(TARGET)
 #rsync -a $(SRCDIR) $(OUTDIR)/
