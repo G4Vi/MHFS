@@ -173,22 +173,26 @@ jobs:
         mv Alien-Tar-Size*.tar.gz Alien-Tar-Size.tar.gz
         tar -xvf Alien-Tar-Size*.tar.gz
         rm Alien-Tar-Size*.tar.gz
+        mv Alien-Tar-Size* Alien-Tar-Size
     - name: Install Perl and Alien-Tar-Size configure deps using cpanm
       uses: shogo82148/actions-setup-perl@v1
       with:
         distribution: strawberry
         working-directory: MHFS
         install-modules-with: cpanm
-        install-modules: Alien::Build
+        install-modules: Alien::Build IPC::Run3
     - name: Verify installing Alien-Tar-Size fails as expected
-      shell: cmd
+      shell: perl {0}
       run: |
-        cd MHFS/Alien-Tar-Size*
-        perl Makefile.PL
-        IF %ERRORLEVEL% EQU 0 (
-        EXIT /B 1
-        )
-        EXIT /B 0
+        use strict; use warnings;
+        use IPC::Run3;
+        chdir('MHFS/Alien-Tar-Size') or die('failed to chdir');
+        my @cmd = ('perl', 'Makefile.PL');
+        my $stderr;
+        run3(\@cmd, undef, undef, \$stderr) or die('run3 failed');
+        ($? != 0) or die('command was supposed to fail');
+        index($stderr, 'OS unsupported') != -1 or die("Error does not say OS unsupported");
+        print "Success, error says OS unsupported\n";
     - name: Archive CPAN logs
       if: ${{ failure() }}
       uses: actions/upload-artifact@v3
