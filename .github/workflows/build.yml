@@ -114,13 +114,51 @@ jobs:
         name: cpan_log
         path: /home/runner/.cpanm/work/*/build.log
 
-  test-windows:
+  #test-windows-Alien-libFLAC:
+  #  needs:   [ build-linux ]
+  #  strategy:
+  #    matrix:
+  #      os: ['windows-latest']
+  #  runs-on: ${{ matrix.os }}
+  #  name: Test Alien-libFLAC on ${{ matrix.os }}
+  #  steps:
+  #  - name: Fetch build artifacts
+  #    uses: actions/download-artifact@v3
+  #  - name: Extract MHFS and rename to unversioned filenames
+  #    shell: bash
+  #    run: |
+  #      mv MHFS/*.tar MHFS.tar
+  #      tar -xvf MHFS.tar
+  #      rm -r MHFS MHFS.tar
+  #      mv MHFS_* MHFS
+  #      cd MHFS
+  #      mv Alien-libFLAC*.tar.gz Alien-libFLAC.tar.gz
+  #  - name: Install Perl and Alien-libFLAC using cpanm
+  #    uses: shogo82148/actions-setup-perl@v1
+  #    with:
+  #      distribution: strawberry
+  #      working-directory: MHFS
+  #      install-modules-with: cpanm
+  #      install-modules: Alien-libFLAC.tar.gz
+  #  - name: Try loading Alien::libFLAC
+  #    shell: perl {0}
+  #    run: |
+  #      use Alien::libFLAC;
+  #      print $Alien::libFLAC::VERSION . "\n";
+  #  - name: Archive CPAN logs
+  #    if: ${{ failure() }}
+  #    uses: actions/upload-artifact@v3
+  #    with:
+  #      name: cpan_log
+  #      path: C:\Users\RUNNER*\.cpanm\work\*\build.log
+
+  test-windows-Alien-Tar-Size:
     needs:   [ build-linux ]
     strategy:
       matrix:
         os: ['windows-latest']
     runs-on: ${{ matrix.os }}
-    name: Test Alien modules with on ${{ matrix.os }}
+    name: Test Alien-Tar-Size with on ${{ matrix.os }}
     steps:
     - name: Fetch build artifacts
       uses: actions/download-artifact@v3
@@ -133,41 +171,35 @@ jobs:
         mv MHFS_* MHFS
         cd MHFS
         mv Alien-Tar-Size*.tar.gz Alien-Tar-Size.tar.gz
-        mv Alien-libFLAC*.tar.gz Alien-libFLAC.tar.gz
         tar -xvf Alien-Tar-Size*.tar.gz
         rm Alien-Tar-Size*.tar.gz
-    - name: Install Perl and Alien-libFLAC using cpanm
+    - name: Install Perl and Alien-Tar-Size configure deps using cpanm
       uses: shogo82148/actions-setup-perl@v1
       with:
         distribution: strawberry
         working-directory: MHFS
         install-modules-with: cpanm
-        install-modules: Alien-libFLAC.tar.gz
-    - name: Try loading Alien::libFLAC
-      shell: perl {0}
-      run: |
-        use Alien::libFLAC;
-        print $Alien::libFLAC::VERSION . "\n";
+        install-modules: Alien::Build
     - name: Verify installing Alien-Tar-Size fails as expected
       shell: cmd
       run: |
         cd MHFS/Alien-Tar-Size*
         perl Makefile.PL
-        EXIT /B 1
-        IF %ERRORLEVEL% EQ 0 (
+        IF %ERRORLEVEL% EQU 0 (
         EXIT /B 1
         )
+        EXIT /B 0
     - name: Archive CPAN logs
       if: ${{ failure() }}
       uses: actions/upload-artifact@v3
       with:
         name: cpan_log
-        path: /home/runner/.cpanm/work/*/build.log
+        path: C:\Users\RUNNER*\.cpanm\work\*\build.log
 
   create-release:
     name:    Create release
     runs-on: ubuntu-latest
-    needs:   [ build-linux, test-release, test-emcc, test-windows ]
+    needs:   [ build-linux, test-release, test-emcc, test-windows-Alien-Tar-Size ]
     steps:
     - name: Fetch build artifacts
       if:   ${{ github.ref_type == 'tag' }}
