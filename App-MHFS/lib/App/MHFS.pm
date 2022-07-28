@@ -1883,7 +1883,6 @@ package MHFS::HTTP::Server::Client {
 
     sub new {
         my ($class, $sock, $server, $serverhostinfo, $ip) = @_;
-        $sock->blocking(0);
         my %self = ('sock' => $sock, 'server' => $server, 'time' => clock_gettime(CLOCK_MONOTONIC), 'inbuf' => '', 'serverhostname' => $serverhostinfo->{'hostname'}, 'absurl' => $serverhostinfo->{'absurl'}, 'ip' => $ip, 'X-MHFS-PROXY-KEY' => $serverhostinfo->{'X-MHFS-PROXY-KEY'});
         $self{'CONN-ID'} = int($self{'time'} * rand()); # insecure uid
         $self{'outheaders'}{'X-MHFS-CONN-ID'} = sprintf("%X", $self{'CONN-ID'});
@@ -1958,10 +1957,11 @@ package MHFS::HTTP::Server::Client {
         my ($self) = @_;
         my $tempdata;
         if(!defined($self->{'sock'}->recv($tempdata, RECV_SIZE))) {
-            if(! $!{EAGAIN}) {
+            if(! ($!{EAGAIN} || $!{EWOULDBLOCK})) {
                 print ("CT_READ RECV errno: $!\n");
                 return CT_DONE;
             }
+            say "CT_YIELD: $!";
             return CT_YIELD;
         }
         if(length($tempdata) == 0) {
@@ -2205,7 +2205,7 @@ package MHFS::HTTP::Server::Client {
 
     sub TrySendItem {
         my ($csock, $dataref) = @_;
-        my $sret = send($csock, $$dataref, MSG_DONTWAIT);
+        my $sret = send($csock, $$dataref, 0);
         if(! defined($sret)) {
             if($!{EAGAIN}) {
                 #say "SEND EAGAIN\n";
@@ -2878,7 +2878,7 @@ package MHFS::Settings {
         }
 
         # locate files based on appdir
-        my $APPDIR = $SETTINGS->{'APPDIR'} || dist_dir('App-MHFS');
+        my $APPDIR = abs_path($SETTINGS->{'APPDIR'} || dist_dir('App-MHFS'));
         say __PACKAGE__.": using APPDIR " . $APPDIR;
         $SETTINGS->{'APPDIR'} = $APPDIR;
 
@@ -6991,6 +6991,9 @@ sub run {
             defined($ARGV[$i+1]) or die("Missing PARAM");
             if($ARGV[$i] eq '--cfgdir') {
                 $launchsettings{'CFGDIR'} = $ARGV[$i+1];
+            }
+            elsif($ARGV[$i] eq '--appdir') {
+                $launchsettings{'APPDIR'} = $ARGV[$i+1];
             }
             else {
                 die("Unknown PARAM");
