@@ -2689,6 +2689,8 @@ package MHFS::Settings {
     use Storable qw(freeze);
     use Cwd qw(abs_path);
     use File::ShareDir qw(dist_dir);
+    use File::Path qw(make_path);
+
     MHFS::Util->import();
 
     sub write_settings_file {
@@ -2772,7 +2774,8 @@ package MHFS::Settings {
         chop $settingscontents;
         chop $settingscontents;
         $settingscontents .= ";\n\n\$SETTINGS;\n";
-        system('mkdir', '-p', dirname($filepath)) == 0 or die("failed to make settings folder");
+        say "making settings folder $filepath";
+        make_path(dirname($filepath));
         write_file($filepath,  $settingscontents);
     }
 
@@ -2791,6 +2794,8 @@ package MHFS::Settings {
 
         # determine the settings dir
         my $CFGDIR;
+        my $HOME = $ENV{'HOME'};
+        $HOME //= ($ENV{appdata}.'/mhfs') if($ENV{appdata}); # Windows
         if($launchsettings->{CFGDIR}) {
             -d $launchsettings->{CFGDIR} or die("Bad CFGDIR provided");
             $CFGDIR = $launchsettings->{CFGDIR};
@@ -2799,8 +2804,10 @@ package MHFS::Settings {
         else {
             # set the settings dir to the first that exists of $XDG_CONFIG_HOME and $XDG_CONFIG_DIRS
             # https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
-            my $XDG_CONFIG_HOME = $ENV{'XDG_CONFIG_HOME'} || ($ENV{'HOME'} . '/.config');
-            my @configdirs = ($XDG_CONFIG_HOME);
+            my $XDG_CONFIG_HOME = $ENV{'XDG_CONFIG_HOME'};
+            $XDG_CONFIG_HOME //= ($HOME . '/.config') if($HOME);
+            my @configdirs;
+            push @configdirs, $XDG_CONFIG_HOME if($XDG_CONFIG_HOME);
             my $XDG_CONFIG_DIRS = $ENV{'XDG_CONFIG_DIRS'} || '/etc/xdg';
             push @configdirs, split(':', $XDG_CONFIG_DIRS);
             foreach my $cfgdir (@configdirs) {
@@ -2809,7 +2816,8 @@ package MHFS::Settings {
                     last;
                 }
             }
-            $CFGDIR ||= ($XDG_CONFIG_HOME.'/mhfs');
+            $CFGDIR //= ($XDG_CONFIG_HOME.'/mhfs') if($XDG_CONFIG_HOME);
+            defined($CFGDIR) or die("Failed to find valid candidate for \$CFGDIR");
         }
 
         # load from the settings file
@@ -2878,7 +2886,10 @@ package MHFS::Settings {
             $SETTINGS->{'DOCUMENTROOT'} = "$APPDIR/public_html";
         }
         $SETTINGS->{'XSEND'} //= 0;
-        my $tmpdir = $SETTINGS->{'TMPDIR'} || ($ENV{'XDG_CACHE_HOME'} || ($ENV{'HOME'} . '/.cache')) . '/mhfs';
+        my $tmpdir = $SETTINGS->{'TMPDIR'};
+        $tmpdir ||= ($ENV{'XDG_CACHE_HOME'}.'/mhfs') if($ENV{'XDG_CACHE_HOME'});
+        $tmpdir ||= "$HOME/.cache/mhfs" if($HOME);
+        defined($tmpdir) or die("Failed to find valid candidate for \$tmpdir");
         delete $SETTINGS->{'TMPDIR'}; # Use specific temp dir instead
         if(!$SETTINGS->{'RUNTIME_DIR'} ) {
             my $RUNTIMEDIR = $ENV{'XDG_RUNTIME_DIR'};
@@ -2888,7 +2899,10 @@ package MHFS::Settings {
             }
             $SETTINGS->{'RUNTIME_DIR'} = $RUNTIMEDIR.'/mhfs';
         }
-        my $datadir = $SETTINGS->{'DATADIR'} || ($ENV{'XDG_DATA_HOME'} || ($ENV{'HOME'} . '/.local/share')) . '/mhfs';
+        my $datadir = $SETTINGS->{'DATADIR'};
+        $datadir ||= ($ENV{'XDG_DATA_HOME'}.'/mhfs') if($ENV{'XDG_DATA_HOME'});
+        $datadir ||= "$HOME/.local/share/mhfs" if($HOME);
+        defined($datadir) or die("Failed to find valid candidate for \$datadir");
         $SETTINGS->{'DATADIR'} = $datadir;
         $SETTINGS->{'MHFS_TRACKER_TORRENT_DIR'} ||= $SETTINGS->{'DATADIR'}.'/torrent';
         $SETTINGS->{'VIDEO_TMPDIR'} ||= $tmpdir.'/video';
@@ -2941,7 +2955,7 @@ package MHFS::Settings {
         # maximum time allowed between sends
         $SETTINGS->{'sendresponsetimeout'} ||= $SETTINGS->{'TIMEOUT'};
 
-        $SETTINGS->{'Torrent'}{'pyroscope'} ||= $ENV{'HOME'} .'/.local/pyroscope';
+        $SETTINGS->{'Torrent'}{'pyroscope'} ||= $HOME .'/.local/pyroscope' if($HOME);
 
         return $SETTINGS;
     }
