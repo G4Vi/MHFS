@@ -2690,6 +2690,7 @@ package MHFS::Settings {
     use Cwd qw(abs_path);
     use File::ShareDir qw(dist_dir);
     use File::Path qw(make_path);
+    use File::Spec::Functions qw(rel2abs);
 
     MHFS::Util->import();
 
@@ -2792,20 +2793,34 @@ package MHFS::Settings {
         my ($launchsettings) = @_;
         my $scriptpath = abs_path(__FILE__);
 
-        # determine the settings dir
-        my $CFGDIR;
-        my $HOME = $ENV{'HOME'};
-        $HOME //= ($ENV{appdata}.'/mhfs') if($ENV{appdata}); # Windows
-        if($launchsettings->{CFGDIR}) {
+        # settings are loaded with the following precedence
+        # $launchsettings (@ARGV) > settings.pl > General environment vars
+        # Directory preference goes from declared to defaults and specific to general:
+        # For example $CFGDIR > $XDG_CONFIG_HOME > $XDG_CONFIG_DIRS > $FALLBACK_DATA_ROOT
+
+        # load in the launchsettings
+        my ($CFGDIR, $APPDIR, $FALLBACK_DATA_ROOT);
+        if(exists $launchsettings->{CFGDIR}) {
             -d $launchsettings->{CFGDIR} or die("Bad CFGDIR provided");
             $CFGDIR = $launchsettings->{CFGDIR};
-            delete $launchsettings->{CFGDIR};
         }
-        else {
+        if(exists $launchsettings->{APPDIR}) {
+            -d $launchsettings->{APPDIR} or die("Bad APPDIR provided");
+            $APPDIR = $launchsettings->{APPDIR};
+        }
+        if(exists $launchsettings->{FALLBACK_DATA_ROOT}) {
+            -d $launchsettings->{FALLBACK_DATA_ROOT} or die("Bad FALLBACK_DATA_ROOT provided");
+            $FALLBACK_DATA_ROOT = $launchsettings->{FALLBACK_DATA_ROOT};
+        }
+
+        # determine the settings dir
+        if(! $CFGDIR){
+            my $cfg_fallback = $FALLBACK_DATA_ROOT // $ENV{'HOME'};
+            $cfg_fallback //= ($ENV{appdata}.'/mhfs') if($ENV{appdata}); # Windows
             # set the settings dir to the first that exists of $XDG_CONFIG_HOME and $XDG_CONFIG_DIRS
             # https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
             my $XDG_CONFIG_HOME = $ENV{'XDG_CONFIG_HOME'};
-            $XDG_CONFIG_HOME //= ($HOME . '/.config') if($HOME);
+            $XDG_CONFIG_HOME //= ($cfg_fallback . '/.config') if($cfg_fallback);
             my @configdirs;
             push @configdirs, $XDG_CONFIG_HOME if($XDG_CONFIG_HOME);
             my $XDG_CONFIG_DIRS = $ENV{'XDG_CONFIG_DIRS'} || '/etc/xdg';
@@ -2819,20 +2834,16 @@ package MHFS::Settings {
             $CFGDIR //= ($XDG_CONFIG_HOME.'/mhfs') if($XDG_CONFIG_HOME);
             defined($CFGDIR) or die("Failed to find valid candidate for \$CFGDIR");
         }
+        $CFGDIR = rel2abs($CFGDIR);
 
         # load from the settings file
-        my $SETTINGS_FILE = $CFGDIR . '/settings.pl';
+        my $SETTINGS_FILE = rel2abs($CFGDIR . '/settings.pl');
         my $SETTINGS = do ($SETTINGS_FILE);
         if(! $SETTINGS) {
             die "Error parsing settingsfile: $@" if($@);
             die "Cannot read settingsfile: $!" if(-e $SETTINGS_FILE);
             warn("No settings file found, using default settings");
             $SETTINGS = {};
-        }
-
-        # launchsettings overrides
-        foreach my $key (keys %{$launchsettings}) {
-            $SETTINGS->{$key} = $launchsettings->{$key};
         }
 
         # load defaults for unset values
@@ -2847,7 +2858,20 @@ package MHFS::Settings {
         if(! -f $SETTINGS_FILE) {
             write_settings_file($SETTINGS, $SETTINGS_FILE);
         }
+        $SETTINGS->{'CFGDIR'} = $CFGDIR;
 
+        # locate files based on appdir
+        $APPDIR ||= $SETTINGS->{'APPDIR'} || dist_dir('App-MHFS');
+        $APPDIR = abs_path($APPDIR);
+        say __PACKAGE__.": using APPDIR " . $APPDIR;
+        $SETTINGS->{'APPDIR'} = $APPDIR;
+
+        # determine the fallback data root
+        $FALLBACK_DATA_ROOT ||= $SETTINGS->{'FALLBACK_DATA_ROOT'} || $ENV{'HOME'};
+        $FALLBACK_DATA_ROOT ||= ($ENV{appdata}.'/mhfs') if($ENV{appdata}); # Windows
+        if($FALLBACK_DATA_ROOT) {
+            $FALLBACK_DATA_ROOT = abs_path($FALLBACK_DATA_ROOT);
+        }
         # determine the allowed remoteip host combos. only ipv4 now sorry
         $SETTINGS->{'ARIPHOSTS_PARSED'} = [];
         foreach my $rule (@{$SETTINGS->{'ALLOWED_REMOTEIP_HOSTS'}}) {
@@ -2877,18 +2901,13 @@ package MHFS::Settings {
             push @{ $SETTINGS->{'ARIPHOSTS_PARSED'}}, \%ariphost;
         }
 
-        # locate files based on appdir
-        my $APPDIR = abs_path($SETTINGS->{'APPDIR'} || dist_dir('App-MHFS'));
-        say __PACKAGE__.": using APPDIR " . $APPDIR;
-        $SETTINGS->{'APPDIR'} = $APPDIR;
-
         if( ! $SETTINGS->{'DOCUMENTROOT'}) {
             $SETTINGS->{'DOCUMENTROOT'} = "$APPDIR/public_html";
         }
         $SETTINGS->{'XSEND'} //= 0;
         my $tmpdir = $SETTINGS->{'TMPDIR'};
         $tmpdir ||= ($ENV{'XDG_CACHE_HOME'}.'/mhfs') if($ENV{'XDG_CACHE_HOME'});
-        $tmpdir ||= "$HOME/.cache/mhfs" if($HOME);
+        $tmpdir ||= "$FALLBACK_DATA_ROOT/.cache/mhfs" if($FALLBACK_DATA_ROOT);
         defined($tmpdir) or die("Failed to find valid candidate for \$tmpdir");
         delete $SETTINGS->{'TMPDIR'}; # Use specific temp dir instead
         if(!$SETTINGS->{'RUNTIME_DIR'} ) {
@@ -2901,7 +2920,7 @@ package MHFS::Settings {
         }
         my $datadir = $SETTINGS->{'DATADIR'};
         $datadir ||= ($ENV{'XDG_DATA_HOME'}.'/mhfs') if($ENV{'XDG_DATA_HOME'});
-        $datadir ||= "$HOME/.local/share/mhfs" if($HOME);
+        $datadir ||= "$FALLBACK_DATA_ROOT/.local/share/mhfs" if($FALLBACK_DATA_ROOT);
         defined($datadir) or die("Failed to find valid candidate for \$datadir");
         $SETTINGS->{'DATADIR'} = $datadir;
         $SETTINGS->{'MHFS_TRACKER_TORRENT_DIR'} ||= $SETTINGS->{'DATADIR'}.'/torrent';
@@ -2946,7 +2965,6 @@ package MHFS::Settings {
 
         $SETTINGS->{'BINDIR'} ||= $APPDIR . '/bin';
         $SETTINGS->{'DOCDIR'} ||= $APPDIR . '/doc';
-        $SETTINGS->{'CFGDIR'} = $CFGDIR;
 
         # specify timeouts in seconds
         $SETTINGS->{'TIMEOUT'} ||= 75;
@@ -2955,7 +2973,7 @@ package MHFS::Settings {
         # maximum time allowed between sends
         $SETTINGS->{'sendresponsetimeout'} ||= $SETTINGS->{'TIMEOUT'};
 
-        $SETTINGS->{'Torrent'}{'pyroscope'} ||= $HOME .'/.local/pyroscope' if($HOME);
+        $SETTINGS->{'Torrent'}{'pyroscope'} ||= $FALLBACK_DATA_ROOT .'/.local/pyroscope' if($FALLBACK_DATA_ROOT);
 
         return $SETTINGS;
     }
@@ -6994,6 +7012,9 @@ sub run {
             }
             elsif($ARGV[$i] eq '--appdir') {
                 $launchsettings{'APPDIR'} = $ARGV[$i+1];
+            }
+            elsif($ARGV[$i] eq '--fallback_data_root') {
+                $launchsettings{'FALLBACK_DATA_ROOT'} = $ARGV[$i+1];
             }
             else {
                 die("Unknown PARAM");

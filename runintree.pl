@@ -8,6 +8,8 @@ my @include;
 foreach my $libdir (@libdirs) {
     push @include, ('-I', $libdir);
 }
-
+print STDOUT "cd $FindBin::Bin\n";
 chdir($FindBin::Bin) or die("Failed to change to script location");
-exec('perl', @include , 'App-MHFS/bin/mhfs', @ARGV);
+my @cmd = ('perl', @include , 'App-MHFS/bin/mhfs', '--appdir', 'App-MHFS/share', @ARGV);
+print join(' ', @cmd);
+exec {$cmd[0]} @cmd;
