@@ -2816,7 +2816,7 @@ package MHFS::Settings {
         # determine the settings dir
         if(! $CFGDIR){
             my $cfg_fallback = $FALLBACK_DATA_ROOT // $ENV{'HOME'};
-            $cfg_fallback //= ($ENV{appdata}.'/mhfs') if($ENV{appdata}); # Windows
+            $cfg_fallback //= ($ENV{APPDATA}.'/mhfs') if($ENV{APPDATA}); # Windows
             # set the settings dir to the first that exists of $XDG_CONFIG_HOME and $XDG_CONFIG_DIRS
             # https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
             my $XDG_CONFIG_HOME = $ENV{'XDG_CONFIG_HOME'};
@@ -2869,7 +2869,7 @@ package MHFS::Settings {
 
         # determine the fallback data root
         $FALLBACK_DATA_ROOT ||= $SETTINGS->{'FALLBACK_DATA_ROOT'} || $ENV{'HOME'};
-        $FALLBACK_DATA_ROOT ||= ($ENV{appdata}.'/mhfs') if($ENV{appdata}); # Windows
+        $FALLBACK_DATA_ROOT ||= ($ENV{APPDATA}.'/mhfs') if($ENV{APPDATA}); # Windows
         if($FALLBACK_DATA_ROOT) {
             $FALLBACK_DATA_ROOT = abs_path($FALLBACK_DATA_ROOT);
         }
