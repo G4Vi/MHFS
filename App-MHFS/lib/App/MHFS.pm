@@ -1883,6 +1883,7 @@ package MHFS::HTTP::Server::Client {
 
     sub new {
         my ($class, $sock, $server, $serverhostinfo, $ip) = @_;
+        $sock->blocking(0);
         my %self = ('sock' => $sock, 'server' => $server, 'time' => clock_gettime(CLOCK_MONOTONIC), 'inbuf' => '', 'serverhostname' => $serverhostinfo->{'hostname'}, 'absurl' => $serverhostinfo->{'absurl'}, 'ip' => $ip, 'X-MHFS-PROXY-KEY' => $serverhostinfo->{'X-MHFS-PROXY-KEY'});
         $self{'CONN-ID'} = int($self{'time'} * rand()); # insecure uid
         $self{'outheaders'}{'X-MHFS-CONN-ID'} = sprintf("%X", $self{'CONN-ID'});
