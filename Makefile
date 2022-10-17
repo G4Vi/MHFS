@@ -5,6 +5,7 @@ PLAYERDIR:=App-MHFS/share/public_html/static/music_worklet_inprogress/player
 MUSICINCDIR=App-MHFS/share/public_html/static/music_inc
 
 MHFSVERSION := $(shell perl -I App-MHFS/lib -MApp::MHFS -e 'print substr($$App::MHFS::VERSION, 1)' 2>/dev/null)
+APPERLM := $(shell command -v apperlm || echo perl -I$$(realpath ../Perl-Dist-APPerl/lib) $$(realpath ../Perl-Dist-APPerl/script/apperlm))
 
 # build everything
 .PHONY: all
@@ -37,6 +38,42 @@ unsafedists: Alien-Tar-Size/Makefile Alien-libFLAC/Makefile MHFS-XS/Makefile mus
 .PHONY: dists
 dists: clean
 	$(MAKE) unsafedists
+
+apperl/HTML-Template:
+	cd apperl && perl download_package.pl HTML::Template
+	cd apperl && tar xf HTML-Template.*
+	cd apperl && mv HTML-Template-* HTML-Template
+	cd apperl && rm HTML-Template.*
+
+apperl/URI:
+	cd apperl && perl download_package.pl URI
+	cd apperl && tar xf URI.*
+	cd apperl && mv URI-* URI
+	cd apperl && rm URI.*
+
+apperl/Class-Inspector:
+	cd apperl && perl download_package.pl Class::Inspector
+	cd apperl && tar xf Class-Inspector.*
+	cd apperl && mv Class-Inspector-* Class-Inspector
+	cd apperl && rm Class-Inspector.*
+
+apperl/File-ShareDir:
+	cd apperl && perl download_package.pl File::ShareDir
+	cd apperl && tar xf File-ShareDir.*
+	cd apperl && mv File-ShareDir-* File-ShareDir
+	cd apperl && rm File-ShareDir.*
+
+apperl/App-MHFS:
+	cd apperl && perl download_package.pl App::MHFS
+	cd apperl && tar xf App-MHFS.*
+	cd apperl && mv App-MHFS-* App-MHFS
+	cd apperl && rm App-MHFS.*
+
+.PHONY: apperl
+apperl: apperl/HTML-Template apperl/URI apperl/Class-Inspector apperl/File-ShareDir apperl/App-MHFS
+	cd apperl && $(APPERLM) checkout mhfs
+	cd apperl && $(APPERLM) configure
+	cd apperl && $(APPERLM) build
 
 .PHONY: MHFS_$(MHFSVERSION)
 MHFS_$(MHFSVERSION): dists
