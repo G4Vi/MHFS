@@ -2,9 +2,8 @@
    "defaultconfig" : "mhfs",
    "apperl_configs" : {
       "mhfs" : {
-         "desc" : "description of this config",
+         "desc" : "mhfs config",
          "base" : "v5.36.0-full-v0.1.0",
-         "cosmo_id" : "648bf6555c06a3655cab1a9ae078d329c192d39a",
          "dest" : "mhfs.com",
          "perl_repo_files" : {"cpan" : [
             "HTML-Template",

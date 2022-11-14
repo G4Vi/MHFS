@@ -6991,7 +6991,7 @@ package MHFS::Plugin::VideoLibrary {
 }
 
 package App::MHFS; #Media Http File Server
-use version; our $VERSION = version->declare("v0.4.1");
+use version; our $VERSION = version->declare("v0.5.0");
 use strict; use warnings;
 use feature 'say';
 use Getopt::Long qw(GetOptions);

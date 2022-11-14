@@ -13,6 +13,10 @@
 
 ## Setup
 
+### Binary Releases
+
+If you want to skip the setting up Perl and installing Perl modules steps, check out the `mhfs.com` binary version of MHFS in [releases](https://github.com/G4Vi/MHFS/releases). It does not have any of the extension modules, but it should run on most unix-like operating systems as it's packaged into [Actually Portable Perl](https://computoid.com/APPerl/).
+
 ### [Recommended] Optional Prerequisites
 - A C compiler (needed for building MHFS::XS encoding module and Alien::Tar::Size library). `apt-get install build-essential`
 - `ffmpeg` and `sox` somewhere into path. `ffmpeg` is used for transcoding in the MusicLibrary subsystem and for videos in the video subsystem. `sox` is used for resampling in the MusicLibrary subsystem. `apt-get install ffmpeg sox`

@@ -1,14 +1,24 @@
 # MHFS Changelog
-## [Unreleased](https://github.com/G4Vi/MHFS/compare/v0.4.1...dev) - XXXX-XX-XX
+## [0.5.0](https://github.com/G4Vi/MHFS/compare/v0.4.1...v0.5.0) - 2022-11-14
 ### Alien-libFLAC
-#### Fixed insufficient dependency gathering (switched to `pkg-config`)
+#### Fixed
+- insufficient dependency gathering (switched to `pkg-config`)
 ### Alien-Tar-Size
-#### Fixed BSD builds by making libdl optional
+#### Fixed
+- BSD builds by making libdl optional
+#### Added
+- #include check before compiling
+- Fail out with OS unsupported if attempted to build on Windows
 ### App-MHFS
+#### Added
+- Binary releases via APPerl: `mhfs.com`
 #### Fixed
 - Makefile.PL OS check erroring out with wrong message
 #### Changed
 - moved MHFS::EventLoop::Poll::Linux archname check to MHFS::EventLoop::Poll::Linux::Timer
+- use newest emcc in builds now
+- reduce redundancy of turning on nonblocking socket operation
+- settings loading to support Windows environments (MHFS does not work on Windows yet)
 
 ## [0.4.1](https://github.com/G4Vi/MHFS/compare/v0.4.0...v0.4.1) - 2022-07-15
 ### App-MHFS

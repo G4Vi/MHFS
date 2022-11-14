@@ -7,8 +7,12 @@ use Data::Dumper qw(Dumper);
 
 my $module = shift @ARGV;
 my $ua  = LWP::UserAgent->new;
-my $res = $ua->get("https://fastapi.metacpan.org/v1/download_url/".$module);
-$res->is_success or die "Failed to find package";
+my $url = "https://fastapi.metacpan.org/v1/download_url/".$module;
+my $res = $ua->get($url);
+if(! $res->is_success) {
+    print Dumper($res);
+    die "Failed to find package";
+}
 my $jsonresponse = decode_json( $res->decoded_content );
 exists $jsonresponse->{download_url} or die "Failed to find package";
 $jsonresponse->{download_url} =~ /\/([a-zA-Z\-]+)\-[vV]?[\d\.]*((?:\.[a-zA-Z]+)+)$/ or die "Unable to parse out filename";
