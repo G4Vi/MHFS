@@ -1,4 +1,14 @@
 # MHFS Changelog
+## [0.5.1](https://github.com/G4Vi/MHFS/compare/v0.5.0...v0.5.1) - 2022-12-02
+- Version is no longer based on App-MHFS version. MHFS releases will
+note which distributions are included.
+### Alien-Tar-Size-v0.2.2
+- Added better preprocessor check for OS check
+### MHFS-XS-v0.2.3
+- Disable unused miniaudio APIs to remove threading requirement
+### Alien-libFLAC-v0.2.0 [unchanged]
+### App-MHFS-v0.5.0 [unchanged]
+
 ## [0.5.0](https://github.com/G4Vi/MHFS/compare/v0.4.1...v0.5.0) - 2022-11-14
 ### Alien-libFLAC
 #### Fixed

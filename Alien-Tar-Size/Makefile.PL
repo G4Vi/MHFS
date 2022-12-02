@@ -5,6 +5,7 @@ use ExtUtils::MakeMaker;
 use Alien::Build::MM;
 use Config;
 use File::Spec;
+use IPC::Open3;
 
 # test we have headers as an OS check
 
@@ -13,19 +14,16 @@ my @scmd = ($Config{cc}, '-D_GNU_SOURCE');
 push @scmd, '-include', $_ foreach ('errno.h', 'dlfcn.h');
 push @scmd, '-E', '-';
 
-## Redirect STDIN and STDOUT to /dev/null or equivalent (stdin is unused though an input file must be provided, it dumps the preprocessor input to STDOUT)
-open(my $oldin, "<&STDIN") or die "Can't dup STDIN:";
-open(my $oldout, '>&STDOUT') or die('cant dup STDOUT');
-open(my $devnull, '+<', File::Spec->devnull());
-open(STDOUT, '>&', $devnull) or die('error redirecting stdout');
-open(STDIN, '<&', $devnull) or die('error redirecting stdin ');
-
-## finally run the command
-system(@scmd) == 0 or die('OS unsupported');
-
-## Restore STDIN and STDOUT
-open(STDOUT, '>&', $oldout) or die('error restoring stdout');
-open(STDIN, '<&', $oldin) or die('error restoring stdin');
+## Test preprocessor
+my $kid = open3(my $chldin, File::Spec->devnull(), '>&STDERR', @scmd);
+print $chldin <<'END_C';
+#ifndef RTLD_NEXT
+#error "RTLD_NEXT not found"
+#endif
+END_C
+close($chldin);
+waitpid($kid, 0) == $kid or die "waitpid failed";
+$? == 0 or die('OS unsupported');
 
 my $abmm = Alien::Build::MM->new;
 my %WriteMakefileArgs = (

@@ -4,7 +4,8 @@ DECODERDIR:=App-MHFS/share/public_html/static/music_worklet_inprogress/decoder
 PLAYERDIR:=App-MHFS/share/public_html/static/music_worklet_inprogress/player
 MUSICINCDIR=App-MHFS/share/public_html/static/music_inc
 
-MHFSVERSION := $(shell perl -I App-MHFS/lib -MApp::MHFS -e 'print substr($$App::MHFS::VERSION, 1)' 2>/dev/null)
+# MHFSVERSION := $(shell perl -I App-MHFS/lib -MApp::MHFS -e 'print substr($$App::MHFS::VERSION, 1)' 2>/dev/null)
+MHFSVERSION:=0.5.1
 APPERLM := $(shell command -v apperlm || echo perl -I$$(realpath ../Perl-Dist-APPerl/lib) $$(realpath ../Perl-Dist-APPerl/script/apperlm))
 
 # build everything
