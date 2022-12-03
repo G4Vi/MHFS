@@ -1,5 +1,5 @@
 # MHFS Changelog
-## [0.5.1](https://github.com/G4Vi/MHFS/compare/v0.5.0...v0.5.1) - 2022-12-02
+## [0.5.1](https://github.com/G4Vi/MHFS/compare/v0.5.0...v0.5.1) - 2022-12-03
 - Version is no longer based on App-MHFS version. MHFS releases will
 note which distributions are included.
 ### Alien-Tar-Size-v0.2.2
