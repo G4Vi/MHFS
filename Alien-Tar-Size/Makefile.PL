@@ -5,25 +5,22 @@ use ExtUtils::MakeMaker;
 use Alien::Build::MM;
 use Config;
 use File::Spec;
-use IPC::Open3;
 
-# test we have headers as an OS check
+# test preprocessor has needed symbols
+{
+    my @scmd = ($Config{cc}, '-E', 'tarsize/tarsize.c');
+    print join(' ', @scmd)."\n";
 
-## Build the command
-my @scmd = ($Config{cc}, '-D_GNU_SOURCE');
-push @scmd, '-include', $_ foreach ('errno.h', 'dlfcn.h');
-push @scmd, '-E', '-';
+    # backup stdout
+    open(my $oldout, '>&STDOUT') or die('cant dup STDOUT');
 
-## Test preprocessor
-my $kid = open3(my $chldin, File::Spec->devnull(), '>&STDERR', @scmd);
-print $chldin <<'END_C';
-#ifndef RTLD_NEXT
-#error "RTLD_NEXT not found"
-#endif
-END_C
-close($chldin);
-waitpid($kid, 0) == $kid or die "waitpid failed";
-$? == 0 or die('OS unsupported');
+    open(my $devnull, '>', File::Spec->devnull()) or die "$!";
+    open(STDOUT, '>&', $devnull) or die('error redirecting stdout');
+    system(@scmd) == 0 or die('OS unsupported');
+
+    ## restore STDOUT
+    open(STDOUT, '>&', $oldout) or die('error restoring stdout');
+}
 
 my $abmm = Alien::Build::MM->new;
 my %WriteMakefileArgs = (
