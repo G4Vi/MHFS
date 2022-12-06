@@ -197,20 +197,27 @@ jobs:
         mv MHFS_* MHFS
         cd MHFS
         mv Alien-libFLAC*.tar.gz Alien-libFLAC.tar.gz
-    - name: Install Perl and Alien-libFLAC using cpanm
+    - name: Install Perl
       uses: shogo82148/actions-setup-perl@v1
       with:
         distribution: strawberry
-        working-directory: MHFS
-        install-modules-with: cpanm
-        install-modules-args: --installdeps
-        install-modules: Alien-libFLAC.tar.gz
+    - name: Finally install Alien-libFLAC deps
+      run: |
+        cd MHFS
+        cpanm --installdeps Alien-libFLAC.tar.gz
+    - name: extract Alien-libFLAC
+      shell: bash
+      run: |
+        cd MHFS
+        tar xvf Alien-libFLAC.tar.gz
+        rm Alien-libFLAC.tar.gz
+        mv Alien* ../Alien-libFLAC
     - name: Finally install Alien-libFLAC
       run: |
-        ls
-        cd MHFS
-        ls
-        cpanm Alien-libFLAC.tar.gz
+        cd Alien-libFLAC
+        perl Makefile.PL
+        make
+        make install
     - name: Try loading Alien::libFLAC
       shell: perl {0}
       run: |
