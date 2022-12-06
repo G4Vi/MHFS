@@ -211,10 +211,9 @@ jobs:
         cd MHFS
         tar xvf Alien-libFLAC.tar.gz
         rm Alien-libFLAC.tar.gz
-        mv Alien* ../Alien-libFLAC
     - name: Finally install Alien-libFLAC
       run: |
-        cd Alien-libFLAC
+        cd MHFS/Alien-libFLAC*
         perl Makefile.PL
         make
         make install
