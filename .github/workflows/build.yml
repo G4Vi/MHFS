@@ -203,7 +203,14 @@ jobs:
         distribution: strawberry
         working-directory: MHFS
         install-modules-with: cpanm
+        install-modules-args: --installdeps
         install-modules: Alien-libFLAC.tar.gz
+    -name: Finally install Alien-libFLAC
+      run: |
+        ls
+        cd MHFS
+        ls
+        cpanm Alien-libFLAC.tar.gz
     - name: Try loading Alien::libFLAC
       shell: perl {0}
       run: |
