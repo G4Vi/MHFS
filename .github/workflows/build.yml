@@ -205,7 +205,7 @@ jobs:
         install-modules-with: cpanm
         install-modules-args: --installdeps
         install-modules: Alien-libFLAC.tar.gz
-    -name: Finally install Alien-libFLAC
+    - name: Finally install Alien-libFLAC
       run: |
         ls
         cd MHFS
