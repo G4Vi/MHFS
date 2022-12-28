@@ -2399,15 +2399,16 @@ package MHFS::Process {
         }
 
         if($handlesettings->{'O_NONBLOCK'}) {
-            my $flags = 0;
             # stderr
-            (0 == fcntl($err, Fcntl::F_GETFL, $flags)) or die;#return undef;
-            $flags |= Fcntl::O_NONBLOCK;
-            (0 == fcntl($err, Fcntl::F_SETFL, $flags)) or die;#return undef;
+            {
+                my $flags =  fcntl($err, Fcntl::F_GETFL, 0) or die "$!";
+                fcntl($err, Fcntl::F_SETFL, $flags | Fcntl::O_NONBLOCK) or die "$!";
+            }
             # stdout
-            (0 == fcntl($out, Fcntl::F_GETFL, $flags)) or die;#return undef;
-            $flags |= Fcntl::O_NONBLOCK;
-            (0 == fcntl($out, Fcntl::F_SETFL, $flags)) or die;#return undef;
+            {
+                my $flags =  fcntl($out, Fcntl::F_GETFL, 0) or die "$!";
+                fcntl($out, Fcntl::F_SETFL, $flags | Fcntl::O_NONBLOCK) or die "$!";
+            }
             # stdin
             defined($in->blocking(0)) or die($!);
             #(0 == fcntl($in, Fcntl::F_GETFL, $flags)) or die("$!");#return undef;

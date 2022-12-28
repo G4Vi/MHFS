@@ -1,4 +1,7 @@
 Revision history for App-MHFS, note the CHANGELOG.md of the repository is much more comprehensive
+vX.X.X  202X-XX-XX
+        MHFS::Process - Fix incorrect fcntl error handling and usage for turning on O_NONBLOCK
+
 v0.5.0  2022-11-14
         use compile time eval for proper `use` error handling in Makefile.PL. Move MHFS::EventLoop::Poll::Linux
         archname requirement to MHFS::EventLoop::Poll::Linux::Timer. Reduce redundancy of turning on

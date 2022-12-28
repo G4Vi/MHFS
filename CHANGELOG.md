@@ -1,4 +1,8 @@
 # MHFS Changelog
+## [X.X.X](https://github.com/G4Vi/MHFS/compare/v0.5.1...dev) - 202X-XX-XX
+### App-MHFS-vX.X.X
+- MHFS::Process - Fix incorrect fcntl error handling and usage for turning on O_NONBLOCK
+
 ## [0.5.1](https://github.com/G4Vi/MHFS/compare/v0.5.0...v0.5.1) - 2022-12-03
 - Version is no longer based on App-MHFS version. MHFS releases will
 note which distributions are included.
