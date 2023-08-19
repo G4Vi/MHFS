@@ -1,0 +1,19 @@
+<?xml version="1.0" ?>
+<settings version="1">
+	<section id="plugin.video.mhfs">
+		<category id="general" label="" help="">
+			<group id="1" label="">
+				<setting id="mhfsurl" type="string" label="30000" help="">
+                	<level>0</level>
+                	<default/>
+                	<constraints>
+                		<allowempty>true</allowempty>
+                	</constraints>
+                	<control type="edit" format="string">
+                		<heading>30000</heading>
+                	</control>
+                </setting>
+			</group>
+		</category>
+	</section>
+</settings>

@@ -5261,14 +5261,18 @@ package MHFS::Plugin::Kodi {
         }
 
         # generate the directory html
-        my $buf = '';
-        foreach my $show (@diritems) {
-            my $showname = $show->{'item'};
-            my $url = uri_escape($showname);
-            $url .= '/' if($show->{'isdir'});
-            $buf .= '<a href="' . $url .'">'.${MHFS::Util::escape_html_noquote(decode('UTF-8', $showname, Encode::LEAVE_SRC))} .'</a><br><br>';
+        if(!defined $request->{qs}{fmt} || $request->{qs}{fmt} eq 'html') {
+            my $buf = '';
+            foreach my $show (@diritems) {
+                my $showname = $show->{'item'};
+                my $url = uri_escape($showname);
+                $url .= '/' if($show->{'isdir'});
+                $buf .= '<a href="' . $url .'">'.${MHFS::Util::escape_html_noquote(decode('UTF-8', $showname, Encode::LEAVE_SRC))} .'</a><br><br>';
+            }
+            $request->SendHTML($buf);
+        } else {
+            $request->SendAsJSON(\@diritems);
         }
-        $request->SendHTML($buf);
     }
 
     # format movies library for kodi http
@@ -5389,14 +5393,18 @@ package MHFS::Plugin::Kodi {
         }
 
         # generate the directory html
-        my $buf = '';
-        foreach my $show (@diritems) {
-            my $showname = $show->{'item'};
-            my $url = uri_escape($showname);
-            $url .= '/' if($show->{'isdir'});
-            $buf .= '<a href="' . $url .'">'. ${MHFS::Util::escape_html_noquote(decode('UTF-8', $showname, Encode::LEAVE_SRC))} .'</a><br><br>';
+        if(!defined $request->{qs}{fmt} || $request->{qs}{fmt} eq 'html') {
+            my $buf = '';
+            foreach my $show (@diritems) {
+                my $showname = $show->{'item'};
+                my $url = uri_escape($showname);
+                $url .= '/' if($show->{'isdir'});
+                $buf .= '<a href="' . $url .'">'. ${MHFS::Util::escape_html_noquote(decode('UTF-8', $showname, Encode::LEAVE_SRC))} .'</a><br><br>';
+            }
+            $request->SendHTML($buf);
+        } else {
+            $request->SendAsJSON(\@diritems);
         }
-        $request->SendHTML($buf);
     }
 
     sub new {
