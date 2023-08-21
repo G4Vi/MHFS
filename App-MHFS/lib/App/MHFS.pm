@@ -5162,6 +5162,14 @@ package MHFS::Plugin::Kodi {
     use Cwd qw(abs_path);
     use URI::Escape qw(uri_escape);
     use Encode qw(decode);
+    use File::Path qw(make_path);
+    use Data::Dumper qw (Dumper);
+    BEGIN {
+        if( ! (eval "use JSON; 1")) {
+            eval "use JSON::PP; 1" or die "No implementation of JSON available";
+            warn __PACKAGE__.": Using PurePerl version of JSON (JSON::PP)";
+        }
+    }
 
     # format tv library for kodi http
     sub route_tv {
@@ -5277,7 +5285,7 @@ package MHFS::Plugin::Kodi {
 
     # format movies library for kodi http
     sub route_movies {
-        my ($request, $absdir, $kodidir) = @_;
+        my ($self, $request, $absdir, $kodidir) = @_;
         # read in the shows
         my $moviedir = abs_path($absdir);
         if(! defined $moviedir) {
@@ -5296,9 +5304,14 @@ package MHFS::Plugin::Kodi {
             next if(($filename eq '.') || ($filename eq '..'));
             next if(!(-s "$moviedir/$filename"));
             my $showname;
+            my $withoutyear;
+            my $year;
             # extract the showname
             if($filename =~ /^(.+)[\.\s]+\(?(\d{4})([^p]|$)/) {
                 $showname = "$1 ($2)";
+                $withoutyear = $1;
+                $year = $2;
+                $withoutyear =~ s/\./ /g;
             }
             elsif($filename =~ /^(.+)(\.DVDRip)\.[a-zA-Z]{3,4}$/) {
                 $showname = $1;
@@ -5313,14 +5326,24 @@ package MHFS::Plugin::Kodi {
                 $showname = $1;
             }
             else{
-                #next;
                 $showname = $filename;
             }
             if($showname) {
                 $showname =~ s/\./ /g;
                 if(! $shows{$showname}) {
                     $shows{$showname} = [];
-                    push @diritems, {'item' => $showname, 'isdir' => 1}
+                    my %diritem = ('item' => $showname, 'isdir' => 1);
+                    if(defined $year) {
+                        $diritem{name} = $withoutyear;
+                        $diritem{year} = $year;
+                    }
+                    my $plot = $self->{moviemeta}."/$showname/plot.txt";
+                    if(-f $plot) {
+                        my $plotcontents = MHFS::Util::read_file($plot);
+                        print Dumper($plotcontents);
+                        $diritem{plot} = $plotcontents;
+                    }
+                    push @diritems, \%diritem;
                 }
                 push @{$shows{$showname}}, "$moviedir/$filename";
             }
@@ -5407,12 +5430,61 @@ package MHFS::Plugin::Kodi {
         }
     }
 
+    sub _curl {
+        my ($server, $params, $cb) = @_;
+        my $process;
+        my @cmd = ('curl', @$params);
+        print "$_ " foreach @cmd;
+        print "\n";
+        $process = MHFS::Process->new_io_process($server->{evp}, \@cmd, sub {
+            my ($output, $error) = @_;
+            $cb->($output);
+        });
+
+        if(! $process) {
+            $cb->(undef);
+        }
+
+        return $process;
+    }
+
+    sub _TMDB_api {
+        my ($server, $route, $qs, $cb) = @_;
+        my $url = 'https://api.themoviedb.org/3/' . $route;
+        $url .= '?api_key=' . $server->{settings}{TMDB} . '&';
+        if($qs){
+            foreach my $key (keys %{$qs}) {
+                my @values;
+                if(ref($qs->{$key}) ne 'ARRAY') {
+                    push @values, $qs->{$key};
+                }
+                else {
+                    @values = @{$qs->{$key}};
+                }
+                foreach my $value (@values) {
+                    $url .= uri_escape($key).'='.uri_escape($value) . '&';
+                }
+            }
+        }
+        chop $url;
+        return _curl($server, [$url], sub {
+            $cb->(decode_json($_[0]));
+        });
+    }
+
+    sub _DownloadFile {
+        my ($server, $url, $dest, $cb) = @_;
+        return _curl($server, ['-k', $url, '-o', $dest], $cb);
+    }
+
     sub new {
         my ($class, $settings) = @_;
         my $self =  {};
         bless $self, $class;
 
         my @subsystems = ('video');
+        $self->{moviemeta} = $settings->{'DATADIR'}.'/movies';
+        make_path($self->{moviemeta});
 
         $self->{'routes'} = [
             [
@@ -5421,13 +5493,86 @@ package MHFS::Plugin::Kodi {
                     my @pathcomponents = split('/', $request->{'path'}{'unsafepath'});
                     if(scalar(@pathcomponents) >= 3) {
                         if($pathcomponents[2] eq 'movies') {
-                            route_movies($request, $settings->{'MEDIALIBRARIES'}{'movies'}, '/kodi/movies');
+                            route_movies($self, $request, $settings->{'MEDIALIBRARIES'}{'movies'}, '/kodi/movies');
                             return;
                         }
                         elsif($pathcomponents[2] eq 'tv') {
                             route_tv($request, $settings->{'MEDIALIBRARIES'}{'tv'}, '/kodi/tv');
                             return;
                         }
+                        elsif(scalar(@pathcomponents) == 6 && $pathcomponents[2] eq 'metadata') {
+                            if($pathcomponents[3] eq 'movies' || $pathcomponents[3] eq 'tv') {
+                                if ($pathcomponents[4] eq 'thumb' || $pathcomponents[4] eq 'fanart' || $pathcomponents[4] eq 'plot') {
+                                    my $moviemetadir = $self->{moviemeta} . '/' . $pathcomponents[5];
+                                    if (-d $moviemetadir) {
+                                        if($pathcomponents[4] eq 'thumb') {
+                                            if(-f $moviemetadir.'/thumb.png') {
+                                                $request->SendLocalFile("$moviemetadir/thumb.png");
+                                                return;
+                                            } elsif(-f $moviemetadir.'/thumb.jpg') {
+                                                $request->SendLocalFile("$moviemetadir/thumb.jpg");
+                                                return;
+                                            }
+                                        } elsif($pathcomponents[4] eq 'fanart') {
+                                            if(-f $moviemetadir.'/fanart.png') {
+                                                $request->SendLocalFile("$moviemetadir/fanart.png");
+                                                return;
+                                            } elsif(-f $moviemetadir.'/fanart.jpg') {
+                                                $request->SendLocalFile("$moviemetadir/fanart.jpg");
+                                                return;
+                                            }
+                                        } elsif($pathcomponents[4] eq 'plot') {
+                                            if(-f $moviemetadir.'/plot.txt') {
+                                                $request->SendLocalFile("$moviemetadir/plot.txt");
+                                                return;
+                                            }
+                                        }
+                                    }
+                                    my $onConfiguration = sub {
+                                        my $movie = $pathcomponents[5];
+                                        $movie =~ s/\s\(\d\d\d\d\)//;
+                                        _TMDB_api($request->{client}{server}, 'search/movie', {'query' => $movie}, sub {
+                                            if(! defined $_[0]) {
+                                                $request->Send404;
+                                                return;
+                                            }
+                                            if ($pathcomponents[4] eq 'thumb' || $pathcomponents[4] eq 'fanart') {
+                                                my $arttype = $pathcomponents[4];
+                                                my $imagepartial = ($arttype eq 'thumb') ? $_[0]->{results}[0]{poster_path} : $_[0]->{results}[0]{backdrop_path}; 
+                                                if ($imagepartial =~ /(\.[^\.]+)$/) {
+                                                    my $ext = $1;
+                                                    make_path($moviemetadir);
+                                                    _DownloadFile($request->{client}{server}, $self->{tmdbconfig}{images}{secure_base_url}.'original'.$imagepartial, "$moviemetadir/$arttype$ext", sub {
+                                                        $request->SendLocalFile("$moviemetadir/$arttype$ext");
+                                                    });
+                                                    return;
+                                                }
+                                            } elsif($pathcomponents[4] eq 'plot') {
+                                                make_path($moviemetadir);
+                                                MHFS::Util::write_file("$moviemetadir/plot.txt", $_[0]->{results}[0]{overview});
+                                                $request->SendLocalFile("$moviemetadir/plot.txt");
+                                                return;
+                                            }
+                                            $request->Send404;
+                                        });
+                                    };
+                                    if(! defined $self->{tmdbconfig}) {
+                                        _TMDB_api($request->{client}{server}, 'configuration', undef, sub {
+                                            if(! defined $_[0]) {
+                                                $request->Send404;
+                                                return;
+                                            }
+                                            $self->{tmdbconfig} = $_[0];
+                                            $onConfiguration->();
+                                    });
+                                    } else {
+                                        $onConfiguration->();
+                                    }
+                                    return;
+                                }
+                            }
+                        }
+
                     }
                     $request->Send404;
                 }

@@ -57,9 +57,25 @@ class myAddon(t1mAddon):
       sortedlist = sorted(a, key=lambda d: d['item']) 
       for item in sortedlist:
           name = item['item']
-          infoList = {'mediatype':'movie', 'Title': name}
+          if 'name' in item:
+              displayname = item['name']
+          else:
+              displayname = name
+          infoList = {'mediatype':'movie', 'Title': displayname}
+          if 'year' in item:
+              infoList['Year'] = item['year']
+          if 'plot' in item:
+              infoList['Plot'] = item['plot']
+          else:
+              pass
+              #res = requests.get(''.join([self.MHFSBASE, 'metadata/movies/plot/', urllib.parse.quote(name)]), headers=self.defaultHeaders)
+              #if res.ok:
+              #    infoList['Plot'] = res.text
+          thumb = ''.join([self.MHFSBASE, 'metadata/movies/thumb/', urllib.parse.quote(name)])
+          fanart = ''.join([self.MHFSBASE, 'metadata/movies/fanart/', urllib.parse.quote(name)])
+          eprint(''.join(['thumb ', thumb, ' fanart ', fanart]))
           newurl = ''.join(['movies/', urllib.parse.quote(name), '/'])
-          ilist = self.addMenuItem(name,'GV', ilist, newurl, videoInfo=infoList, isFolder=False)
+          ilist = self.addMenuItem(displayname,'GV', ilist, newurl, thumb=thumb, fanart=fanart, videoInfo=infoList, isFolder=False)
       return(ilist)
    
   def getAddonEpisodes(self,url,ilist):
