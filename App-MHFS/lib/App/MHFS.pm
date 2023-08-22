@@ -968,6 +968,52 @@ package MHFS::Util {
     1;
 }
 
+package MHFS::Promise {
+    use strict; use warnings;
+
+    sub new {
+        my ($class, $evp, $cb) = @_;
+        my %self = ( 'evp' => $evp, 'cb' => $cb, 'onFulfilled' => [], 'onRejected' => []);
+        bless \%self, $class;
+        $evp->add_timer(0, 0, sub {
+            my $fulfill = sub {
+                foreach my $onFulfil (@{$self{onFulfilled}}) {
+                    $onFulfil->($_[0]);
+                }
+                $self{is_fulfilled} = 1;
+                $self{end_value} = $_[0];
+            };
+            my $reject = sub {
+                foreach my $onReject (@{$self{onRejected}}) {
+                    $onReject->($_[0]);
+                }
+                $self{is_rejected} = 1;
+                $self{end_value} = $_[0];
+            };
+            $cb->($fulfill, $reject);
+        });
+
+        return \%self;
+    }
+
+    sub then {
+        my ($self, $onFulfilled, $onRejected) = @_;
+        $self->{evp}->add_timer(0, 0, sub {
+            if(!$self->{is_fulfilled} && !$self->{is_rejected}) {
+                push(@{$self->{'onFulfilled'}}, $onFulfilled) if(defined $onFulfilled);
+                push(@{$self->{'onRejected'}}, $onRejected) if(defined $onRejected);
+            } elsif($self->{is_fulfilled}) {
+                $onFulfilled->($self->{end_value});
+            } elsif($self->{is_rejected}) {
+                $onRejected->($self->{end_value});
+            }
+        });
+        # TODO, implement chaining, return Promise
+    }
+
+    1;
+}
+
 package MHFS::HTTP::Server::Client::Request {
     MHFS::Util->import();
     use strict; use warnings;
