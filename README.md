@@ -99,11 +99,11 @@ The settings file is created  at [$XDG_CONFIG_DIRS](https://specifications.freed
 
 Timeouts are used to boot idle or non-responsive connections.
 
-`recvrequestimeout` - maximum time [in seconds] to recieve an http request line and headers. Starts when no request is active on connection. default value: `TIMEOUT`
+`recvrequestimeout` - maximum time [in seconds] to recieve an http request line and headers. Starts when no request is active on connection. default value: `10`
 
 `sendresponsetimeout` - maximum time [in seconds] allowed between `send`'s when sending an http response. default value: `TIMEOUT`
 
-`TIMEOUT` - the default timeout value [in seconds] for the timeouts. default value: `75`
+`TIMEOUT` - the default timeout value [in seconds] for `sendresponsetimeout`. default value: `75`
 
 ### [Recommended, Security] Prevent MHFS from modifying its own files
 
@@ -149,6 +149,10 @@ RewriteRule ^/mhfs$ mhfs/ [R,L]
 </Location>
 ```
 Reload apache2 `# service apache2 reload`. If it fails install `mod_headers`:  maybe `a2enmod headers && service apache2 restart`
+
+On web servers with connection reuse bugs (even much of Apache 2.4), disable connection reuse:
+
+`ProxyPass "http://127.0.0.1:8000/" disablereuse=On`
 
 ### Setup as systemd service
 A sample service set to use the local::lib is provided.

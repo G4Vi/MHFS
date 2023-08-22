@@ -1014,7 +1014,7 @@ package MHFS::HTTP::Server::Client::Request {
         $self{'rl'} = 0;
         # we want the request
         $client->SetEvents(POLLIN | MHFS::EventLoop::Poll->ALWAYSMASK );
-        $self{'recvrequesttimerid'} = $client->AddClientCloseTimer($client->{'server'}{'settings'}{'recvrequestimeout'}, $client->{'CONN-ID'});
+        $self{'recvrequesttimerid'} = $client->AddClientCloseTimer($client->{'server'}{'settings'}{'recvrequestimeout'}, $client->{'CONN-ID'}, 1);
         return \%self;
     }
 
@@ -1283,6 +1283,7 @@ package MHFS::HTTP::Server::Client::Request {
             307 => "HTTP/1.1 307 Temporary Redirect\r\n",
             403 => "HTTP/1.1 403 Forbidden\r\n",
             404 => "HTTP/1.1 404 File Not Found\r\n",
+            408 => "HTTP/1.1 408 Request Timeout\r\n",
             416 => "HTTP/1.1 416 Range Not Satisfiable\r\n",
             503 => "HTTP/1.1 503 Service Unavailable\r\n"
         );
@@ -1347,6 +1348,13 @@ package MHFS::HTTP::Server::Client::Request {
         my ($self) = @_;
         my $msg = "404 Not Found";
         $self->SendHTML($msg, {'code' => 404});
+    }
+
+    sub Send408 {
+        my ($self) = @_;
+        my $msg = "408 Request Timeout";
+        $self->{'outheaders'}{'Connection'} = 'close';
+        $self->SendHTML($msg, {'code' => 408});
     }
 
     sub Send416 {
@@ -1894,7 +1902,7 @@ package MHFS::HTTP::Server::Client {
 
     # add a connection timeout timer
     sub AddClientCloseTimer {
-        my ($self, $timelength, $id) = @_;
+        my ($self, $timelength, $id, $is_requesttimeout) = @_;
         weaken($self); #don't allow this timer to keep the client object alive
         my $server = $self->{'server'};
         say "CCT | add timer: $id";
@@ -1903,7 +1911,13 @@ package MHFS::HTTP::Server::Client {
                 say "CCT | $id self undef";
                 return undef;
             }
-            #(defined $self) or return undef;
+            # Commented out as with connection reuse on, Apache 2.4.10 seems sometimes
+            # pass 408 on to the next client.
+            #if($is_requesttimeout) {
+            #    say "CCT | \$timelength ($timelength) exceeded, sending 408";
+            #    $self->{request}->Send408;
+            #    CT_WRITE($self);
+            #}
             say "CCT | \$timelength ($timelength) exceeded, closing CONN $id";
             say "-------------------------------------------------";
             $server->{'evp'}->remove($self->{'sock'});
@@ -2972,7 +2986,7 @@ package MHFS::Settings {
         # specify timeouts in seconds
         $SETTINGS->{'TIMEOUT'} ||= 75;
         # time to recieve the requestline and headers before closing the conn
-        $SETTINGS->{'recvrequestimeout'} ||= $SETTINGS->{'TIMEOUT'};
+        $SETTINGS->{'recvrequestimeout'} ||= 10;
         # maximum time allowed between sends
         $SETTINGS->{'sendresponsetimeout'} ||= $SETTINGS->{'TIMEOUT'};
 
@@ -5163,7 +5177,8 @@ package MHFS::Plugin::Kodi {
     use URI::Escape qw(uri_escape);
     use Encode qw(decode);
     use File::Path qw(make_path);
-    use Data::Dumper qw (Dumper);
+    use Data::Dumper qw(Dumper);
+    use Scalar::Util qw(weaken);
     BEGIN {
         if( ! (eval "use JSON; 1")) {
             eval "use JSON::PP; 1" or die "No implementation of JSON available";
@@ -5340,7 +5355,6 @@ package MHFS::Plugin::Kodi {
                     my $plot = $self->{moviemeta}."/$showname/plot.txt";
                     if(-f $plot) {
                         my $plotcontents = MHFS::Util::read_file($plot);
-                        print Dumper($plotcontents);
                         $diritem{plot} = $plotcontents;
                     }
                     push @diritems, \%diritem;
@@ -5528,6 +5542,7 @@ package MHFS::Plugin::Kodi {
                                             }
                                         }
                                     }
+                                    weaken($request);
                                     my $onConfiguration = sub {
                                         my $movie = $pathcomponents[5];
                                         $movie =~ s/\s\(\d\d\d\d\)//;
