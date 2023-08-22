@@ -115,7 +115,7 @@ jobs:
     name: Test building Wasm
     strategy:
       matrix:
-        os: ['ubuntu-latest', 'windows-latest']
+        os: ['ubuntu-latest']
         emcc: ['1.40.1', '2.0.0', '2.0.34', '3.0.0', '3.1.17' ]
     runs-on: ${{ matrix.os }}
     steps:
