@@ -971,44 +971,86 @@ package MHFS::Util {
 package MHFS::Promise {
     use strict; use warnings;
 
+    use constant {
+        MHFS_PROMISE_PENDING => 0,
+        MHFS_PROMISE_SUCCESS => 1,
+        MHFS_PROMISE_FAILURE => 2
+    };
+
+    sub _onDone {
+        my ($self, $success, $value) = @_;
+        $self->{end_value} = $value;
+        foreach my $item (@{$self->{waiters}}) {
+            $item->_launch($success, $value);
+        }
+    }
+
+    sub _new {
+        my ($class, $evp) = @_;
+        my %self = ( 'evp' => $evp, 'waiters' => [], 'state' => MHFS_PROMISE_PENDING);
+        bless \%self, $class;
+        $self{fulfill} = sub {
+            $self{state} = MHFS_PROMISE_SUCCESS;
+            _onDone(\%self, 1, $_[0]);
+        };
+        $self{reject} = sub {
+            $self{state} = MHFS_PROMISE_FAILURE;
+            _onDone(\%self, 0, $_[0]);
+        };
+        return \%self;
+    }
+
     sub new {
         my ($class, $evp, $cb) = @_;
-        my %self = ( 'evp' => $evp, 'cb' => $cb, 'onFulfilled' => [], 'onRejected' => []);
-        bless \%self, $class;
+        my $self = _new(@_);
         $evp->add_timer(0, 0, sub {
-            my $fulfill = sub {
-                foreach my $onFulfil (@{$self{onFulfilled}}) {
-                    $onFulfil->($_[0]);
-                }
-                $self{is_fulfilled} = 1;
-                $self{end_value} = $_[0];
-            };
-            my $reject = sub {
-                foreach my $onReject (@{$self{onRejected}}) {
-                    $onReject->($_[0]);
-                }
-                $self{is_rejected} = 1;
-                $self{end_value} = $_[0];
-            };
-            $cb->($fulfill, $reject);
+            $cb->($self->{fulfill}, $self->{reject});
+            return undef;
         });
+        return $self;
+    }
 
-        return \%self;
+
+    sub _launch {
+        my ($self, $success, $value) = @_;
+        if($success) {
+            if($self->{onFulfilled}) {
+                $value = $self->{onFulfilled}($value);
+                # TODO handle value being a promise
+            } else {
+                $self->{fulfill}->($value);
+                return;
+            }
+        } else {
+            if($self->{onRejected}) {
+                $value = $self->{onRejected}->($value);
+            } else {
+                $self->{reject}->($value);
+            }
+        }
+        if(defined($value)) {
+            $self->{fulfill}->($value);
+        } else {
+            $value = 'undef value';
+            $self->{reject}->($value);
+        }
     }
 
     sub then {
         my ($self, $onFulfilled, $onRejected) = @_;
-        $self->{evp}->add_timer(0, 0, sub {
-            if(!$self->{is_fulfilled} && !$self->{is_rejected}) {
-                push(@{$self->{'onFulfilled'}}, $onFulfilled) if(defined $onFulfilled);
-                push(@{$self->{'onRejected'}}, $onRejected) if(defined $onRejected);
-            } elsif($self->{is_fulfilled}) {
-                $onFulfilled->($self->{end_value});
-            } elsif($self->{is_rejected}) {
-                $onRejected->($self->{end_value});
-            }
-        });
-        # TODO, implement chaining, return Promise
+        my $promise = MHFS::Promise->_new($self->{evp});
+        $promise->{onFulfilled} = $onFulfilled if($onFulfilled);
+        $promise->{onRejected} = $onRejected if($onRejected);
+
+        if($self->{state} == MHFS_PROMISE_PENDING) {
+            push (@{$self->{'waiters'}}, $promise);
+        } else {
+            $self->{evp}->add_timer(0, 0, sub {
+                $promise->_launch($self->{state} == MHFS_PROMISE_SUCCESS, $self->{end_value});
+                return undef;
+            });
+        }
+        return $promise;
     }
 
     1;
@@ -5589,7 +5631,21 @@ package MHFS::Plugin::Kodi {
                                         }
                                     }
                                     weaken($request);
-                                    my $onConfiguration = sub {
+                                    MHFS::Promise->new($request->{client}{server}{evp}, sub {
+                                        my ($resolve, $reject) = @_;
+                                        if(! defined $self->{tmdbconfig}) {
+                                            _TMDB_api($request->{client}{server}, 'configuration', undef, sub {
+                                                if(! defined $_[0]) {
+                                                    $reject->("tmdbapi issue");
+                                                    return;
+                                                }
+                                                $self->{tmdbconfig} = $_[0];
+                                                $resolve->();
+                                            });
+                                        } else {
+                                            $resolve->();
+                                        }
+                                    })->then( sub {
                                         my $movie = $pathcomponents[5];
                                         $movie =~ s/\s\(\d\d\d\d\)//;
                                         _TMDB_api($request->{client}{server}, 'search/movie', {'query' => $movie}, sub {
@@ -5616,19 +5672,11 @@ package MHFS::Plugin::Kodi {
                                             }
                                             $request->Send404;
                                         });
-                                    };
-                                    if(! defined $self->{tmdbconfig}) {
-                                        _TMDB_api($request->{client}{server}, 'configuration', undef, sub {
-                                            if(! defined $_[0]) {
-                                                $request->Send404;
-                                                return;
-                                            }
-                                            $self->{tmdbconfig} = $_[0];
-                                            $onConfiguration->();
+                                    })->then(undef, sub {
+                                        say $_[0];
+                                        $request->Send404;
+                                        return;
                                     });
-                                    } else {
-                                        $onConfiguration->();
-                                    }
                                     return;
                                 }
                             }
