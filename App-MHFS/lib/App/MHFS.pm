@@ -970,19 +970,21 @@ package MHFS::Util {
 
 package MHFS::Promise {
     use strict; use warnings;
-
+    use feature 'say';
     use constant {
         MHFS_PROMISE_PENDING => 0,
         MHFS_PROMISE_SUCCESS => 1,
-        MHFS_PROMISE_FAILURE => 2
+        MHFS_PROMISE_FAILURE => 2,
+        MHFS_PROMISE_ADOPT   => 3
     };
 
-    sub _onDone {
-        my ($self, $success, $value) = @_;
-        $self->{end_value} = $value;
+    sub finale {
+        my ($self) = @_;
+        my $success = $self->{state} == MHFS_PROMISE_SUCCESS;
         foreach my $item (@{$self->{waiters}}) {
-            $item->_launch($success, $value);
+            $self->handle($item);
         }
+        $self->{waiters} = [];
     }
 
     sub _new {
@@ -990,12 +992,21 @@ package MHFS::Promise {
         my %self = ( 'evp' => $evp, 'waiters' => [], 'state' => MHFS_PROMISE_PENDING);
         bless \%self, $class;
         $self{fulfill} = sub {
-            $self{state} = MHFS_PROMISE_SUCCESS;
-            _onDone(\%self, 1, $_[0]);
+            my $value = $_[0];
+            if(ref($value) eq $class) {
+                $self{state} = MHFS_PROMISE_ADOPT;
+                say "adopting promise";
+            } else {
+                $self{state} = MHFS_PROMISE_SUCCESS;
+                say "resolved with " . $_[0];
+            }
+            $self{end_value} = $_[0];
+            finale(\%self);
         };
         $self{reject} = sub {
             $self{state} = MHFS_PROMISE_FAILURE;
-            _onDone(\%self, 0, $_[0]);
+            $self{end_value} = $_[0];
+            finale(\%self);
         };
         return \%self;
     }
@@ -1003,53 +1014,55 @@ package MHFS::Promise {
     sub new {
         my ($class, $evp, $cb) = @_;
         my $self = _new(@_);
-        $evp->add_timer(0, 0, sub {
-            $cb->($self->{fulfill}, $self->{reject});
-            return undef;
-        });
+        $cb->($self->{fulfill}, $self->{reject});
         return $self;
     }
 
+    sub handleResolved {
+        my ($self, $deferred) = @_;
+        $self->{evp}->add_timer(0, 0, sub {
+            my $success = $self->{state} == MHFS_PROMISE_SUCCESS;
+            my $value = $self->{end_value};
+            if($success && $deferred->{onFulfilled}) {
+                $value = $deferred->{onFulfilled}($value);
+                if(!defined($value)) {
+                    $success = 0;
+                    $value = 'undef value';
+                }
+            } elsif(!$success && $deferred->{onRejected}) {
+                $value = $deferred->{onRejected}->($value);
+                if(defined($value)) {
+                    $success = 1;
+                } else {
+                    $value = 'undef value';
+                }
+            }
+            if($success) {
+                $deferred->{promise}{fulfill}->($value);
+            } else {
+                $deferred->{promise}{reject}->($value);
+            }
+            return undef;
+        });
+    }
 
-    sub _launch {
-        my ($self, $success, $value) = @_;
-        if($success) {
-            if($self->{onFulfilled}) {
-                $value = $self->{onFulfilled}($value);
-                # TODO handle value being a promise
-            } else {
-                $self->{fulfill}->($value);
-                return;
-            }
-        } else {
-            if($self->{onRejected}) {
-                $value = $self->{onRejected}->($value);
-            } else {
-                $self->{reject}->($value);
-            }
+    sub handle {
+        my ($self, $deferred) = @_;
+        while($self->{state} == MHFS_PROMISE_ADOPT) {
+            $self = $self->{end_value};
         }
-        if(defined($value)) {
-            $self->{fulfill}->($value);
+        if($self->{state} == MHFS_PROMISE_PENDING) {
+            push(@{$self->{'waiters'}}, $deferred);
         } else {
-            $value = 'undef value';
-            $self->{reject}->($value);
+            $self->handleResolved($deferred);
         }
     }
 
     sub then {
         my ($self, $onFulfilled, $onRejected) = @_;
         my $promise = MHFS::Promise->_new($self->{evp});
-        $promise->{onFulfilled} = $onFulfilled if($onFulfilled);
-        $promise->{onRejected} = $onRejected if($onRejected);
-
-        if($self->{state} == MHFS_PROMISE_PENDING) {
-            push (@{$self->{'waiters'}}, $promise);
-        } else {
-            $self->{evp}->add_timer(0, 0, sub {
-                $promise->_launch($self->{state} == MHFS_PROMISE_SUCCESS, $self->{end_value});
-                return undef;
-            });
-        }
+        my %handler = ( 'promise' => $promise, onFulfilled => $onFulfilled, onRejected => $onRejected);
+        $self->handle(\%handler);
         return $promise;
     }
 
@@ -5574,9 +5587,29 @@ package MHFS::Plugin::Kodi {
         });
     }
 
+    sub _TMDB_api_promise {
+        my ($server, $route, $qs) = @_;
+        return MHFS::Promise->new($server->{evp}, sub {
+            my ($resolve, $reject) = @_;
+            _TMDB_api($server, $route, $qs, sub {
+                $resolve->($_[0]);
+            });
+        });
+    }
+
     sub _DownloadFile {
         my ($server, $url, $dest, $cb) = @_;
         return _curl($server, ['-k', $url, '-o', $dest], $cb);
+    }
+
+    sub _DownloadFile_promise {
+        my ($server, $url, $dest) = @_;
+        return MHFS::Promise->new($server->{evp}, sub {
+            my ($resolve, $reject) = @_;
+            _DownloadFile($server, $url, $dest, sub {
+                $resolve->();
+            });
+        });
     }
 
     sub new {
@@ -5634,44 +5667,36 @@ package MHFS::Plugin::Kodi {
                                     MHFS::Promise->new($request->{client}{server}{evp}, sub {
                                         my ($resolve, $reject) = @_;
                                         if(! defined $self->{tmdbconfig}) {
-                                            _TMDB_api($request->{client}{server}, 'configuration', undef, sub {
-                                                if(! defined $_[0]) {
-                                                    $reject->("tmdbapi issue");
-                                                    return;
-                                                }
+                                            $resolve->(_TMDB_api_promise($request->{client}{server}, 'configuration')->then( sub {
                                                 $self->{tmdbconfig} = $_[0];
-                                                $resolve->();
-                                            });
+                                                return $_[0];
+                                            }));
                                         } else {
                                             $resolve->();
                                         }
                                     })->then( sub {
                                         my $movie = $pathcomponents[5];
                                         $movie =~ s/\s\(\d\d\d\d\)//;
-                                        _TMDB_api($request->{client}{server}, 'search/movie', {'query' => $movie}, sub {
-                                            if(! defined $_[0]) {
-                                                $request->Send404;
-                                                return;
-                                            }
-                                            if ($pathcomponents[4] eq 'thumb' || $pathcomponents[4] eq 'fanart') {
-                                                my $arttype = $pathcomponents[4];
-                                                my $imagepartial = ($arttype eq 'thumb') ? $_[0]->{results}[0]{poster_path} : $_[0]->{results}[0]{backdrop_path}; 
-                                                if ($imagepartial =~ /(\.[^\.]+)$/) {
-                                                    my $ext = $1;
-                                                    make_path($moviemetadir);
-                                                    _DownloadFile($request->{client}{server}, $self->{tmdbconfig}{images}{secure_base_url}.'original'.$imagepartial, "$moviemetadir/$arttype$ext", sub {
-                                                        $request->SendLocalFile("$moviemetadir/$arttype$ext");
-                                                    });
-                                                    return;
-                                                }
-                                            } elsif($pathcomponents[4] eq 'plot') {
+                                        return _TMDB_api_promise($request->{client}{server}, 'search/movie', {'query' => $movie});
+                                    })->then( sub {
+                                        if ($pathcomponents[4] eq 'thumb' || $pathcomponents[4] eq 'fanart') {
+                                            my $arttype = $pathcomponents[4];
+                                            my $imagepartial = ($arttype eq 'thumb') ? $_[0]->{results}[0]{poster_path} : $_[0]->{results}[0]{backdrop_path}; 
+                                            if ($imagepartial =~ /(\.[^\.]+)$/) {
+                                                my $ext = $1;
                                                 make_path($moviemetadir);
-                                                MHFS::Util::write_file("$moviemetadir/plot.txt", $_[0]->{results}[0]{overview});
-                                                $request->SendLocalFile("$moviemetadir/plot.txt");
-                                                return;
+                                                return _DownloadFile_promise($request->{client}{server}, $self->{tmdbconfig}{images}{secure_base_url}.'original'.$imagepartial, "$moviemetadir/$arttype$ext")->then(sub {
+                                                    $request->SendLocalFile("$moviemetadir/$arttype$ext");
+                                                    return 1;
+                                                });
                                             }
-                                            $request->Send404;
-                                        });
+                                        } elsif($pathcomponents[4] eq 'plot') {
+                                            make_path($moviemetadir);
+                                            MHFS::Util::write_file("$moviemetadir/plot.txt", $_[0]->{results}[0]{overview});
+                                            $request->SendLocalFile("$moviemetadir/plot.txt");
+                                            return 1;
+                                        }
+                                        return undef;
                                     })->then(undef, sub {
                                         say $_[0];
                                         $request->Send404;
