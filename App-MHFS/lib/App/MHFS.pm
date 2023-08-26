@@ -968,6 +968,16 @@ package MHFS::Util {
     1;
 }
 
+package MHFS::Promise::FakeException {
+
+    sub new {
+        my ($class, $reason) = @_;
+        return bless \$reason, $class;
+    }
+
+    1;
+}
+
 package MHFS::Promise {
     use strict; use warnings;
     use feature 'say';
@@ -998,7 +1008,7 @@ package MHFS::Promise {
                 say "adopting promise";
             } else {
                 $self{state} = MHFS_PROMISE_SUCCESS;
-                say "resolved with " . $_[0];
+                say "resolved with " . ($_[0] // 'undef');
             }
             $self{end_value} = $_[0];
             finale(\%self);
@@ -1018,6 +1028,10 @@ package MHFS::Promise {
         return $self;
     }
 
+    sub throw {
+        return MHFS::Promise::FakeException->new(@_);
+    }
+
     sub handleResolved {
         my ($self, $deferred) = @_;
         $self->{evp}->add_timer(0, 0, sub {
@@ -1025,16 +1039,16 @@ package MHFS::Promise {
             my $value = $self->{end_value};
             if($success && $deferred->{onFulfilled}) {
                 $value = $deferred->{onFulfilled}($value);
-                if(!defined($value)) {
+                if(ref($value) eq 'MHFS::Promise::FakeException') {
                     $success = 0;
-                    $value = 'undef value';
+                    $value = $$value;
                 }
             } elsif(!$success && $deferred->{onRejected}) {
                 $value = $deferred->{onRejected}->($value);
-                if(defined($value)) {
+                if(ref($value) ne 'MHFS::Promise::FakeException') {
                     $success = 1;
                 } else {
-                    $value = 'undef value';
+                    $value = $$value;
                 }
             }
             if($success) {
@@ -5687,16 +5701,16 @@ package MHFS::Plugin::Kodi {
                                                 make_path($moviemetadir);
                                                 return _DownloadFile_promise($request->{client}{server}, $self->{tmdbconfig}{images}{secure_base_url}.'original'.$imagepartial, "$moviemetadir/$arttype$ext")->then(sub {
                                                     $request->SendLocalFile("$moviemetadir/$arttype$ext");
-                                                    return 1;
+                                                    return;
                                                 });
                                             }
                                         } elsif($pathcomponents[4] eq 'plot') {
                                             make_path($moviemetadir);
                                             MHFS::Util::write_file("$moviemetadir/plot.txt", $_[0]->{results}[0]{overview});
                                             $request->SendLocalFile("$moviemetadir/plot.txt");
-                                            return 1;
+                                            return;
                                         }
-                                        return undef;
+                                        return MHFS::Promise::throw('path not matched');
                                     })->then(undef, sub {
                                         say $_[0];
                                         $request->Send404;
