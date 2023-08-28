@@ -5626,6 +5626,87 @@ package MHFS::Plugin::Kodi {
         });
     }
 
+    sub DirectoryRoute {
+        my ($path_without_end_slash, $cb) = @_;
+        return ([
+            $path_without_end_slash, sub {
+                my ($request) = @_;
+                $request->SendRedirect(301, substr($path_without_end_slash, rindex($path_without_end_slash, '/')+1).'/');
+            }
+        ], [
+            "$path_without_end_slash/*", $cb
+        ]);
+    }
+
+    sub route_metadata {
+        my ($self, $request) = @_;
+        while(1) {
+            if($request->{'path'}{'unsafepath'} !~ m!^/kodi/metadata/(movies|tv)/(thumb|fanart|plot)/(.+)$!) {
+                last;
+            }
+            my ($mediatype, $metadatatype, $medianame) = ($1, $2, $3);
+            say "mt $mediatype mmt $metadatatype mn $medianame";
+            if($mediatype eq 'tv' || index($medianame, '/') != -1 || $medianame =~ /^.(.)?$/) {
+                last;
+            }
+            my $moviemetadir = $self->{moviemeta} . '/' . $medianame;
+            # fast path, exists on disk
+            if (-d $moviemetadir) {
+                my %acceptable = ( 'thumb' => ['png', 'jpg'], 'fanart' => ['png', 'jpg'], 'plot' => ['txt']);
+                if(exists $acceptable{$metadatatype}) {
+                    foreach my $totry (@{$acceptable{$metadatatype}}) {
+                        my $path = $moviemetadir.'/'.$metadatatype.".$totry";
+                        if(-f $path) {
+                            $request->SendLocalFile($path);
+                            return;
+                        }
+                    }
+                }
+            }
+            # slow path, download it
+            my $movie = $medianame =~ s/\s\(\d\d\d\d\)//r;
+            say "movie $movie";
+            weaken($request);
+            _TMDB_api_promise($request->{client}{server}, 'search/movie', {'query' => $movie})->then( sub {
+                if($metadatatype eq 'plot') {
+                    make_path($moviemetadir);
+                    MHFS::Util::write_file("$moviemetadir/plot.txt", $_[0]->{results}[0]{overview});
+                    $request->SendLocalFile("$moviemetadir/plot.txt");
+                    return;
+                }
+                # thumb or fanart
+                my $imagepartial = ($metadatatype eq 'thumb') ? $_[0]->{results}[0]{poster_path} : $_[0]->{results}[0]{backdrop_path};
+                if (!$imagepartial || $imagepartial !~ /(\.[^\.]+)$/) {
+                    return MHFS::Promise::throw('path not matched');
+                }
+                my $ext = $1;
+                make_path($moviemetadir);
+                return MHFS::Promise->new($request->{client}{server}{evp}, sub {
+                    my ($resolve, $reject) = @_;
+                    if(! defined $self->{tmdbconfig}) {
+                        $resolve->(_TMDB_api_promise($request->{client}{server}, 'configuration')->then( sub {
+                            $self->{tmdbconfig} = $_[0];
+                            return $_[0];
+                        }));
+                    } else {
+                        $resolve->();
+                    }
+                })->then( sub {
+                    return _DownloadFile_promise($request->{client}{server}, $self->{tmdbconfig}{images}{secure_base_url}.'original'.$imagepartial, "$moviemetadir/$metadatatype$ext")->then(sub {
+                        $request->SendLocalFile("$moviemetadir/$metadatatype$ext");
+                        return;
+                    });
+                });
+            })->then(undef, sub {
+                say $_[0];
+                $request->Send404;
+                return;
+            });
+            return;
+        }
+        $request->Send404;
+    }
+
     sub new {
         my ($class, $settings) = @_;
         my $self =  {};
@@ -5636,95 +5717,18 @@ package MHFS::Plugin::Kodi {
         make_path($self->{moviemeta});
 
         $self->{'routes'} = [
-            [
-                '/kodi/*', sub {
-                    my ($request) = @_;
-                    my @pathcomponents = split('/', $request->{'path'}{'unsafepath'});
-                    if(scalar(@pathcomponents) >= 3) {
-                        if($pathcomponents[2] eq 'movies') {
-                            route_movies($self, $request, $settings->{'MEDIALIBRARIES'}{'movies'}, '/kodi/movies');
-                            return;
-                        }
-                        elsif($pathcomponents[2] eq 'tv') {
-                            route_tv($request, $settings->{'MEDIALIBRARIES'}{'tv'}, '/kodi/tv');
-                            return;
-                        }
-                        elsif(scalar(@pathcomponents) == 6 && $pathcomponents[2] eq 'metadata') {
-                            if($pathcomponents[3] eq 'movies' || $pathcomponents[3] eq 'tv') {
-                                if ($pathcomponents[4] eq 'thumb' || $pathcomponents[4] eq 'fanart' || $pathcomponents[4] eq 'plot') {
-                                    my $moviemetadir = $self->{moviemeta} . '/' . $pathcomponents[5];
-                                    if (-d $moviemetadir) {
-                                        if($pathcomponents[4] eq 'thumb') {
-                                            if(-f $moviemetadir.'/thumb.png') {
-                                                $request->SendLocalFile("$moviemetadir/thumb.png");
-                                                return;
-                                            } elsif(-f $moviemetadir.'/thumb.jpg') {
-                                                $request->SendLocalFile("$moviemetadir/thumb.jpg");
-                                                return;
-                                            }
-                                        } elsif($pathcomponents[4] eq 'fanart') {
-                                            if(-f $moviemetadir.'/fanart.png') {
-                                                $request->SendLocalFile("$moviemetadir/fanart.png");
-                                                return;
-                                            } elsif(-f $moviemetadir.'/fanart.jpg') {
-                                                $request->SendLocalFile("$moviemetadir/fanart.jpg");
-                                                return;
-                                            }
-                                        } elsif($pathcomponents[4] eq 'plot') {
-                                            if(-f $moviemetadir.'/plot.txt') {
-                                                $request->SendLocalFile("$moviemetadir/plot.txt");
-                                                return;
-                                            }
-                                        }
-                                    }
-                                    weaken($request);
-                                    MHFS::Promise->new($request->{client}{server}{evp}, sub {
-                                        my ($resolve, $reject) = @_;
-                                        if(! defined $self->{tmdbconfig}) {
-                                            $resolve->(_TMDB_api_promise($request->{client}{server}, 'configuration')->then( sub {
-                                                $self->{tmdbconfig} = $_[0];
-                                                return $_[0];
-                                            }));
-                                        } else {
-                                            $resolve->();
-                                        }
-                                    })->then( sub {
-                                        my $movie = $pathcomponents[5];
-                                        $movie =~ s/\s\(\d\d\d\d\)//;
-                                        return _TMDB_api_promise($request->{client}{server}, 'search/movie', {'query' => $movie});
-                                    })->then( sub {
-                                        if ($pathcomponents[4] eq 'thumb' || $pathcomponents[4] eq 'fanart') {
-                                            my $arttype = $pathcomponents[4];
-                                            my $imagepartial = ($arttype eq 'thumb') ? $_[0]->{results}[0]{poster_path} : $_[0]->{results}[0]{backdrop_path}; 
-                                            if ($imagepartial =~ /(\.[^\.]+)$/) {
-                                                my $ext = $1;
-                                                make_path($moviemetadir);
-                                                return _DownloadFile_promise($request->{client}{server}, $self->{tmdbconfig}{images}{secure_base_url}.'original'.$imagepartial, "$moviemetadir/$arttype$ext")->then(sub {
-                                                    $request->SendLocalFile("$moviemetadir/$arttype$ext");
-                                                    return;
-                                                });
-                                            }
-                                        } elsif($pathcomponents[4] eq 'plot') {
-                                            make_path($moviemetadir);
-                                            MHFS::Util::write_file("$moviemetadir/plot.txt", $_[0]->{results}[0]{overview});
-                                            $request->SendLocalFile("$moviemetadir/plot.txt");
-                                            return;
-                                        }
-                                        return MHFS::Promise::throw('path not matched');
-                                    })->then(undef, sub {
-                                        say $_[0];
-                                        $request->Send404;
-                                        return;
-                                    });
-                                    return;
-                                }
-                            }
-                        }
-
-                    }
-                    $request->Send404;
-                }
-            ],
+            DirectoryRoute('/kodi/movies', sub {
+                my ($request) = @_;
+                route_movies($self, $request, $settings->{'MEDIALIBRARIES'}{'movies'}, '/kodi/movies');
+            }),
+            DirectoryRoute('/kodi/tv', sub {
+                my ($request) = @_;
+                route_tv($request, $settings->{'MEDIALIBRARIES'}{'tv'}, '/kodi/tv');
+            }),
+            ['/kodi/metadata/*', sub {
+                my ($request) = @_;
+                route_metadata($self, $request);
+            }]
         ];
 
         return $self;
