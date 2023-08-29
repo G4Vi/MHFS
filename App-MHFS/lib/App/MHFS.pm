@@ -5303,7 +5303,7 @@ package MHFS::Plugin::Kodi {
 
     # format tv library for kodi http
     sub route_tv {
-        my ($request, $absdir, $kodidir) = @_;
+        my ($self, $request, $absdir, $kodidir) = @_;
         # read in the shows
         my $tvdir = abs_path($absdir);
         if(! defined $tvdir) {
@@ -5328,7 +5328,13 @@ package MHFS::Plugin::Kodi {
                 $showname =~ s/\./ /g;
                 if(! $shows{$showname}) {
                     $shows{$showname} = [];
-                    push @diritems, {'item' => $showname, 'isdir' => 1}
+                    my %diritem = ('item' => $showname, 'isdir' => 1);
+                    my $plot = $self->{tvmeta}."/$showname/plot.txt";
+                    if(-f $plot) {
+                        my $plotcontents = MHFS::Util::read_file($plot);
+                        $diritem{plot} = $plotcontents;
+                    }
+                    push @diritems, \%diritem;
                 }
                 push @{$shows{$showname}}, "$tvdir/$filename";
             }
@@ -5646,16 +5652,24 @@ package MHFS::Plugin::Kodi {
             }
             my ($mediatype, $metadatatype, $medianame) = ($1, $2, $3);
             say "mt $mediatype mmt $metadatatype mn $medianame";
-            if($mediatype eq 'tv' || index($medianame, '/') != -1 || $medianame =~ /^.(.)?$/) {
+            my %allmediaparams  = ( 'movies' => {
+                'meta' => $self->{moviemeta},
+                'search' => 'movie',
+            }, 'tv' => {
+                'meta' => $self->{tvmeta},
+                'search' => 'tv'
+            });
+            my $params = $allmediaparams{$mediatype};
+            if(index($medianame, '/') != -1 || $medianame =~ /^.(.)?$/) {
                 last;
             }
-            my $moviemetadir = $self->{moviemeta} . '/' . $medianame;
+            my $metadir = $params->{meta} . '/' . $medianame;
             # fast path, exists on disk
-            if (-d $moviemetadir) {
+            if (-d $metadir) {
                 my %acceptable = ( 'thumb' => ['png', 'jpg'], 'fanart' => ['png', 'jpg'], 'plot' => ['txt']);
                 if(exists $acceptable{$metadatatype}) {
                     foreach my $totry (@{$acceptable{$metadatatype}}) {
-                        my $path = $moviemetadir.'/'.$metadatatype.".$totry";
+                        my $path = $metadir.'/'.$metadatatype.".$totry";
                         if(-f $path) {
                             $request->SendLocalFile($path);
                             return;
@@ -5664,14 +5678,17 @@ package MHFS::Plugin::Kodi {
                 }
             }
             # slow path, download it
-            my $movie = $medianame =~ s/\s\(\d\d\d\d\)//r;
-            say "movie $movie";
+            my $searchname = $medianame;
+            $searchname =~ s/\s\(\d\d\d\d\)// if($mediatype eq 'movies');
+            say "searchname $searchname";
             weaken($request);
-            _TMDB_api_promise($request->{client}{server}, 'search/movie', {'query' => $movie})->then( sub {
+            _TMDB_api_promise($request->{client}{server}, 'search/'.$params->{search}, {'query' => $searchname})->then( sub {
+                if($metadatatype eq 'plot' || ! -f "$metadir/plot.txt") {
+                    make_path($metadir);
+                    MHFS::Util::write_file("$metadir/plot.txt", $_[0]->{results}[0]{overview});
+                }
                 if($metadatatype eq 'plot') {
-                    make_path($moviemetadir);
-                    MHFS::Util::write_file("$moviemetadir/plot.txt", $_[0]->{results}[0]{overview});
-                    $request->SendLocalFile("$moviemetadir/plot.txt");
+                    $request->SendLocalFile("$metadir/plot.txt");
                     return;
                 }
                 # thumb or fanart
@@ -5680,7 +5697,7 @@ package MHFS::Plugin::Kodi {
                     return MHFS::Promise::throw('path not matched');
                 }
                 my $ext = $1;
-                make_path($moviemetadir);
+                make_path($metadir);
                 return MHFS::Promise->new($request->{client}{server}{evp}, sub {
                     my ($resolve, $reject) = @_;
                     if(! defined $self->{tmdbconfig}) {
@@ -5692,8 +5709,8 @@ package MHFS::Plugin::Kodi {
                         $resolve->();
                     }
                 })->then( sub {
-                    return _DownloadFile_promise($request->{client}{server}, $self->{tmdbconfig}{images}{secure_base_url}.'original'.$imagepartial, "$moviemetadir/$metadatatype$ext")->then(sub {
-                        $request->SendLocalFile("$moviemetadir/$metadatatype$ext");
+                    return _DownloadFile_promise($request->{client}{server}, $self->{tmdbconfig}{images}{secure_base_url}.'original'.$imagepartial, "$metadir/$metadatatype$ext")->then(sub {
+                        $request->SendLocalFile("$metadir/$metadatatype$ext");
                         return;
                     });
                 });
@@ -5714,7 +5731,8 @@ package MHFS::Plugin::Kodi {
 
         my @subsystems = ('video');
         $self->{moviemeta} = $settings->{'DATADIR'}.'/movies';
-        make_path($self->{moviemeta});
+        $self->{tvmeta} = $settings->{'DATADIR'}.'/tv';
+        make_path($self->{moviemeta}, $self->{tvmeta});
 
         $self->{'routes'} = [
             DirectoryRoute('/kodi/movies', sub {
@@ -5723,7 +5741,7 @@ package MHFS::Plugin::Kodi {
             }),
             DirectoryRoute('/kodi/tv', sub {
                 my ($request) = @_;
-                route_tv($request, $settings->{'MEDIALIBRARIES'}{'tv'}, '/kodi/tv');
+                route_tv($self, $request, $settings->{'MEDIALIBRARIES'}{'tv'}, '/kodi/tv');
             }),
             ['/kodi/metadata/*', sub {
                 my ($request) = @_;

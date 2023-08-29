@@ -39,9 +39,12 @@ class myAddon(t1mAddon):
           if item['isdir']:
               infoList = {'mediatype':'tvshow',
                          'TVShowTitle': name,
-                         'Title': name,
-                         'Plot': name}
-              ilist = self.addMenuItem(name,'GE', ilist, name, videoInfo=infoList, isFolder=True)
+                         'Title': name}
+              if 'plot' in item:
+                  infoList['Plot'] = item['plot']
+              thumb = ''.join([self.MHFSBASE, 'metadata/tv/thumb/', urllib.parse.quote(name)])
+              fanart = ''.join([self.MHFSBASE, 'metadata/tv/fanart/', urllib.parse.quote(name)])
+              ilist = self.addMenuItem(name,'GE', ilist, name, thumb=thumb, fanart=fanart, videoInfo=infoList, isFolder=True)
           else:
               infoList = {'mediatype':'episode',
                           'Title': name,
