@@ -219,6 +219,9 @@ const MHFSPlayer = async function(opt) {
     that.ac.suspend(); // save power start suspended
     that.lastACState = that.ac.state;
     that.ac.onstatechange = function() {
+        if(that.ac.state === 'running') {
+            PumpAudio();
+        }
         console.log('changing acstate was ' + that.lastACState + ' now ' + that.ac.state);
         that.lastACState = that.ac.state;
         that.gui.onACStateUpdate(that.lastACState);
@@ -377,6 +380,8 @@ const MHFSPlayer = async function(opt) {
         PumpAudioZeros[i] = new Float32Array(that.ARBLen);
     }    
     const PumpAudio = async function() {
+        if(that.PA_Running) return;
+        that.PA_Running = 1;
         while(1) {
             do {                
 
@@ -386,6 +391,7 @@ const MHFSPlayer = async function(opt) {
                 if(space === 0) break;
                 // ensure we are queuing at least 100 ms in advance
                 if(bufferedTime < mindelta) {
+                    console.log('mainthread xrun');
                     const bufferFrames = 0.1 * that.sampleRate;
                     const towrite = Math.min(bufferFrames, space);
                     that._ab.write(PumpAudioZeros, towrite);
@@ -825,7 +831,7 @@ const MHFSPlayer = async function(opt) {
     };
     
     // start the audio pump
-    PumpAudio();
+    //PumpAudio();
 
     return that;
 };

@@ -33,7 +33,17 @@ class MusicProcessor extends AudioWorkletProcessor {
       this._audioreader.processmessages();
       
       // fill the buffer with audio
-      this._audioreader.read(outputs[0]);            
+      let amt = this._audioreader.read(outputs[0]);
+      if(amt !== 128) {
+        this._xrun += 1;
+        if(this._xrun === 1) {
+            console.log('worklet xrun');
+        } else if(this._xrun % 100) {
+            console.log('worklet xrun % 100');
+        }
+      } else {
+        this._xrun = 0;
+      }
       return true
     }
   }
