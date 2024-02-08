@@ -5678,6 +5678,7 @@ package MHFS::Plugin::Kodi {
                 }
             }
             # slow path, download it
+            $request->{client}{server}{settings}{TMDB} or last;
             my $searchname = $medianame;
             $searchname =~ s/\s\(\d\d\d\d\)// if($mediatype eq 'movies');
             say "searchname $searchname";

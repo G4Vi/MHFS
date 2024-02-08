@@ -26,11 +26,12 @@ clean: Alien-Tar-Size/Makefile Alien-libFLAC/Makefile MHFS-XS/Makefile $(DECODER
 	$(MAKE) -C $(DECODERDIR) clean
 	$(MAKE) -C $(PLAYERDIR) clean
 	$(MAKE) -C $(MUSICINCDIR) clean
+	rm -f App-MHFS/share/public_html/static/kodi/plugin.video.mhfs.zip
 	$(MAKE) -C App-MHFS veryclean
 
 # dists
 .PHONY: unsafedists
-unsafedists: Alien-Tar-Size/Makefile Alien-libFLAC/Makefile MHFS-XS/Makefile music_worklet music_inc App-MHFS/Makefile
+unsafedists: Alien-Tar-Size/Makefile Alien-libFLAC/Makefile MHFS-XS/Makefile music_worklet music_inc App-MHFS/Makefile kodi_plugin
 	$(MAKE) -C Alien-Tar-Size manifest && $(MAKE) -C Alien-Tar-Size distcheck && $(MAKE) -C Alien-Tar-Size dist
 	$(MAKE) -C Alien-libFLAC manifest && $(MAKE) -C Alien-libFLAC distcheck && $(MAKE) -C Alien-libFLAC dist
 	$(MAKE) -C MHFS-XS manifest && $(MAKE) -C MHFS-XS distcheck && $(MAKE) -C MHFS-XS dist
@@ -138,10 +139,17 @@ music_worklet_player:
 music_inc:
 	$(MAKE) -C $(MUSICINCDIR)
 
+# Kodi plugin
+.PHONY: kodi_plugin
+kodi_plugin:
+	zip -r plugin.video.mhfs.zip plugin.video.mhfs
+	mkdir -p App-MHFS/share/public_html/static/kodi
+	mv plugin.video.mhfs.zip App-MHFS/share/public_html/static/kodi
+
 # App-MHFS
 App-MHFS/Makefile: App-MHFS/Makefile.PL
 	cd App-MHFS && perl Makefile.PL
 
 .PHONY: App-MHFS
-App-MHFS: App-MHFS/Makefile music_worklet music_inc
+App-MHFS: App-MHFS/Makefile music_worklet music_inc kodi_plugin
 	$(MAKE) -C App-MHFS
