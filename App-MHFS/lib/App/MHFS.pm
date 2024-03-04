@@ -5479,6 +5479,11 @@ package MHFS::Plugin::Kodi {
                         $diritem{plot} = $plotcontents;
                     }
                     push @diritems, \%diritem;
+                } else{
+                    foreach my $diritem (@diritems) {
+                        next if($diritem->{item} ne $showname);
+                        $diritem->{hasmultiple} = 1;
+                    }
                 }
                 push @{$shows{$showname}}, "$moviedir/$filename";
             }
@@ -5515,6 +5520,7 @@ package MHFS::Plugin::Kodi {
                 elsif(-f $item) {
                     my $filebasename = basename($item);
                     if(!$showfilename) {
+                        next if($filebasename =~ /\.txt$/);
                         push @diritems, {'item' => $filebasename, 'isdir' => 0};
                     }
                     elsif($showfilename eq $filebasename) {
