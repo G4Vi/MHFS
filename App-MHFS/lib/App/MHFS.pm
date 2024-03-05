@@ -5439,6 +5439,13 @@ package MHFS::Plugin::Kodi {
         while( (my $filename = readdir($dh))) {
             next if(($filename eq '.') || ($filename eq '..'));
             next if(!(-s "$moviedir/$filename"));
+            my $origfilename = $filename;
+            my $remainder = $filename;
+            $filename = decode('UTF-8', $remainder, Encode::FB_QUIET);
+            if (length($remainder)) {
+                warn "skipping $origfilename, not UTF-8";
+                next;
+            }
             my $showname;
             my $withoutyear;
             my $year;
@@ -5464,35 +5471,43 @@ package MHFS::Plugin::Kodi {
             else{
                 $showname = $filename;
             }
-            if($showname) {
-                $showname =~ s/\./ /g;
-                if(! $shows{$showname}) {
-                    $shows{$showname} = [];
-                    my %diritem = ('item' => $showname, 'isdir' => 1);
-                    if(defined $year) {
-                        $diritem{name} = $withoutyear;
-                        $diritem{year} = $year;
-                    }
-                    my $plot = $self->{moviemeta}."/$showname/plot.txt";
-                    if(-f $plot) {
-                        my $plotcontents = MHFS::Util::read_file($plot);
-                        $diritem{plot} = $plotcontents;
-                    }
-                    push @diritems, \%diritem;
-                } else{
-                    foreach my $diritem (@diritems) {
-                        next if($diritem->{item} ne $showname);
-                        $diritem->{hasmultiple} = 1;
-                    }
+            $showname =~ s/\./ /g;
+            say "showname: $showname" if ($showname =~ /^El/);
+            if(! $shows{$showname}) {
+                $shows{$showname} = [];
+                my %diritem = ('item' => $showname, 'isdir' => 1);
+                if(defined $year) {
+                    $diritem{name} = $withoutyear;
+                    $diritem{year} = $year;
                 }
-                push @{$shows{$showname}}, "$moviedir/$filename";
+                my $plot = $self->{moviemeta}."/$showname/plot.txt";
+                if(-f $plot) {
+                    my $plotcontents = MHFS::Util::read_file($plot);
+                    $diritem{plot} = $plotcontents;
+                }
+                push @diritems, \%diritem;
             }
+            else{
+                foreach my $diritem (@diritems) {
+                    next if($diritem->{item} ne $showname);
+                    $diritem->{hasmultiple} = 1;
+                }
+            }
+            push @{$shows{$showname}}, "$moviedir/$filename";
         }
         closedir($dh);
 
         # locate the content
         if($request->{'path'}{'unsafepath'} ne $kodidir) {
             my $fullshowname = substr($request->{'path'}{'unsafepath'}, length($kodidir)+1);
+            my $origfullshowname = $fullshowname;
+            my $remainder = $fullshowname;
+            $fullshowname = decode('UTF-8', $remainder, Encode::FB_QUIET);
+            if (length($remainder)) {
+                warn "$origfullshowname is not, UTF-8, 404";
+                $request->Send404;
+                return;
+            }
             say "fullshowname $fullshowname";
             my $slash = index($fullshowname, '/');
             @diritems = ();
@@ -5502,6 +5517,7 @@ package MHFS::Plugin::Kodi {
 
             my $showitems = $shows{$showname};
             if(!$showitems) {
+                warn "no movie found";
                 $request->Send404;
                 return;
             }
@@ -5519,6 +5535,13 @@ package MHFS::Plugin::Kodi {
                 }
                 elsif(-f $item) {
                     my $filebasename = basename($item);
+                    my $origfilebasename = $filebasename;
+                    my $remainder = $filebasename;
+                    $filebasename = decode('UTF-8', $remainder, Encode::FB_QUIET);
+                    if (length($remainder)) {
+                        warn "$origfilebasename is not, UTF-8, skipping";
+                        next;
+                    }
                     if(!$showfilename) {
                         next if($filebasename =~ /\.txt$/);
                         push @diritems, {'item' => $filebasename, 'isdir' => 0};
