@@ -5439,13 +5439,7 @@ package MHFS::Plugin::Kodi {
         while( (my $filename = readdir($dh))) {
             next if(($filename eq '.') || ($filename eq '..'));
             next if(!(-s "$moviedir/$filename"));
-            my $origfilename = $filename;
-            my $remainder = $filename;
-            $filename = decode('UTF-8', $remainder, Encode::FB_QUIET);
-            if (length($remainder)) {
-                warn "skipping $origfilename, not UTF-8";
-                next;
-            }
+            $filename = decode('UTF-8', $filename, Encode::FB_DEFAULT);
             my $showname;
             my $withoutyear;
             my $year;
@@ -5472,7 +5466,6 @@ package MHFS::Plugin::Kodi {
                 $showname = $filename;
             }
             $showname =~ s/\./ /g;
-            say "showname: $showname" if ($showname =~ /^El/);
             if(! $shows{$showname}) {
                 $shows{$showname} = [];
                 my %diritem = ('item' => $showname, 'isdir' => 1);
