@@ -65,14 +65,21 @@ apperl/File-ShareDir:
 	cd apperl && mv File-ShareDir-* File-ShareDir
 	cd apperl && rm File-ShareDir.*
 
-apperl/App-MHFS:
-	cd apperl && perl download_package.pl App::MHFS
-	cd apperl && tar xf App-MHFS.*
+apperl/File-ShareDir-Install:
+	cd apperl && perl download_package.pl File::ShareDir::Install
+	cd apperl && tar xf File-ShareDir-Install.*
+	cd apperl && mv File-ShareDir-Install-* File-ShareDir-Install
+	cd apperl && rm File-ShareDir-Install.*
+
+apperl/App-MHFS: release
+	rm -rf apperl/MHFS* apperl/App-MHFS*
+	cd apperl && tar xf ../MHFS*.tar
+	cd apperl && tar xf MHFS_*/App-MHFS-*
 	cd apperl && mv App-MHFS-* App-MHFS
-	cd apperl && rm App-MHFS.*
+	cd apperl && rm -r MHFS*
 
 .PHONY: apperl
-apperl: apperl/HTML-Template apperl/URI apperl/Class-Inspector apperl/File-ShareDir apperl/App-MHFS
+apperl: apperl/HTML-Template apperl/URI apperl/Class-Inspector apperl/File-ShareDir apperl/File-ShareDir-Install apperl/App-MHFS
 	cd apperl && $(APPERLM) checkout mhfs
 	cd apperl && $(APPERLM) configure
 	cd apperl && $(APPERLM) build

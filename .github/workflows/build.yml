@@ -69,28 +69,11 @@ jobs:
     - name: Setup mhfs apperl deps
       run: |
         cd MHFS
-        make apperl/HTML-Template apperl/URI apperl/Class-Inspector apperl/File-ShareDir
+        make apperl/HTML-Template apperl/URI apperl/Class-Inspector apperl/File-ShareDir apperl/File-ShareDir-Install
         tar xvf MHFS*.tar
         rm MHFS*.tar
         tar xvf MHFS*/App-MHFS-*.tar.gz
         mv App-MHFS-* apperl/App-MHFS
-    - name: Load APE config
-      run: |
-        cd MHFS/apperl
-        echo "PERL_ID=$(apperlm get-config-key mhfs perl_id)" >> $GITHUB_ENV
-        echo "COSMO_ID=$(apperlm get-config-key mhfs cosmo_id)" >> $GITHUB_ENV
-    - name: Fetch Perl
-      uses: actions/checkout@v3
-      with:
-        repository: 'G4Vi/perl5'
-        ref: ${{ env.PERL_ID }}
-        path: 'perl5'
-    - name: Fetch cosmopolitan
-      uses: actions/checkout@v3
-      with:
-        repository: 'jart/cosmopolitan'
-        ref: ${{ env.COSMO_ID }}
-        path: 'cosmopolitan'
     - name: support ape bins
       run: sudo sh -c "echo ':APE:M::MZqFpD::/bin/sh:' >/proc/sys/fs/binfmt_misc/register"
     - name: Configure and Build mhfs.com
@@ -99,7 +82,6 @@ jobs:
         CF_EMAIL: ${{ secrets.CF_EMAIL }}
       run: |
         cd MHFS/apperl
-        apperlm install-build-deps -p ../../perl5 -c ../../cosmopolitan
         apperlm checkout mhfs
         apperlm list
         apperlm configure -Dcf_by="$CF_BY" -Dcf_email="$CF_EMAIL"

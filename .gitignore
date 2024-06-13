@@ -36,3 +36,11 @@ App-MHFS/MYMETA.yml
 App-MHFS/Makefile
 App-MHFS/blib
 App-MHFS/pm_to_blib
+apperl/.apperl
+apperl/HTML-Template
+apperl/URI
+apperl/Class-Inspector
+apperl/File-ShareDir-Install
+apperl/File-ShareDir
+apperl/App-MHFS
+apperl/mhfs.com*

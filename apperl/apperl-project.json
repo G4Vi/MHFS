@@ -3,22 +3,16 @@
    "apperl_configs" : {
       "mhfs" : {
          "desc" : "mhfs config",
-         "base" : "v5.36.0-full-v0.1.0",
+         "base" : "full",
          "dest" : "mhfs.com",
-         "perl_repo_files" : {"cpan" : [
-            "HTML-Template",
-            "URI",
-            "Class-Inspector"
-         ]},
-         "zip_extra_files" : {
-            "__perllib__" : ["../App-MHFS/lib/App"],
-            "__perllib__/File" : ["File-ShareDir/lib/File/ShareDir.pm"],
-            "__perllib__/auto/share/dist/App-MHFS" : [
-               "App-MHFS/share/public_html",
-               "App-MHFS/share/templates"
-            ],
-            "bin" : ["App-MHFS/bin/mhfs"]
-         }
+         "install_modules" : [
+            "./HTML-Template",
+            "./URI",
+            "./Class-Inspector",
+            "./File-ShareDir-Install",
+            "./File-ShareDir",
+            "./App-MHFS"
+         ]
       }
    }
 }
