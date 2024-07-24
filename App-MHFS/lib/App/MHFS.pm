@@ -5536,7 +5536,8 @@ package MHFS::Plugin::Kodi {
                         next;
                     }
                     if(!$showfilename) {
-                        next if($filebasename =~ /\.txt$/);
+                        # hide non video or subtitle files
+                        next if($filebasename =~ /\.(?:sqlite|nfo|txt|sfv|xml|zip|jpg)$/);
                         push @diritems, {'item' => $filebasename, 'isdir' => 0};
                     }
                     elsif($showfilename eq $filebasename) {
