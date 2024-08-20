@@ -5287,6 +5287,7 @@ M3U8END
 package MHFS::Plugin::Kodi {
     use strict; use warnings;
     use feature 'say';
+    use 5.025;
     use File::Basename qw(basename);
     use Cwd qw(abs_path);
     use URI::Escape qw(uri_escape);
@@ -5434,12 +5435,17 @@ package MHFS::Plugin::Kodi {
             $request->Send404;
             return;
         }
-        my %shows = ();
-        my @diritems;
+        my %movies;
         while( (my $filename = readdir($dh))) {
             next if(($filename eq '.') || ($filename eq '..'));
             next if(!(-s "$moviedir/$filename"));
-            $filename = decode('UTF-8', $filename, Encode::FB_DEFAULT);
+            my $ofilename = $filename;
+            my $remainder = $filename;
+            $filename = decode('UTF-8', $remainder, Encode::FB_QUIET);
+            if (length($remainder)) {
+                warn "$ofilename is not, UTF-8, skipping";
+                next;
+            }
             my $showname;
             my $withoutyear;
             my $year;
@@ -5466,9 +5472,11 @@ package MHFS::Plugin::Kodi {
                 $showname = $filename;
             }
             $showname =~ s/\./ /g;
-            if(! $shows{$showname}) {
-                $shows{$showname} = [];
-                my %diritem = ('item' => $showname, 'isdir' => 1);
+            my $isdir = -d _;
+            $isdir || -f _ or next;
+            $isdir ||= 0;
+            if(! $movies{$showname}) {
+                my %diritem = ('isdir' => 1, 'children' => []);
                 if(defined $year) {
                     $diritem{name} = $withoutyear;
                     $diritem{year} = $year;
@@ -5478,17 +5486,13 @@ package MHFS::Plugin::Kodi {
                     my $plotcontents = MHFS::Util::read_file($plot);
                     $diritem{plot} = $plotcontents;
                 }
-                push @diritems, \%diritem;
+                $diritem{children} = {};
+                $movies{$showname} = \%diritem;
             }
-            else{
-                foreach my $diritem (@diritems) {
-                    next if($diritem->{item} ne $showname);
-                    $diritem->{hasmultiple} = 1;
-                }
-            }
-            push @{$shows{$showname}}, "$moviedir/$filename";
+            $movies{$showname}{children}{$filename} = {isdir => $isdir};
         }
         closedir($dh);
+        my $diritems = \%movies;
 
         # locate the content
         if($request->{'path'}{'unsafepath'} ne $kodidir) {
@@ -5502,67 +5506,71 @@ package MHFS::Plugin::Kodi {
                 return;
             }
             say "fullshowname $fullshowname";
-            my $slash = index($fullshowname, '/');
-            @diritems = ();
-            my $showname = ($slash != -1) ? substr($fullshowname, 0, $slash) : $fullshowname;
-            my $showfilename = ($slash != -1) ? substr($fullshowname, $slash+1) : undef;
+            $diritems = {};
+            my ($showname, $showfilename, $showlast, @showextra) = split('/', $fullshowname);
             say "showname $showname";
+            say "showfilename $showfilename" if ($showfilename);
+            say "showlast $showlast" if ($showlast);
+            say 'showextra '.join('/', @showextra) if @showextra;
 
-            my $showitems = $shows{$showname};
+            my $showitems = $movies{$showname}{children};
             if(!$showitems) {
                 warn "no movie found";
                 $request->Send404;
                 return;
             }
-            my @initems = @{$showitems};
-            my @outitems;
-            # TODO replace basename usage?
-            while(@initems) {
-                my $item = shift @initems;
-                $item = abs_path($item);
-                if(! $item) {
-                    say "bad item";
+            if (!$showfilename) {
+                $diritems = $showitems;
+            } else {
+                my $show = $showitems->{$showfilename};
+                if (!$show) {
+                    warn "no movie edition found";
+                    $request->Send404;
+                    return;
                 }
-                elsif(rindex($item, $moviedir, 0) != 0) {
-                    say "bad item, path traversal?";
-                }
-                elsif(-f $item) {
-                    my $filebasename = basename($item);
-                    my $origfilebasename = $filebasename;
-                    my $remainder = $filebasename;
-                    $filebasename = decode('UTF-8', $remainder, Encode::FB_QUIET);
-                    if (length($remainder)) {
-                        warn "$origfilebasename is not, UTF-8, skipping";
-                        next;
+                my $origfilename = "$moviedir/$showfilename";
+                if (!$show->{isdir}) {
+                    if ($showlast || (index($request->{'path'}{'unsafecollapse'}, '/', length($request->{'path'}{'unsafecollapse'})-1) != -1)) {
+                        $request->Send404;
+                    } else {
+                        say "found show filename";
+                        $request->SendFile($origfilename);
                     }
-                    if(!$showfilename) {
-                        # hide non video or subtitle files
-                        next if($filebasename =~ /\.(?:sqlite|nfo|txt|sfv|xml|zip|jpg)$/);
-                        push @diritems, {'item' => $filebasename, 'isdir' => 0};
-                    }
-                    elsif($showfilename eq $filebasename) {
-                        if(index($request->{'path'}{'unsafecollapse'}, '/', length($request->{'path'}{'unsafecollapse'})-1) == -1) {
-                            say "found show filename";
-                            $request->SendFile($item);
-                        }
-                        else {
-                            $request->Send404;
-                        }
-                        return;
-                    }
-                }
-                elsif(-d _) {
-                    opendir(my $dh, $item) or die('failed to open dir');
-                    my @newitems;
+                    return;
+                } elsif (!$showlast) {
+                    opendir(my $dh, $origfilename) or die('failed to open dir');
                     while(my $newitem = readdir($dh)) {
                         next if(($newitem eq '.') || ($newitem eq '..'));
-                        push @newitems, "$item/$newitem";
+                        my $type = 'other';
+                        if ($newitem =~ /\.(?:avi|mkv|mp4)$/) {
+                            $type = 'movie' if ($newitem !~ /sample(?:\-[a-z]+)?\.(?:avi|mkv|mp4)$/);
+                        } elsif ($newitem =~ /\.(?:srt|sub|idx)$/) {
+                            $type = 'subtitle';
+                        }
+                        my $remainder = $newitem;
+                        my $filename = decode('UTF-8', $remainder, Encode::FB_QUIET);
+                        if (length($remainder)) {
+                            warn "$newitem is not, UTF-8, skipping";
+                            next;
+                        }
+                        my $isdir = -d "$origfilename/$filename" // do {
+                            warn "unable to test filetype of $newitem";
+                            next;
+                        };
+                        $diritems->{$filename} = {isdir => $isdir || 0, type => $type};
                     }
                     closedir($dh);
-                    unshift @initems, @newitems;
-                }
-                else {
-                    say "bad item unknown filetype " . $item;
+                } else {
+                    $origfilename = join('/', $origfilename, $showlast, @showextra);
+                    say $origfilename;
+                    $origfilename = abs_path($origfilename);
+                    if(!$origfilename || rindex($origfilename, $moviedir, 0) != 0) {
+                        say "bad item, path traversal?";
+                        $request->Send404;
+                    } else {
+                        $request->SendFile($origfilename);
+                    }
+                    return;
                 }
             }
         }
@@ -5576,15 +5584,14 @@ package MHFS::Plugin::Kodi {
         # generate the directory html
         if(!defined $request->{qs}{fmt} || $request->{qs}{fmt} eq 'html') {
             my $buf = '';
-            foreach my $show (@diritems) {
-                my $showname = $show->{'item'};
+            while(my ($showname, $show) = each %$diritems) {
                 my $url = uri_escape($showname);
                 $url .= '/' if($show->{'isdir'});
-                $buf .= '<a href="' . $url .'">'. ${MHFS::Util::escape_html_noquote(decode('UTF-8', $showname, Encode::LEAVE_SRC))} .'</a><br><br>';
+                $buf .= '<a href="' . $url .'">'. ${MHFS::Util::escape_html_noquote($showname)} .'</a><br><br>';
             }
             $request->SendHTML($buf);
         } else {
-            $request->SendAsJSON(\@diritems);
+            $request->SendAsJSON($diritems);
         }
     }
 
