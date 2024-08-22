@@ -5287,7 +5287,6 @@ M3U8END
 package MHFS::Plugin::Kodi {
     use strict; use warnings;
     use feature 'say';
-    use 5.025;
     use File::Basename qw(basename);
     use Cwd qw(abs_path);
     use URI::Escape qw(uri_escape);
@@ -5543,7 +5542,7 @@ package MHFS::Plugin::Kodi {
                         next if(($newitem eq '.') || ($newitem eq '..'));
                         my $type = 'other';
                         if ($newitem =~ /\.(?:avi|mkv|mp4)$/) {
-                            $type = 'movie' if ($newitem !~ /sample(?:\-[a-z]+)?\.(?:avi|mkv|mp4)$/);
+                            $type = 'video' if ($newitem !~ /sample(?:\-[a-z]+)?\.(?:avi|mkv|mp4)$/);
                         } elsif ($newitem =~ /\.(?:srt|sub|idx)$/) {
                             $type = 'subtitle';
                         }
