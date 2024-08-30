@@ -5475,7 +5475,7 @@ package MHFS::Plugin::Kodi {
             $isdir || -f _ or next;
             $isdir ||= 0;
             if(! $movies{$showname}) {
-                my %diritem = ('isdir' => 1, 'children' => []);
+                my %diritem = (editions => {});
                 if(defined $year) {
                     $diritem{name} = $withoutyear;
                     $diritem{year} = $year;
@@ -5485,10 +5485,9 @@ package MHFS::Plugin::Kodi {
                     my $plotcontents = MHFS::Util::read_file($plot);
                     $diritem{plot} = $plotcontents;
                 }
-                $diritem{children} = {};
                 $movies{$showname} = \%diritem;
             }
-            $movies{$showname}{children}{$filename} = {isdir => $isdir};
+            $movies{$showname}{editions}{$filename} = {isdir => $isdir};
         }
         closedir($dh);
         my $diritems = \%movies;
@@ -5512,7 +5511,7 @@ package MHFS::Plugin::Kodi {
             say "showlast $showlast" if ($showlast);
             say 'showextra '.join('/', @showextra) if @showextra;
 
-            my $showitems = $movies{$showname}{children};
+            my $showitems = $movies{$showname}{editions};
             if(!$showitems) {
                 warn "no movie found";
                 $request->Send404;
@@ -5571,6 +5570,10 @@ package MHFS::Plugin::Kodi {
                     }
                     return;
                 }
+            }
+        } elsif (!defined $request->{qs}{fmt} || $request->{qs}{fmt} eq 'html') {
+            foreach (values %$diritems) {
+                $_->{isdir} = 1;
             }
         }
 
