@@ -65,7 +65,7 @@ jobs:
         install-modules-with: cpanm
         install-modules: LWP::UserAgent LWP::Protocol::https Perl::Dist::APPerl
     - name: Fetch build artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4.1.7
     - name: Setup mhfs apperl deps
       run: |
         cd MHFS
@@ -144,7 +144,7 @@ jobs:
     name: Test release with ${{ matrix.perl }} on ${{ matrix.os }}
     steps:
     - name: Fetch build artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4.1.7
     - name: Extract MHFS and rename to unversioned filenames
       run: |
         mv MHFS/*.tar MHFS.tar
@@ -187,7 +187,7 @@ jobs:
   #  name: Test Alien-libFLAC on ${{ matrix.os }}
   #  steps:
   #  - name: Fetch build artifacts
-  #    uses: actions/download-artifact@v3
+  #    uses: actions/download-artifact@v4.1.7
   #  - name: Extract MHFS and rename to unversioned filenames
   #    shell: bash
   #    run: |
@@ -225,7 +225,7 @@ jobs:
     name: Test Alien-Tar-Size with on ${{ matrix.os }}
     steps:
     - name: Fetch build artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4.1.7
     - name: Extract MHFS and rename to unversioned filenames
       shell: bash
       run: |
@@ -271,7 +271,7 @@ jobs:
     steps:
     - name: Fetch build artifacts
       if:   ${{ github.ref_type == 'tag' }}
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4.1.7
     - name: Publish release
       if:   ${{ github.ref_type == 'tag' }}
       uses: softprops/action-gh-release@v1
