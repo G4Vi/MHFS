@@ -5487,7 +5487,47 @@ package MHFS::Plugin::Kodi {
                 }
                 $movies{$showname} = \%diritem;
             }
-            $movies{$showname}{editions}{$filename} = {isdir => $isdir};
+            my %edition = ();
+            if ($isdir) {
+                my $path = "$moviedir/$filename";
+                my @videos;
+                my @subtitles;
+                opendir(my $dh, $path) or die('failed to open dir');
+                while(my $newitem = readdir($dh)) {
+                    next if(($newitem eq '.') || ($newitem eq '..'));
+                    my $type;
+                    if ($newitem =~ /\.(?:avi|mkv|mp4)$/) {
+                        $type = 'video' if ($newitem !~ /sample(?:\-[a-z]+)?\.(?:avi|mkv|mp4)$/);
+                    } elsif ($newitem =~ /\.(?:srt|sub|idx)$/) {
+                        $type = 'subtitle';
+                    }
+                    $type or next;
+                    my $remainder = $newitem;
+                    my $filename = decode('UTF-8', $remainder, Encode::FB_QUIET);
+                    if (length($remainder)) {
+                        warn "$newitem is not, UTF-8, skipping";
+                        next;
+                    }
+                    -f "$path/$filename" or next;
+                    push @videos, $filename if($type eq 'video');
+                    push @subtitles, $filename if($type eq 'subtitle');
+                }
+                closedir($dh);
+                foreach my $videofile (@videos) {
+                    my ($withoutext) = $videofile =~ /^(.+)\.[^\.]+$/;
+                    my @relevantsubs;
+                    for my $i (reverse 0 .. $#subtitles) {
+                        if (rindex($subtitles[$i], $withoutext, 0) == 0) {
+                            push @relevantsubs, splice(@subtitles, $i, 1);
+                        }
+                    }
+                    $edition{$videofile} = @relevantsubs ? {subs => \@relevantsubs} : {};
+                }
+                if(@subtitles) {
+                    warn "unmatched subtitle $_" foreach @subtitles;
+                }
+            }
+            $movies{$showname}{editions}{$filename} = \%edition;
         }
         closedir($dh);
         my $diritems = \%movies;
@@ -5527,7 +5567,7 @@ package MHFS::Plugin::Kodi {
                     return;
                 }
                 my $origfilename = "$moviedir/$showfilename";
-                if (!$show->{isdir}) {
+                if (! %$show) {
                     if ($showlast || (index($request->{'path'}{'unsafecollapse'}, '/', length($request->{'path'}{'unsafecollapse'})-1) != -1)) {
                         $request->Send404;
                     } else {
@@ -5535,30 +5575,7 @@ package MHFS::Plugin::Kodi {
                         $request->SendFile($origfilename);
                     }
                     return;
-                } elsif (!$showlast) {
-                    opendir(my $dh, $origfilename) or die('failed to open dir');
-                    while(my $newitem = readdir($dh)) {
-                        next if(($newitem eq '.') || ($newitem eq '..'));
-                        my $type = 'other';
-                        if ($newitem =~ /\.(?:avi|mkv|mp4)$/) {
-                            $type = 'video' if ($newitem !~ /sample(?:\-[a-z]+)?\.(?:avi|mkv|mp4)$/);
-                        } elsif ($newitem =~ /\.(?:srt|sub|idx)$/) {
-                            $type = 'subtitle';
-                        }
-                        my $remainder = $newitem;
-                        my $filename = decode('UTF-8', $remainder, Encode::FB_QUIET);
-                        if (length($remainder)) {
-                            warn "$newitem is not, UTF-8, skipping";
-                            next;
-                        }
-                        my $isdir = -d "$origfilename/$filename" // do {
-                            warn "unable to test filetype of $newitem";
-                            next;
-                        };
-                        $diritems->{$filename} = {isdir => $isdir || 0, type => $type};
-                    }
-                    closedir($dh);
-                } else {
+                } elsif ($showlast) {
                     $origfilename = join('/', $origfilename, $showlast, @showextra);
                     say $origfilename;
                     $origfilename = abs_path($origfilename);
@@ -5568,6 +5585,9 @@ package MHFS::Plugin::Kodi {
                     } else {
                         $request->SendFile($origfilename);
                     }
+                    return;
+                } else {
+                    $request->Send404;
                     return;
                 }
             }

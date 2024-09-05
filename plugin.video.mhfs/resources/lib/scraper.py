@@ -63,23 +63,38 @@ class myAddon(t1mAddon):
       eprint(''.join(['thumb ', thumb, ' fanart ', fanart]))
       return infoList, thumb, fanart
 
+  def addMoviePart(self, displayname, ilist, item, video):
+      infoList, thumb, fanart = self.buildMovieMeta(displayname, item['id'], item['movie'])
+      newurl = json.dumps({'item': item, 'video': video})
+      return self.addMenuItem(displayname,'GV', ilist, newurl, thumb=thumb, fanart=fanart, videoInfo=infoList, isFolder=False)
+
   def addMovieEdition(self, displayname, ilist, moviename, movie, editionname):
       infoList, thumb, fanart = self.buildMovieMeta(displayname, moviename, movie)
-      slash = ''
       edition = movie['editions'][editionname]
-      if edition['isdir']:
-          slash = '/'
-      newurl = ''.join(['movies/', urllib.parse.quote(moviename), '/', urllib.parse.quote(editionname), slash])
+      if edition:
+          item = {'id': moviename, 'movie': movie, 'editionname': editionname}
+          if len(edition) > 1:
+              newurl = json.dumps(item)
+              return self.addMenuItem(displayname,'GM', ilist, newurl, thumb=thumb, fanart=fanart, videoInfo=infoList)
+          else:
+              return self.addMoviePart(displayname, ilist, item, list(edition.keys())[0])
+      else:
+          newurl = ''.join(['movies/', urllib.parse.quote(moviename), '/', urllib.parse.quote(editionname)])
       return self.addMenuItem(displayname,'GV', ilist, newurl, thumb=thumb, fanart=fanart, videoInfo=infoList, isFolder=False)
 
   def getAddonMovies(self,url,ilist):
       if url.startswith('{'):
           eprint(url)
-          movie = json.loads(url)
-          moviename = movie['id']
-          editionnames = sorted(movie['editions'].keys())
-          for editionname in editionnames:
-              ilist = self.addMovieEdition(editionname, ilist, moviename, movie, editionname)
+          item = json.loads(url)
+          movie = item['movie']
+          if 'editionname' in item:
+              for video in sorted(movie['editions'][item['editionname']].keys()):
+                  ilist = self.addMoviePart(video, ilist, item, video)
+          else:
+              moviename = item['id']
+              editionnames = sorted(movie['editions'].keys())
+              for editionname in editionnames:
+                  ilist = self.addMovieEdition(editionname, ilist, moviename, movie, editionname)
       elif url == 'movies':
           fullurl = ''.join([self.MHFSBASE,url,'/?fmt=json'])
           eprint(fullurl)
@@ -96,8 +111,7 @@ class myAddon(t1mAddon):
                   ilist = self.addMovieEdition(displayname, ilist, moviename, movie, editionname)
               else:
                   infoList, thumb, fanart = self.buildMovieMeta(displayname, moviename, movie)
-                  movie['id'] = moviename
-                  newurl = json.dumps(movie)
+                  newurl = json.dumps({'id': moviename, 'movie': movie})
                   ilist = self.addMenuItem(displayname,'GM', ilist, newurl, thumb=thumb, fanart=fanart, videoInfo=infoList)
       return(ilist)
 
@@ -125,34 +139,21 @@ class myAddon(t1mAddon):
 
   def getAddonVideo(self,url):
       subtitle_files = []
-      if not url.endswith('/'):
+      if not url.startswith('{'):
           newurl = ''.join([self.MHFSBASE, url])
       else:
-          jsonurl = ''.join([self.MHFSBASE,url, '?fmt=json'])
-          eprint(jsonurl)
-          encoded = requests.get(jsonurl, headers=self.defaultHeaders).text
-          meta = json.loads(encoded)
-          eprint(meta)
-          metaitems = sorted(meta.keys())
-          video_files = []
-          for name in metaitems:
-              if meta[name]['type'] == 'video':
-                  video_files.append(name)
-              elif meta[name]['type'] == 'subtitle':
-                  subtitle_files.append(name)
-          if len(video_files) == 1:
-              newurl = ''.join([self.MHFSBASE,url, urllib.parse.quote(video_files[0])])
-          else:
-              eprint(video_files)
-              fullvideos = []
-              for video in video_files:
-                  fullvideos.append(''.join([self.MHFSBASE,url, urllib.parse.quote(video)]))
-              newurl = 'stack://' + ' , '.join(fullvideos)
+          meta = json.loads(url)
+          newurl = ''.join([self.MHFSBASE, 'movies/', urllib.parse.quote(meta['item']['id']), '/', urllib.parse.quote(meta['item']['editionname']), '/'])
+          editionname = meta['item']['editionname']
+          video = meta['video']
+          if 'subs' in meta['item']['movie']['editions'][editionname][video]:
+              for sub in meta['item']['movie']['editions'][editionname][video]['subs']:
+                  subtitle_files.append(''.join([newurl, urllib.parse.quote(sub)]))
+          eprint('logging')
+          eprint(newurl)
+          newurl = newurl + urllib.parse.quote(meta['video'])
       eprint(newurl)
       liz = xbmcgui.ListItem(path = newurl, offscreen=True)
       if len(subtitle_files):
-          fullsubs = []
-          for sub in subtitle_files:
-              fullsubs.append(''.join([self.MHFSBASE,url, urllib.parse.quote(sub)]))
-          liz.setSubtitles(fullsubs)
+          liz.setSubtitles(subtitle_files)
       xbmcplugin.setResolvedUrl(int(sys.argv[1]), True, liz)
