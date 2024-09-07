@@ -87,12 +87,10 @@ class myAddon(t1mAddon):
   def addMoviePart(self, displayname, ilist, moviename, movie, editionname, partname = ''):
       newurl = '/'.join(['movies', urllib.parse.quote(moviename), urllib.parse.quote(editionname)])
       if partname:
-          subs = movie['editions'][editionname][partname].get('subs', [])
+          newurl = '/'.join([newurl, urllib.parse.quote(partname)])
+          subs = movie['editions'][editionname][partname].get('subs', {})
           if subs:
-              newurl = ''.join([self.MHFSBASE, '/', newurl, '/'])
-              newurl = json.dumps({'url': newurl, 'subs': subs, 'video': partname})
-          else:
-              newurl = '/'.join([newurl, urllib.parse.quote(partname)])
+              newurl = json.dumps({'url': newurl, 'subs': subs})
       infoList, thumb, fanart = self.buildMovieMeta(displayname, moviename, movie)
       return self.addMenuItem(displayname,'GV', ilist, newurl, thumb=thumb, fanart=fanart, videoInfo=infoList, isFolder=False)
 
@@ -147,8 +145,8 @@ class myAddon(t1mAddon):
           newurl = ''.join([self.MHFSBASE, url])
       else:
           meta = json.loads(url)
-          subtitle_files = list(map(lambda sub: meta['url'] + urllib.parse.quote(sub), meta['subs']))
-          newurl = meta['url'] + urllib.parse.quote(meta['video'])
+          newurl = ''.join([self.MHFSBASE, meta['url']])
+          subtitle_files = list(map(lambda sub: '/'.join([newurl, urllib.parse.quote(sub)]), meta['subs'].keys()))
       liz = xbmcgui.ListItem(path = newurl, offscreen=True)
       if len(subtitle_files):
           liz.setSubtitles(subtitle_files)

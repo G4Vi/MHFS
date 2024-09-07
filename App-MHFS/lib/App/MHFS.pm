@@ -5419,20 +5419,17 @@ package MHFS::Plugin::Kodi {
         }
     }
 
-    # format movies library for kodi http
-    sub route_movies {
-        my ($self, $request, $absdir, $kodidir) = @_;
-        # read in the shows
-        my $moviedir = abs_path($absdir);
+    sub _build_movie_library {
+        my ($self, $moviedir_in) = @_;
+        my $moviedir = abs_path($moviedir_in);
         if(! defined $moviedir) {
-            $request->Send404;
-            return;
+            warn "abspath didn't find moviedir";
+            return undef;
         }
         my $dh;
         if(! opendir ( $dh, $moviedir )) {
             warn "Error in opening dir $moviedir\n";
-            $request->Send404;
-            return;
+            return undef;
         }
         my %movies;
         while( (my $filename = readdir($dh))) {
@@ -5515,13 +5512,13 @@ package MHFS::Plugin::Kodi {
                 closedir($dh);
                 foreach my $videofile (@videos) {
                     my ($withoutext) = $videofile =~ /^(.+)\.[^\.]+$/;
-                    my @relevantsubs;
+                    my %relevantsubs;
                     for my $i (reverse 0 .. $#subtitles) {
                         if (rindex($subtitles[$i], $withoutext, 0) == 0) {
-                            push @relevantsubs, splice(@subtitles, $i, 1);
+                            $relevantsubs{splice(@subtitles, $i, 1)} = undef;
                         }
                     }
-                    $edition{$videofile} = @relevantsubs ? {subs => \@relevantsubs} : {};
+                    $edition{$videofile} = scalar %relevantsubs ? {subs => \%relevantsubs} : {};
                 }
                 if(@subtitles) {
                     warn "unmatched subtitle $_" foreach @subtitles;
@@ -5530,67 +5527,95 @@ package MHFS::Plugin::Kodi {
             $movies{$showname}{editions}{$filename} = \%edition;
         }
         closedir($dh);
-        my $diritems = \%movies;
+        {movies => \%movies, dir => $moviedir}
+    }
+
+    # returns a hash if the found item is a 'directory'
+    # returns a path if the found item is a file
+    # returns undef on not found
+    sub _search_movie_library {
+        my ($movieobj, $moviename, $editionname, $partname, $subfile) = @_;
+        my $movies = $movieobj->{movies};
+        my $moviedir = $movieobj->{dir};
+        unless(exists $movies->{$moviename}) {
+            warn "movie not found";
+            return undef;
+        }
+        $movies = $movies->{$moviename}{editions};
+        $editionname or return $movies;
+        unless(exists $movies->{$editionname}) {
+            warn "movie edition not found";
+            return undef;
+        }
+        $movies = $movies->{$editionname};
+        my $origfilename = "$moviedir/$editionname";
+        if (!$partname) {
+            %$movies or return $origfilename;
+            return $movies;
+        }
+        unless(exists $movies->{$partname}) {
+            warn "movie part not found";
+            return undef;
+        }
+        $movies = $movies->{$partname};
+        if (!$subfile) {
+            return "$origfilename/$partname";
+            #return $movies;
+        }
+        unless(exists $movies->{subs} && exists $movies->{subs}{$subfile}) {
+            warn "subtitle file not found";
+            return undef;
+        }
+        "$origfilename/$subfile"
+    }
+
+    # format movies library for kodi http
+    sub route_movies {
+        my ($self, $request, $absdir, $kodidir) = @_;
+
+        my $movies = $self->_build_movie_library($absdir);
+        unless ($movies) {
+            $request->Send404;
+            return;
+        }
+        my $diritems = $movies->{movies};
 
         # locate the content
         if($request->{'path'}{'unsafepath'} ne $kodidir) {
-            my $fullshowname = substr($request->{'path'}{'unsafepath'}, length($kodidir)+1);
-            my $origfullshowname = $fullshowname;
-            my $remainder = $fullshowname;
-            $fullshowname = decode('UTF-8', $remainder, Encode::FB_QUIET);
+            my $fullmoviepath = substr($request->{'path'}{'unsafepath'}, length($kodidir)+1);
+            my $origfullmoviepath = $fullmoviepath;
+            my $remainder = $fullmoviepath;
+            $fullmoviepath = decode('UTF-8', $remainder, Encode::FB_QUIET);
             if (length($remainder)) {
-                warn "$origfullshowname is not, UTF-8, 404";
+                warn "$origfullmoviepath is not, UTF-8, 404";
                 $request->Send404;
                 return;
             }
-            say "fullshowname $fullshowname";
-            $diritems = {};
-            my ($showname, $showfilename, $showlast, @showextra) = split('/', $fullshowname);
-            say "showname $showname";
-            say "showfilename $showfilename" if ($showfilename);
-            say "showlast $showlast" if ($showlast);
+            say "fullmoviepath $fullmoviepath";
+            my ($moviename, $editionname, $partname, $subfile, @showextra) = split('/', $fullmoviepath);
+            say "moviename $moviename";
+            say "editionname $editionname" if ($editionname);
+            say "partname $partname" if ($partname);
             say 'showextra '.join('/', @showextra) if @showextra;
-
-            my $showitems = $movies{$showname}{editions};
-            if(!$showitems) {
-                warn "no movie found";
+            if (@showextra) {
+                warn "warn too many parts";
                 $request->Send404;
                 return;
             }
-            if (!$showfilename) {
-                $diritems = $showitems;
-            } else {
-                my $show = $showitems->{$showfilename};
-                if (!$show) {
-                    warn "no movie edition found";
-                    $request->Send404;
-                    return;
-                }
-                my $origfilename = "$moviedir/$showfilename";
-                if (! %$show) {
-                    if ($showlast || (index($request->{'path'}{'unsafecollapse'}, '/', length($request->{'path'}{'unsafecollapse'})-1) != -1)) {
-                        $request->Send404;
-                    } else {
-                        say "found show filename";
-                        $request->SendFile($origfilename);
-                    }
-                    return;
-                } elsif ($showlast) {
-                    $origfilename = join('/', $origfilename, $showlast, @showextra);
-                    say $origfilename;
-                    $origfilename = abs_path($origfilename);
-                    if(!$origfilename || rindex($origfilename, $moviedir, 0) != 0) {
-                        say "bad item, path traversal?";
-                        $request->Send404;
-                    } else {
-                        $request->SendFile($origfilename);
-                    }
-                    return;
-                } else {
-                    $request->Send404;
-                    return;
-                }
+            my $movieitem = _search_movie_library($movies, $moviename, $editionname, $partname, $subfile);
+            if (!$movieitem) {
+                $request->Send404;
+                return;
             }
+            unless (ref $movieitem) {
+                if (substr($request->{'path'}{'unescapepath'}, -1) eq '/') {
+                    $request->Send404;
+                    return;
+                }
+                $request->SendFile($movieitem);
+                return;
+            }
+            $diritems = $movieitem;
         } elsif (!defined $request->{qs}{fmt} || $request->{qs}{fmt} eq 'html') {
             foreach (values %$diritems) {
                 $_->{isdir} = 1;
