@@ -540,7 +540,7 @@ package MHFS::Util {
     use Cwd qw(abs_path getcwd);
     use Encode qw(decode encode);
     use URI::Escape qw(uri_escape);
-    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'shell_escape', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME', 'get_printable_utf8', 'small_url_encode', 'uri_escape_path', 'round', 'ceil_div', 'get_SI_size');
+    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'shell_escape', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME', 'get_printable_utf8', 'small_url_encode', 'uri_escape_path', 'round', 'ceil_div', 'get_SI_size', 'decode_UTF_8');
     # single threaded locks
     sub LOCK_GET_LOCKDATA {
         my ($filename) = @_;
@@ -963,6 +963,15 @@ package MHFS::Util {
         else {
             return sprintf("%.2f MiB", $mebibytes);
         }
+    }
+
+    sub decode_UTF_8 {
+        my ($input) = @_;
+        my $output = decode('UTF-8', $input, Encode::FB_QUIET);
+        if (length($input)) {
+            return undef;
+        }
+        return $output;
     }
 
     1;
@@ -3711,7 +3720,6 @@ package MHFS::Plugin::MusicLibrary {
         my ($files, $where) = @_;
         $where //= '';
         my $buf = '';
-        #my $name_unencoded = decode('UTF-8', $files->[0]);
         my $name_unencoded = $files->[3];
         my $name = ${escape_html_noquote($name_unencoded)};
         if($files->[2]) {
@@ -3762,7 +3770,6 @@ package MHFS::Plugin::MusicLibrary {
                 next;
             }
             my $node = $nodestack[@nodestack - 1];
-            #my $newnode = {'name' => decode('UTF-8', $file->[0])};
             my $newnode = {'name' =>$file->[3]};
             if($file->[2]) {
                 $newnode->{'files'} = [];
@@ -5294,6 +5301,7 @@ package MHFS::Plugin::Kodi {
     use File::Path qw(make_path);
     use Data::Dumper qw(Dumper);
     use Scalar::Util qw(weaken);
+    MHFS::Util->import(qw(decode_UTF_8));
     BEGIN {
         if( ! (eval "use JSON; 1")) {
             eval "use JSON::PP; 1" or die "No implementation of JSON available";
@@ -5432,16 +5440,13 @@ package MHFS::Plugin::Kodi {
             return undef;
         }
         my %movies;
-        while( (my $filename = readdir($dh))) {
-            next if(($filename eq '.') || ($filename eq '..'));
-            next if(!(-s "$moviedir/$filename"));
-            my $ofilename = $filename;
-            my $remainder = $filename;
-            $filename = decode('UTF-8', $remainder, Encode::FB_QUIET);
-            if (length($remainder)) {
+        while( (my $ofilename = readdir($dh))) {
+            next if(($ofilename eq '.') || ($ofilename eq '..'));
+            next if(!(-s "$moviedir/$ofilename"));
+            my $filename = decode_UTF_8($ofilename) or do {
                 warn "$ofilename is not, UTF-8, skipping";
                 next;
-            }
+            };
             my $showname;
             my $withoutyear;
             my $year;
@@ -5499,12 +5504,10 @@ package MHFS::Plugin::Kodi {
                         $type = 'subtitle';
                     }
                     $type or next;
-                    my $remainder = $newitem;
-                    my $filename = decode('UTF-8', $remainder, Encode::FB_QUIET);
-                    if (length($remainder)) {
+                    my $filename = decode_UTF_8($newitem) or do {
                         warn "$newitem is not, UTF-8, skipping";
                         next;
-                    }
+                    };
                     -f "$path/$filename" or next;
                     push @videos, $filename if($type eq 'video');
                     push @subtitles, $filename if($type eq 'subtitle');
@@ -5582,15 +5585,12 @@ package MHFS::Plugin::Kodi {
 
         # locate the content
         if($request->{'path'}{'unsafepath'} ne $kodidir) {
-            my $fullmoviepath = substr($request->{'path'}{'unsafepath'}, length($kodidir)+1);
-            my $origfullmoviepath = $fullmoviepath;
-            my $remainder = $fullmoviepath;
-            $fullmoviepath = decode('UTF-8', $remainder, Encode::FB_QUIET);
-            if (length($remainder)) {
+            my $origfullmoviepath = substr($request->{'path'}{'unsafepath'}, length($kodidir)+1);
+            my $fullmoviepath = decode_UTF_8($origfullmoviepath) or do {
                 warn "$origfullmoviepath is not, UTF-8, 404";
                 $request->Send404;
                 return;
-            }
+            };
             say "fullmoviepath $fullmoviepath";
             my ($moviename, $editionname, $partname, $subfile, @showextra) = split('/', $fullmoviepath);
             say "moviename $moviename";
