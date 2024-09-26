@@ -2824,8 +2824,9 @@ package MHFS::Settings {
     use strict; use warnings;
     use feature 'say';
     use Scalar::Util qw(reftype);
+    use MIME::Base64 qw(encode_base64url);
     use File::Basename;
-    use Digest::MD5 qw(md5_hex);
+    use Digest::MD5 qw(md5);
     use Storable qw(freeze);
     use Cwd qw(abs_path);
     use File::ShareDir qw(dist_dir);
@@ -2926,7 +2927,7 @@ package MHFS::Settings {
             say "only local sources supported right now";
             return undef;
         }
-        return substr(md5_hex('local:'.$source->{folder}), 0, 8);
+        return encode_base64url(substr(md5('local:'.$source->{folder}), 0, 4));
     }
 
     sub load {
