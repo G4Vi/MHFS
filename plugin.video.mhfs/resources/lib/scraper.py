@@ -10,6 +10,7 @@ import sys
 import xbmc
 import requests
 import urllib.parse
+import os.path
 
 def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
@@ -84,27 +85,23 @@ class myAddon(t1mAddon):
       fanart = ''.join([self.MHFSBASE, 'metadata/movies/fanart/', urllib.parse.quote(moviename)])
       return infoList, thumb, fanart
 
-  def addMoviePart(self, displayname, ilist, moviename, movie, edition, partname = ''):
-      newurl = '/'.join(['movies', urllib.parse.quote(moviename), urllib.parse.quote(edition['src']), urllib.parse.quote(edition['name'])])
-      if partname:
-          newurl = '/'.join([newurl, urllib.parse.quote(partname)])
-          subs = edition['parts'][partname].get('subs', {})
-          if subs:
-              newurl = json.dumps({'url': newurl, 'subs': subs})
+  def addMoviePart(self, displayname, ilist, moviename, movie, edition, partname):
+      newurl = '/'.join(['movies', urllib.parse.quote(moviename), urllib.parse.quote(partname)])
+      subs = edition['parts'][partname].get('subs', {})
+      if subs:
+          newurl = json.dumps({'url': newurl, 'subs': subs})
       infoList, thumb, fanart = self.buildMovieMeta(displayname, moviename, movie)
       return self.addMenuItem(displayname,'GV', ilist, newurl, thumb=thumb, fanart=fanart, videoInfo=infoList, isFolder=False)
 
   def addMovieEdition(self, displayname, ilist, moviename, movie, edition):
-      if 'parts' in edition:
-          parts = edition['parts']
-          if len(parts) > 1:
-              newurl = json.dumps({'id': moviename, 'movie': movie, 'edition': edition})
-              infoList, thumb, fanart = self.buildMovieMeta(displayname, moviename, movie)
-              return self.addMenuItem(displayname,'GM', ilist, newurl, thumb=thumb, fanart=fanart, videoInfo=infoList)
-          else:
-              partname = list(parts.keys())[0]
-              return self.addMoviePart(displayname, ilist, moviename, movie, edition, partname)
-      return self.addMoviePart(displayname, ilist, moviename, movie, edition)
+      parts = edition['parts']
+      if len(parts) > 1:
+          newurl = json.dumps({'id': moviename, 'movie': movie, 'edition': edition})
+          infoList, thumb, fanart = self.buildMovieMeta(displayname, moviename, movie)
+          return self.addMenuItem(displayname,'GM', ilist, newurl, thumb=thumb, fanart=fanart, videoInfo=infoList)
+      else:
+          partname = list(parts.keys())[0]
+          return self.addMoviePart(displayname, ilist, moviename, movie, edition, partname)
 
   def getAddonMovies(self,url,ilist):
       if url.startswith('{'):
@@ -115,7 +112,7 @@ class myAddon(t1mAddon):
               # add movie parts
               edition = item['edition']
               for partname in sorted(edition['parts'].keys()):
-                  ilist = self.addMoviePart(partname, ilist, moviename, movie, edition, partname)
+                  ilist = self.addMoviePart(os.path.basename(partname), ilist, moviename, movie, edition, partname)
           else:
               # add movie editions
               editions = sorted(movie['editions'], key=lambda x: x['name'])

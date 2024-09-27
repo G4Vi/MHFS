@@ -5635,14 +5635,19 @@ package MHFS::Plugin::Kodi {
             $diritems = $movieitem;
         } else {
             # transform $diritems{movie}{sources}{source}{edition}{|part}
-            # to        $diritems{movie}{editions}{edition}{|parts}{part}
+            # to        $diritems{movie}{editions}{edition}{parts}{part}
             $diritems = {%$diritems};
             while (my ($moviename, $moovie) = each %{$diritems}) {
                 my @editions;
                 while (my ($sourcename, $source) = each %{$moovie->{sources}}) {
                     while (my ($editionname, $ediition) = each %{$source}) {
-                        my %edition = ( name => $editionname, src => $sourcename);
-                        $edition{parts} = $ediition if (%$ediition);
+                        my %parts;
+                        if (%$ediition) {
+                            %parts = map { ("$sourcename/$editionname/$_" => $ediition->{$_}) } keys %$ediition;
+                        } else {
+                            %parts = ( "$sourcename/$editionname" => {});
+                        }
+                        my %edition = ( name => $editionname, parts => \%parts);
                         push @editions, \%edition;
                     }
                 }
