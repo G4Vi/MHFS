@@ -5625,17 +5625,37 @@ package MHFS::Plugin::Kodi {
                 return;
             };
             say "fullmoviepath $fullmoviepath";
-            my ($moviename, $source, $editionname, $partname, $subfile, @showextra) = split('/', $fullmoviepath);
+            # match
+            # moviename
+            # moviename/source
+            # moviename/source/edition
+            # moviename/source/edition/.+\.ext    (partname)
+            # moviename/source/edition/.+\.ext/.+ (subtitle)
+            # /^([^\/]+)(?:$|\/(?:$|([^\/]+)(?:$|\/(?:$|(?:(.+\.(?:avi|mkv|mp4))(?:$|\/(?:(.+)?$))|([^\/]+)\/?$)))))/;
+            my ($moviename, $source, $editionpartname, $subfile, $editionname) = $fullmoviepath =~
+            /^([^\/]+)(?:$|\/                            # match moviename
+                (?:$|([^\/]+)(?:$|\/                     # match source
+                    (?:$|(?:(.+\.(?:avi|mkv|mp4))(?:$|\/ # match editionpartname
+                        (?:(.+)?$)                       # match subtitle
+                    )|
+                    ([^\/]+)\/?$)                        # match editionname if editionpartname falls through
+                    )
+                ))
+            )/x or do {
+                warn "failed to parse fullmoviepath";
+                $request->Send404;
+                return;
+            };
+            my $partname;
+            if ($editionpartname) {
+                ($editionname, $partname) = split('/', $editionpartname, 2);
+                say "editionpartname $editionpartname ed $editionname part $partname";
+            }
             say "moviename $moviename";
             say "source $source" if ($source);
             say "editionname $editionname" if ($editionname);
             say "partname $partname" if ($partname);
-            say 'showextra '.join('/', @showextra) if @showextra;
-            if (@showextra) {
-                warn "warn too many parts";
-                $request->Send404;
-                return;
-            }
+            say "subfile $subfile" if ($subfile);
             my $movieitem = $self->_search_movie_library($movies, $moviename, $source, $editionname, $partname, $subfile);
             if (!$movieitem) {
                 $request->Send404;
