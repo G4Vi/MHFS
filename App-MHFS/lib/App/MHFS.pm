@@ -5544,7 +5544,6 @@ package MHFS::Plugin::Kodi {
     # returns a hash if the found item is a 'directory'
     # returns a path if the found item is a file
     # returns undef on not found
-    # DOES NOT HANDLE partname with slashes
     sub _search_movie_library {
         my ($self, $movies, $moviename, $source, $editionname, $partname, $subfile) = @_;
         unless(exists $movies->{$moviename}) {
@@ -5552,7 +5551,12 @@ package MHFS::Plugin::Kodi {
             return undef;
         }
         $movies = $movies->{$moviename}{editions};
-        $source && $editionname or return format_editions($movies);
+        if (!$source) {
+            return {editions => $movies};
+        } elsif(!$editionname) {
+            my %editions = map { $_ =~ /^$source/ ? ($_ => $movies->{$_}) : () } keys %$movies;
+            return {editions => \%editions};
+        }
         unless(exists $movies->{"$source/$editionname"}) {
             warn "movie source not found";
             return undef;
@@ -5561,8 +5565,7 @@ package MHFS::Plugin::Kodi {
         my $moviedir = $self->{server}{settings}{SOURCES}{$source}{folder};
         my $origfilename = "$moviedir/$editionname";
         if (!$partname) {
-            %$movies or return $origfilename;
-            return format_edition($source, $editionname, $movies);
+            return {path => $origfilename, edition => {source => $source, editionname => $editionname, edition => $movies}};
         }
         unless(exists $movies->{$partname}) {
             warn "movie part not found";
@@ -5570,14 +5573,13 @@ package MHFS::Plugin::Kodi {
         }
         $movies = $movies->{$partname};
         if (!$subfile) {
-            return "$origfilename/$partname";
-            #return $movies;
+            return {path => "$origfilename/$partname", part => $movies};
         }
         unless(exists $movies->{subs} && exists $movies->{subs}{$subfile}) {
             warn "subtitle file not found";
             return undef;
         }
-        "$origfilename/$subfile"
+        return {path => "$origfilename/$subfile", subtitle => $movies->{subs}{$subfile}};
     }
 
     sub format_edition {
@@ -5592,6 +5594,9 @@ package MHFS::Plugin::Kodi {
         \%edition
     }
 
+
+    # transform $diritems{movie}{editions}{source/name}{|parts}
+    # to        $diritems{movie}{editions}[{name, parts}]
     sub format_editions {
         my ($ediitions) = @_;
         my @editions;
@@ -5661,18 +5666,25 @@ package MHFS::Plugin::Kodi {
                 $request->Send404;
                 return;
             }
-            unless (ref $movieitem) {
-                if (substr($request->{'path'}{'unescapepath'}, -1) eq '/') {
-                    $request->Send404;
-                    return;
+            if (substr($request->{'path'}{'unescapepath'}, -1) ne '/') {
+                if (!exists $movieitem->{path}) {
+                    $request->SendRedirect(301, substr($request->{'path'}{'unescapepath'}, rindex($request->{'path'}{'unescapepath'}, '/')+1).'/');
+                } else {
+                    $request->SendFile($movieitem->{path});
                 }
-                $request->SendFile($movieitem);
                 return;
+            } elsif (exists $movieitem->{editions}) {
+                $diritems = format_editions($movieitem->{editions});
+            } elsif (exists $movieitem->{edition}) {
+                $diritems = format_edition($movieitem->{edition}{source}, $movieitem->{edition}{editionname}, $movieitem->{edition}{edition});
+            } elsif  (exists $movieitem->{part}) {
+                $diritems = $movieitem->{part};
+            } elsif (exists $movieitem->{subtitle}) {
+                $diritems = $movieitem->{subtitle};
+            } else {
+                die "unreachable";
             }
-            $diritems = $movieitem;
         } else {
-            # transform $diritems{movie}{editions}{source/name}{|parts}
-            # to        $diritems{movie}{editions}[{name, parts}]
             $diritems = {%$diritems};
             while (my ($moviename, $moovie) = each %{$diritems}) {
                 my $editions = format_editions($moovie->{editions});
