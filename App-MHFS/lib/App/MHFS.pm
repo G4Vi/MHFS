@@ -2927,7 +2927,27 @@ package MHFS::Settings {
             say "only local sources supported right now";
             return undef;
         }
-        return encode_base64url(substr(md5('local:'.$source->{folder}), 0, 4));
+        return encode_base64url(md5('local:'.$source->{folder}));
+    }
+
+    sub add_source {
+        my ($sources, $source) = @_;
+        my $id = calc_source_id($source);
+        my $len = 6;
+        my $shortid = substr($id, 0, $len);
+        if (exists $sources->{$shortid}) {
+            my $oldid = calc_source_id($sources->{$shortid});
+            while(1) {
+                $len++;
+                substr($oldid, 0, $len) eq substr($id, 0, $len) or last;
+                length($id) > $len or die "matching hash";
+            }
+            $sources->{substr($oldid, 0, $len)} = $sources->{$shortid};
+            delete $sources->{$shortid};
+            $shortid = substr($id, 0, $len);
+        }
+        $sources->{$shortid} = $source;
+        return $shortid;
     }
 
     sub load {
@@ -3091,8 +3111,7 @@ package MHFS::Settings {
                     }
                     $tohash = {type => 'local',  folder => $source};
                 }
-                my $sid = calc_source_id($tohash);
-                $sources{$sid} = $tohash;
+                my $sid = add_source(\%sources, $tohash);
                 push @subsrcs, $sid;
             }
             $mediasources{$lib} = \@subsrcs;
@@ -3100,8 +3119,7 @@ package MHFS::Settings {
         $SETTINGS->{'MEDIASOURCES'} = \%mediasources;
 
         my $videotmpdirsrc = {type => 'local',  folder => $SETTINGS->{'VIDEO_TMPDIR'}};
-        my $vtempsrcid = calc_source_id($videotmpdirsrc);
-        $sources{$vtempsrcid} = $videotmpdirsrc;
+        my $vtempsrcid = add_source(\%sources, $videotmpdirsrc);
         $SETTINGS->{'VIDEO_TMPDIR_QS'} = 'sid='.$vtempsrcid;
         $SETTINGS->{'SOURCES'} = \%sources;
 
@@ -5464,16 +5482,28 @@ package MHFS::Plugin::Kodi {
                     $year = $2;
                     $withoutyear =~ s/\./ /g;
                 }
-                elsif($filename =~ /^(.+)(\.DVDRip)\.[a-zA-Z]{3,4}$/) {
+                elsif ($filename =~ /(.+)\s?\[(\d{4})\]/) {
+                    $showname = "$1 ($2)";
+                    $withoutyear = $1;
+                    $year = $2;
+                    $withoutyear =~ s/\./ /g;
+                }
+                elsif($filename =~ /^(.+)[\.\s](?i:DVDRip)[\.\s]./) {
+                    $showname = $1;
+                }
+                elsif($filename =~ /^(.+)[\.\s](?:DVD|RERIP|BRrip)/) {
+                    $showname = $1;
+                }
+                elsif($filename =~ /^(.+)\s\(PSP.+\)/) {
                     $showname = $1;
                 }
                 elsif($filename =~ /^(.+)\.VHS/) {
                     $showname = $1;
                 }
-                elsif($filename =~ /^(.+)[\.\s]+\d{3,4}p\.[a-zA-Z]{3,4}$/) {
+                elsif($filename =~ /^(.+)[\.\s]+\d{3,4}p\./) {
                     $showname = $1;
                 }
-                elsif($filename =~ /^(.+)\.[a-zA-Z]{3,4}$/) {
+                elsif($filename =~ /^(.+)\.[a-zA-Z\d]{3,4}$/) {
                     $showname = $1;
                 }
                 else{
@@ -5524,7 +5554,7 @@ package MHFS::Plugin::Kodi {
                         my ($withoutext) = $videofile =~ /^(.+)\.[^\.]+$/;
                         my %relevantsubs;
                         for my $i (reverse 0 .. $#subtitles) {
-                            if (rindex($subtitles[$i], $withoutext, 0) == 0) {
+                            if ($subtitles[$i] =~ /^\Q$withoutext\E/i) {
                                 $relevantsubs{splice(@subtitles, $i, 1)} = undef;
                             }
                         }
@@ -5532,6 +5562,7 @@ package MHFS::Plugin::Kodi {
                     }
                     if(@subtitles) {
                         warn "unmatched subtitle $_" foreach @subtitles;
+                        print Dumper(\%edition);
                     }
                 }
                 $movies{$showname}{editions}{"$source/$filename"} = \%edition;
