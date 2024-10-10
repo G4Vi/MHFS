@@ -5513,19 +5513,6 @@ package MHFS::Plugin::Kodi {
                 my $isdir = -d _;
                 $isdir || -f _ or next;
                 $isdir ||= 0;
-                if(! $movies{$showname}) {
-                    my %diritem;
-                    if(defined $year) {
-                        $diritem{name} = $withoutyear;
-                        $diritem{year} = $year;
-                    }
-                    my $plot = $self->{moviemeta}."/$showname/plot.txt";
-                    if(-f $plot) {
-                        my $plotcontents = MHFS::Util::read_file($plot);
-                        $diritem{plot} = $plotcontents;
-                    }
-                    $movies{$showname} = \%diritem;
-                }
                 my %edition = ();
                 if ($isdir) {
                     my $path = "$moviedir/$filename";
@@ -5535,7 +5522,7 @@ package MHFS::Plugin::Kodi {
                     while(my $newitem = readdir($dh)) {
                         next if(($newitem eq '.') || ($newitem eq '..'));
                         my $type;
-                        if ($newitem =~ /\.(?:avi|mkv|mp4)$/) {
+                        if ($newitem =~ /\.(?:avi|mkv|mp4|m4v)$/) {
                             $type = 'video' if ($newitem !~ /sample(?:\-[a-z]+)?\.(?:avi|mkv|mp4)$/);
                         } elsif ($newitem =~ /\.(?:srt|sub|idx)$/) {
                             $type = 'subtitle';
@@ -5560,12 +5547,30 @@ package MHFS::Plugin::Kodi {
                         }
                         $edition{$videofile} = scalar %relevantsubs ? {subs => \%relevantsubs} : {};
                     }
-                    if(@subtitles) {
+                    if(@videos && @subtitles) {
                         warn "unmatched subtitle $_" foreach @subtitles;
                         print Dumper(\%edition);
                     }
+                    if(! @videos){
+                        warn "not adding edition $filename, no videos found";
+                    }
                 }
-                $movies{$showname}{editions}{"$source/$filename"} = \%edition;
+                if (! $isdir || %edition) {
+                    if(! $movies{$showname}) {
+                        my %diritem;
+                        if(defined $year) {
+                            $diritem{name} = $withoutyear;
+                            $diritem{year} = $year;
+                        }
+                        my $plot = $self->{moviemeta}."/$showname/plot.txt";
+                        if(-f $plot) {
+                            my $plotcontents = MHFS::Util::read_file($plot);
+                            $diritem{plot} = $plotcontents;
+                        }
+                        $movies{$showname} = \%diritem;
+                    }
+                    $movies{$showname}{editions}{"$source/$filename"} = \%edition;
+                }
             }
             closedir($dh);
         }
@@ -5667,11 +5672,11 @@ package MHFS::Plugin::Kodi {
             # moviename/source/edition
             # moviename/source/edition/.+\.ext    (partname)
             # moviename/source/edition/.+\.ext/.+ (subtitle)
-            # /^([^\/]+)(?:$|\/(?:$|([^\/]+)(?:$|\/(?:$|(?:(.+\.(?:avi|mkv|mp4))(?:$|\/(?:(.+)?$))|([^\/]+)\/?$)))))/;
+            # /^([^\/]+)(?:$|\/(?:$|([^\/]+)(?:$|\/(?:$|(?:(.+\.(?:avi|mkv|mp4|m4v))(?:$|\/(?:(.+)?$))|([^\/]+)\/?$)))))/;
             my ($moviename, $source, $editionpartname, $subfile, $editionname) = $fullmoviepath =~
             /^([^\/]+)(?:$|\/                            # match moviename
                 (?:$|([^\/]+)(?:$|\/                     # match source
-                    (?:$|(?:(.+\.(?:avi|mkv|mp4))(?:$|\/ # match editionpartname
+                    (?:$|(?:(.+\.(?:avi|mkv|mp4|m4v))(?:$|\/ # match editionpartname
                         (?:(.+)?$)                       # match subtitle
                     )|
                     ([^\/]+)\/?$)                        # match editionname if editionpartname falls through
