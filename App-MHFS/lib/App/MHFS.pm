@@ -540,7 +540,8 @@ package MHFS::Util {
     use Cwd qw(abs_path getcwd);
     use Encode qw(decode encode);
     use URI::Escape qw(uri_escape);
-    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'shell_escape', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME', 'get_printable_utf8', 'small_url_encode', 'uri_escape_path', 'round', 'ceil_div', 'get_SI_size', 'decode_UTF_8');
+    use MIME::Base64 qw(encode_base64url decode_base64url);
+    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'shell_escape', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME', 'get_printable_utf8', 'small_url_encode', 'uri_escape_path', 'round', 'ceil_div', 'get_SI_size', 'decode_UTF_8', 'str_to_base64url', 'base64url_to_str');
     # single threaded locks
     sub LOCK_GET_LOCKDATA {
         my ($filename) = @_;
@@ -972,6 +973,18 @@ package MHFS::Util {
             return undef;
         }
         return $output;
+    }
+
+    sub str_to_base64url {
+        my ($str) = @_;
+        my $bstr = encode('UTF-8', $str, Encode::FB_DEFAULT);
+        encode_base64url($bstr)
+    }
+
+    sub base64url_to_str {
+        my ($base64url) = @_;
+        my $bstr = decode_base64url($base64url);
+        decode_UTF_8($bstr)
     }
 
     1;
@@ -5316,12 +5329,12 @@ package MHFS::Plugin::Kodi {
     use File::Basename qw(basename);
     use Cwd qw(abs_path);
     use URI::Escape qw(uri_escape);
-    use Encode qw(decode);
+    use Encode qw(decode encode);
     use File::Path qw(make_path);
     use Data::Dumper qw(Dumper);
     use Scalar::Util qw(weaken);
     use MIME::Base64 qw(encode_base64url decode_base64url);
-    MHFS::Util->import(qw(decode_UTF_8));
+    MHFS::Util->import(qw(decode_UTF_8 base64url_to_str str_to_base64url));
     BEGIN {
         if( ! (eval "use JSON; 1")) {
             eval "use JSON::PP; 1" or die "No implementation of JSON available";
@@ -5449,11 +5462,15 @@ package MHFS::Plugin::Kodi {
 
     sub readsubdir  {
         my ($subtitles, $source, $path) = @_;
-        opendir( my $dh, "$source$path" ) or return;
-        while(my $filename = readdir($dh)) {
-            next if(($filename eq '.') || ($filename eq '..'));
+        opendir( my $dh, "$source/$path" ) or return;
+        while(my $ofilename = readdir($dh)) {
+            next if(($ofilename eq '.') || ($ofilename eq '..'));
+            my $filename = decode_UTF_8($ofilename) or do {
+                warn "$ofilename is not, UTF-8, skipping";
+                next;
+            };
             my $filepath = "$path/$filename";
-            if(-f "$source$filepath" && $filename =~ /\.(?:srt|sub|idx)$/) {
+            if(-f "$source/$filepath" && $filename =~ /\.(?:srt|sub|idx)$/) {
                 push @$subtitles, $filepath;
                 next;
             } elsif (-d _) {
@@ -5518,9 +5535,9 @@ package MHFS::Plugin::Kodi {
                     $type or next;
                     if (-f "$path/$filename") {
                         push @videos, $filename if($type eq 'video');
-                        push @subtitles, "/$filename" if($type eq 'subtitle');
+                        push @subtitles, $filename if($type eq 'subtitle');
                     } elsif (-d _ && $type eq 'subtitledir') {
-                        push @subtitledirs, "/$filename";
+                        push @subtitledirs, $filename;
                     }
                 }
                 closedir($dh);
@@ -5653,31 +5670,34 @@ package MHFS::Plugin::Kodi {
             warn "subtitle file not found";
             return undef;
         }
-        return {path => "$origfilename$subfile", subtitle => $movies->{subs}{$subfile}};
+        return {path => "$origfilename/$subfile", subtitle => $movies->{subs}{$subfile}};
     }
 
     # kodi needs a non-encoded basename
     sub format_subs {
         my ($subs) = @_;
         my @subs = map {
-            my ($loc, $filename) = $_ =~ /^(.*\/)([^\/]+)$/;
-            $loc //= '';
-            encode_base64url($loc)."/$filename"
+            my ($loc, $filename) = $_ =~ /^(?:(.*)\/)?([^\/]+)$/;
+            $loc //= '.';
+            $loc = str_to_base64url($loc);
+            "$loc/$filename"
         } keys %$subs;
         \@subs
     }
 
     sub format_edition {
         my ($sourcename, $editionname, $ediition) = @_;
-        my $editionid = encode_base64url($editionname);
+        my $editionid = str_to_base64url($editionname);
         my @parts;
         if (%$ediition) {
             my @sortedkeys = sort {basename($a) cmp basename($b)} keys %$ediition;
-            @parts = map {{
-                path => "$sourcename/$editionid/".encode_base64url($_),
-                name => basename($_),
-                (subs => format_subs($ediition->{$_}{subs})) x exists $ediition->{$_}{subs},
-            }} @sortedkeys;
+            @parts = map {
+                {
+                    path => "$sourcename/$editionid/".str_to_base64url($_),
+                    name => basename($_),
+                    (subs => format_subs($ediition->{$_}{subs})) x exists $ediition->{$_}{subs},
+                }
+            } @sortedkeys;
         } else {
             @parts = ({ path => "$sourcename/$editionid", name => basename($editionname) });
         }
@@ -5719,25 +5739,39 @@ package MHFS::Plugin::Kodi {
                 return;
             };
             say "fullmoviepath $fullmoviepath";
-            my ($moviename, $source, $editionname, $partname, $subloc, $subname, $slurp) = split('/', $fullmoviepath, 7);
+            my ($moviename, $source, $b64_editionname, $b64_partname, $b64_subpath, $subname, $slurp) = split('/', $fullmoviepath, 7);
             if ($slurp) {
                 say "too many parts";
                 $request->Send404;
                 return;
             }
             say "moviename $moviename";
+            my $editionname;
+            my $partname;
             my $subfile;
             if ($source) {
                 say "source $source";
-                if ($editionname) {
-                    $editionname = decode_base64url($editionname);
+                if ($b64_editionname) {
+                    $editionname = base64url_to_str($b64_editionname) or do {
+                        warn "$b64_editionname does not decode to a valid string";
+                        $request->Send404;
+                        return;
+                    };
                     say "editionname $editionname";
-                    if ($partname) {
-                        $partname = decode_base64url($partname);
+                    if ($b64_partname) {
+                        $partname = base64url_to_str($b64_partname) or do {
+                            warn "$b64_partname does not decode to a valid string";;
+                            $request->Send404;
+                            return;
+                        };
                         say "partname $partname";
-                        if ($subloc && $subname) {
-                            $subloc = decode_base64url($subloc);
-                            $subfile = "$subloc$subname";
+                        if ($b64_subpath && $subname) {
+                            my $subpath = base64url_to_str($b64_subpath) or do {
+                                warn "$b64_subpath does not decode to a valid string";
+                                $request->Send404;
+                                return;
+                            };
+                            $subfile = $subpath ne '.' ? "$subpath/$subname" : $subname;
                             say "subfile $subfile";
                         }
                     }
