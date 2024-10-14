@@ -3124,6 +3124,14 @@ package MHFS::Settings {
                     }
                     $tohash = {type => 'local',  folder => $source};
                 }
+                if ($tohash->{type} eq 'local') {
+                    my $absfolder = abs_path($tohash->{folder});
+                    $absfolder // do {
+                        say __PACKAGE__.": skipping source $tohash->{folder} - abs_path failed";
+                        next;
+                    };
+                    $tohash->{folder} = $absfolder;
+                }
                 my $sid = add_source(\%sources, $tohash);
                 push @subsrcs, $sid;
             }
@@ -5460,93 +5468,89 @@ package MHFS::Plugin::Kodi {
         }
     }
 
-    sub readsubdir  {
-        my ($subtitles, $source, $path) = @_;
-        opendir( my $dh, "$source/$path" ) or return;
-        while(my $ofilename = readdir($dh)) {
-            next if(($ofilename eq '.') || ($ofilename eq '..'));
-            my $filename = decode_UTF_8($ofilename) or do {
-                warn "$ofilename is not, UTF-8, skipping";
+    sub readsubdir{
+        my ($subtitles, $source, $b_path) = @_;
+        opendir( my $dh, $b_path ) or return;
+        while(my $b_filename = readdir($dh)) {
+            next if(($b_filename eq '.') || ($b_filename eq '..'));
+            my $filename = decode_UTF_8($b_filename) or do {
+                warn "$b_filename is not, UTF-8, skipping";
                 next;
             };
-            my $filepath = "$path/$filename";
-            if(-f "$source/$filepath" && $filename =~ /\.(?:srt|sub|idx)$/) {
-                push @$subtitles, $filepath;
+            my $b_nextpath = "$b_path/$b_filename";
+            my $nextsource = "$source/$filename";
+            if(-f $b_nextpath && $filename =~ /\.(?:srt|sub|idx)$/) {
+                push @$subtitles, $nextsource;
                 next;
             } elsif (-d _) {
-                readsubdir($subtitles, $source, $filepath);
+                readsubdir($subtitles, $nextsource, $b_nextpath);
             }
         }
     }
 
     sub readmoviedir {
-        my ($self, $movies, $source, $moviedir_in) = @_;
-        my $moviedir = abs_path($moviedir_in);
-        if(! defined $moviedir) {
-            warn "abspath didn't find moviedir";
+        my ($self, $movies, $source, $b_moviedir) = @_;
+        opendir(my $dh, $b_moviedir ) or do {
+            warn "Error in opening dir $b_moviedir\n";
             return undef;
-        }
-        my $dh;
-        if(! opendir ( $dh, $moviedir )) {
-            warn "Error in opening dir $moviedir\n";
-            return undef;
-        }
-        while( (my $ofilename = readdir($dh))) {
-            next if(($ofilename eq '.') || ($ofilename eq '..'));
-            my $filename = decode_UTF_8($ofilename) or do {
-                warn "$ofilename is not, UTF-8, skipping";
+        };
+        while(my $b_edition = readdir($dh)) {
+            next if(($b_edition eq '.') || ($b_edition eq '..'));
+            my $edition = decode_UTF_8($b_edition) or do {
+                warn "$b_edition is not, UTF-8, skipping";
                 next;
             };
             # recurse on collections
-            if ($filename =~ /(?:Duology|Trilogy|Quadrilogy)/) {
-                $self->readmoviedir($movies, "$source/$ofilename", "$moviedir/$ofilename");
+            if ($edition =~ /(?:Duology|Trilogy|Quadrilogy)/) {
+                next if ($edition =~ /\.nfo$/);
+                $self->readmoviedir($movies, "$source/$edition", "$b_moviedir/$b_edition");
                 next;
             }
-            -s "$moviedir/$ofilename" or next;
+            -s "$b_moviedir/$b_edition" or next;
             my $isdir = -d _;
             $isdir || -f _ or next;
             $isdir ||= 0;
-            my %edition = ();
+            my %edition;
             if (!$isdir) {
-                if ($filename !~ /\.(?:avi|mkv|mp4|m4v)$/) {
-                    warn "Skipping $filename, not a movie file";
+                if ($edition !~ /\.(?:avi|mkv|mp4|m4v)$/) {
+                    warn "Skipping $edition, not a movie file" if ($edition !~ /\.(?:txt)$/);
                     next;
                 }
             } else {
-                my $path = "$moviedir/$filename";
+                my $b_path = "$b_moviedir/$b_edition";
                 my @videos;
                 my @subtitles;
                 my @subtitledirs;
-                opendir(my $dh, $path) or die('failed to open dir');
-                while(my $newitem = readdir($dh)) {
-                    next if(($newitem eq '.') || ($newitem eq '..'));
-                    my $filename = decode_UTF_8($newitem) or do {
-                        warn "$newitem is not, UTF-8, skipping";
+                opendir(my $dh, $b_path) or die('failed to open dir');
+                while(my $b_editionitem = readdir($dh)) {
+                    next if(($b_editionitem eq '.') || ($b_editionitem eq '..'));
+                    my $editionitem = decode_UTF_8($b_editionitem) or do {
+                        warn "$b_editionitem is not, UTF-8, skipping";
                         next;
                     };
                     my $type;
-                    if ($newitem =~ /\.(?:avi|mkv|mp4|m4v)$/) {
-                        $type = 'video' if ($newitem !~ /sample(?:\-[a-z]+)?\.(?:avi|mkv|mp4)$/);
-                    } elsif ($newitem =~ /\.(?:srt|sub|idx)$/) {
+                    if ($b_editionitem =~ /\.(?:avi|mkv|mp4|m4v)$/) {
+                        $type = 'video' if ($b_editionitem !~ /sample(?:\-[a-z]+)?\.(?:avi|mkv|mp4)$/);
+                    } elsif ($b_editionitem =~ /\.(?:srt|sub|idx)$/) {
                         $type = 'subtitle';
-                    } elsif ($newitem =~ /^Subs$/i) {
+                    } elsif ($b_editionitem =~ /^Subs$/i) {
                         $type = 'subtitledir';
                     }
                     $type or next;
-                    if (-f "$path/$filename") {
-                        push @videos, $filename if($type eq 'video');
-                        push @subtitles, $filename if($type eq 'subtitle');
+                    if (-f "$b_path/$editionitem") {
+                        push @videos, $editionitem if($type eq 'video');
+                        push @subtitles, $editionitem if($type eq 'subtitle');
                     } elsif (-d _ && $type eq 'subtitledir') {
-                        push @subtitledirs, $filename;
+                        push @subtitledirs, $editionitem;
                     }
                 }
                 closedir($dh);
                 if (!@videos) {
-                    warn "not adding edition $filename, no videos found";
+                    warn "not adding edition $edition, no videos found";
                     next;
                 }
                 foreach my $subdir (@subtitledirs) {
-                    readsubdir(\@subtitles, $path, $subdir);
+                    readsubdir(\@subtitles, $subdir, "$b_path/$subdir");
                 }
                 foreach my $videofile (@videos) {
                     my ($withoutext) = $videofile =~ /^(.+)\.[^\.]+$/;
@@ -5559,45 +5563,44 @@ package MHFS::Plugin::Kodi {
                     $edition{$videofile} = scalar %relevantsubs ? {subs => \%relevantsubs} : {};
                 }
                 if(@subtitles) {
-                    warn "unmatched subtitle $_" foreach @subtitles;
-                    print Dumper(\%edition);
+                    warn "$edition: unmatched subtitle $_" foreach @subtitles;
                 }
             }
             my $showname;
             my $withoutyear;
             my $year;
-            if($filename =~ /^(.+)[\.\s]+\(?(\d{4})([^p]|$)/) {
+            if($edition =~ /^(.+)[\.\s]+\(?(\d{4})([^p]|$)/) {
                 $showname = "$1 ($2)";
                 $withoutyear = $1;
                 $year = $2;
                 $withoutyear =~ s/\./ /g;
             }
-            elsif ($filename =~ /(.+)\s?\[(\d{4})\]/) {
+            elsif ($edition =~ /(.+)\s?\[(\d{4})\]/) {
                 $showname = "$1 ($2)";
                 $withoutyear = $1;
                 $year = $2;
                 $withoutyear =~ s/\./ /g;
             }
-            elsif($filename =~ /^(.+)[\.\s](?i:DVDRip)[\.\s]./) {
+            elsif($edition =~ /^(.+)[\.\s](?i:DVDRip)[\.\s]./) {
                 $showname = $1;
             }
-            elsif($filename =~ /^(.+)[\.\s](?:DVD|RERIP|BRrip)/) {
+            elsif($edition =~ /^(.+)[\.\s](?:DVD|RERIP|BRrip)/) {
                 $showname = $1;
             }
-            elsif($filename =~ /^(.+)\s\(PSP.+\)/) {
+            elsif($edition =~ /^(.+)\s\(PSP.+\)/) {
                 $showname = $1;
             }
-            elsif($filename =~ /^(.+)\.VHS/) {
+            elsif($edition =~ /^(.+)\.VHS/) {
                 $showname = $1;
             }
-            elsif($filename =~ /^(.+)[\.\s]+\d{3,4}p\./) {
+            elsif($edition =~ /^(.+)[\.\s]+\d{3,4}p\./) {
                 $showname = $1;
             }
-            elsif($filename =~ /^(.+)\.[a-zA-Z\d]{3,4}$/) {
+            elsif($edition =~ /^(.+)\.[a-zA-Z\d]{3,4}$/) {
                 $showname = $1;
             }
             else{
-                $showname = $filename;
+                $showname = $edition;
             }
             $showname =~ s/\./ /g;
             if(! $movies->{$showname}) {
@@ -5613,7 +5616,7 @@ package MHFS::Plugin::Kodi {
                 }
                 $movies->{$showname} = \%diritem;
             }
-            $movies->{$showname}{editions}{"$source/$filename"} = \%edition;
+            $movies->{$showname}{editions}{"$source/$edition"} = \%edition;
         }
         closedir($dh);
     }
@@ -5626,8 +5629,8 @@ package MHFS::Plugin::Kodi {
                 warn "skipping source $source, only local implemented";
                 next;
             }
-            my $moviedir_in = $self->{server}{settings}{SOURCES}{$source}{folder};
-            $self->readmoviedir(\%movies, $source, $moviedir_in);
+            my $b_moviedir = $self->{server}{settings}{SOURCES}{$source}{folder};
+            $self->readmoviedir(\%movies, $source, $b_moviedir);
         }
         \%movies
     }
@@ -5653,10 +5656,10 @@ package MHFS::Plugin::Kodi {
             return undef;
         }
         $movies = $movies->{"$source/$editionname"};
-        my $moviedir = $self->{server}{settings}{SOURCES}{$source}{folder};
-        my $origfilename = "$moviedir/$editionname";
+        my $b_moviedir = $self->{server}{settings}{SOURCES}{$source}{folder};
+        my $b_editiondir = "$b_moviedir/$editionname";
         if (!$partname) {
-            return {path => $origfilename, source => $source, editionname => $editionname, edition => $movies};
+            return {path => $b_editiondir, source => $source, editionname => $editionname, edition => $movies};
         }
         unless(exists $movies->{$partname}) {
             warn "movie part not found";
@@ -5664,13 +5667,13 @@ package MHFS::Plugin::Kodi {
         }
         $movies = $movies->{$partname};
         if (!$subfile) {
-            return {path => "$origfilename/$partname", part => $movies};
+            return {path => "$b_editiondir/$partname", part => $movies};
         }
         unless(exists $movies->{subs} && exists $movies->{subs}{$subfile}) {
             warn "subtitle file not found";
             return undef;
         }
-        return {path => "$origfilename/$subfile", subtitle => $movies->{subs}{$subfile}};
+        return {path => "$b_editiondir/$subfile", subtitle => $movies->{subs}{$subfile}};
     }
 
     # kodi needs a non-encoded basename
@@ -5720,7 +5723,12 @@ package MHFS::Plugin::Kodi {
     # format movies library for kodi http
     sub route_movies {
         my ($self, $request, $sources, $kodidir) = @_;
-        if(! exists $self->{movies} || $request->{path}{unsafepath} eq $kodidir) {
+        my $request_path = decode_UTF_8($request->{path}{unsafepath}) or do {
+            warn "$request->{path}{unsafepath} is not, UTF-8, 404";
+            $request->Send404;
+            return;
+        };
+        if(! exists $self->{movies} || $request_path eq $kodidir) {
             $self->{movies} = $self->_build_movie_library($sources);
         }
         my $movies = $self->{movies};
@@ -5730,14 +5738,9 @@ package MHFS::Plugin::Kodi {
         }
         my $diritems = $movies;
 
-        if($request->{'path'}{'unsafepath'} ne $kodidir) {
+        if($request_path ne $kodidir) {
             # locate the movie or metadata
-            my $origfullmoviepath = substr($request->{'path'}{'unsafepath'}, length($kodidir)+1);
-            my $fullmoviepath = decode_UTF_8($origfullmoviepath) or do {
-                warn "$origfullmoviepath is not, UTF-8, 404";
-                $request->Send404;
-                return;
-            };
+            my $fullmoviepath = substr($request_path, length($kodidir)+1);
             say "fullmoviepath $fullmoviepath";
             my ($moviename, $source, $b64_editionname, $b64_partname, $b64_subpath, $subname, $slurp) = split('/', $fullmoviepath, 7);
             if ($slurp) {
