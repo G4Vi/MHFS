@@ -541,7 +541,7 @@ package MHFS::Util {
     use Encode qw(decode encode);
     use URI::Escape qw(uri_escape);
     use MIME::Base64 qw(encode_base64url decode_base64url);
-    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'shell_escape', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME', 'get_printable_utf8', 'small_url_encode', 'uri_escape_path', 'round', 'ceil_div', 'get_SI_size', 'decode_UTF_8', 'str_to_base64url', 'base64url_to_str');
+    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'shell_escape', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME', 'get_printable_utf8', 'small_url_encode', 'uri_escape_path', 'round', 'ceil_div', 'get_SI_size', 'decode_UTF_8', 'encode_UTF_8', 'str_to_base64url', 'base64url_to_str');
     # single threaded locks
     sub LOCK_GET_LOCKDATA {
         my ($filename) = @_;
@@ -973,6 +973,15 @@ package MHFS::Util {
             return undef;
         }
         return $output;
+    }
+
+    sub encode_UTF_8 {
+        my ($input) = @_;
+        my $b_output = encode('UTF-8', $input, Encode::FB_QUIET);
+        if (length($input)) {
+            return undef;
+        }
+        $b_output
     }
 
     sub str_to_base64url {
@@ -5331,6 +5340,45 @@ M3U8END
     1;
 }
 
+package MHFS::Plugin::Kodi::MovieEditions {
+    use strict; use warnings;
+
+    sub TO_JSON {
+        my ($self) = @_;
+        MHFS::Plugin::Kodi::format_editions($self->{editions})
+    }
+    1;
+}
+
+package MHFS::Plugin::Kodi::MovieEdition {
+    use strict; use warnings;
+
+    sub TO_JSON {
+        my ($self) = @_;
+        MHFS::Plugin::Kodi::format_edition($self->{source}, $self->{editionname}, $self->{edition})
+    }
+    1;
+}
+
+package MHFS::Plugin::Kodi::MoviePart {
+    use strict; use warnings;
+
+    sub TO_JSON {
+        my ($self) = @_;
+        MHFS::Plugin::Kodi::format_part($self->{source}, $self->{editionname}, $self->{partname}, $self->{part});
+    }
+    1;
+}
+
+package MHFS::Plugin::Kodi::MovieSubtitle {
+    use strict; use warnings;
+    sub TO_JSON {
+        my ($self) = @_;
+        $self->{subtitle}
+    }
+    1;
+}
+
 package MHFS::Plugin::Kodi {
     use strict; use warnings;
     use feature 'say';
@@ -5342,7 +5390,7 @@ package MHFS::Plugin::Kodi {
     use Data::Dumper qw(Dumper);
     use Scalar::Util qw(weaken);
     use MIME::Base64 qw(encode_base64url decode_base64url);
-    MHFS::Util->import(qw(decode_UTF_8 base64url_to_str str_to_base64url));
+    MHFS::Util->import(qw(decode_UTF_8 encode_UTF_8 base64url_to_str str_to_base64url));
     BEGIN {
         if( ! (eval "use JSON; 1")) {
             eval "use JSON::PP; 1" or die "No implementation of JSON available";
@@ -5537,7 +5585,7 @@ package MHFS::Plugin::Kodi {
                         $type = 'subtitledir';
                     }
                     $type or next;
-                    if (-f "$b_path/$editionitem") {
+                    if (-f "$b_path/$b_editionitem") {
                         push @videos, $editionitem if($type eq 'video');
                         push @subtitles, $editionitem if($type eq 'subtitle');
                     } elsif (-d _ && $type eq 'subtitledir') {
@@ -5609,10 +5657,14 @@ package MHFS::Plugin::Kodi {
                     $diritem{name} = $withoutyear;
                     $diritem{year} = $year;
                 }
-                my $plot = $self->{moviemeta}."/$showname/plot.txt";
-                if(-f $plot) {
-                    my $plotcontents = MHFS::Util::read_file($plot);
-                    $diritem{plot} = $plotcontents;
+                if (my $b_showname = encode_UTF_8($showname)) {
+                    my $plot = $self->{moviemeta}."/$b_showname/plot.txt";
+                    if(-f $plot) {
+                        my $plotcontents = MHFS::Util::read_file($plot);
+                        $diritem{plot} = $plotcontents;
+                    }
+                } else {
+                    warn "$showname is not UTF-8, not reading plot";
                 }
                 $movies->{$showname} = \%diritem;
             }
@@ -5646,10 +5698,10 @@ package MHFS::Plugin::Kodi {
         }
         $movies = $movies->{$moviename}{editions};
         if (!$source) {
-            return {editions => $movies};
+            return bless {editions => $movies}, 'MHFS::Plugin::Kodi::MovieEditions';
         } elsif(!$editionname) {
             my %editions = map { $_ =~ /^$source/ ? ($_ => $movies->{$_}) : () } keys %$movies;
-            return {editions => \%editions};
+            return bless {editions => \%editions}, 'MHFS::Plugin::Kodi::MovieEditions';
         }
         unless(exists $movies->{"$source/$editionname"}) {
             warn "movie source not found";
@@ -5657,9 +5709,13 @@ package MHFS::Plugin::Kodi {
         }
         $movies = $movies->{"$source/$editionname"};
         my $b_moviedir = $self->{server}{settings}{SOURCES}{$source}{folder};
-        my $b_editiondir = "$b_moviedir/$editionname";
+        my $b_editionname = encode_UTF_8($editionname) or do {
+            warn "$editionname is not UTF-8";
+            return undef;
+        };
+        my $b_editiondir = "$b_moviedir/$b_editionname";
         if (!$partname) {
-            return {path => $b_editiondir, source => $source, editionname => $editionname, edition => $movies};
+            return bless {b_path => $b_editiondir, source => $source, editionname => $editionname, edition => $movies}, 'MHFS::Plugin::Kodi::MovieEdition';
         }
         unless(exists $movies->{$partname}) {
             warn "movie part not found";
@@ -5667,13 +5723,21 @@ package MHFS::Plugin::Kodi {
         }
         $movies = $movies->{$partname};
         if (!$subfile) {
-            return {path => "$b_editiondir/$partname", part => $movies};
+            my $b_partname = encode_UTF_8($partname) or do {
+                warn "$partname is not UTF-8";
+                return undef;
+            };
+            return bless {b_path => "$b_editiondir/$b_partname", source => $source, editionname => $editionname, partname => $partname, part => $movies}, 'MHFS::Plugin::Kodi::MoviePart';
         }
         unless(exists $movies->{subs} && exists $movies->{subs}{$subfile}) {
             warn "subtitle file not found";
             return undef;
         }
-        return {path => "$b_editiondir/$subfile", subtitle => $movies->{subs}{$subfile}};
+        my $b_subfile = encode_UTF_8($subfile) or do {
+            warn "$subfile is not UTF-8";
+            return undef;
+        };
+        return bless {b_path => "$b_editiondir/$b_subfile", subtitle => $movies->{subs}{$subfile}}, 'MHFS::Plugin::Kodi::MovieSubtitle';
     }
 
     # kodi needs a non-encoded basename
@@ -5688,6 +5752,24 @@ package MHFS::Plugin::Kodi {
         \@subs
     }
 
+    sub format_part_nested {
+        my ($path, $fullname, $paart) = @_;
+        my %part = (
+            path => "$path/".str_to_base64url($fullname),
+            name => basename($fullname)
+        );
+        if (exists $paart->{subs}) {
+            $part{subs} = format_subs($paart->{subs});
+        }
+        \%part
+    }
+
+    sub format_part {
+        my ($sourcename, $editionname, $partname, $paart) = @_;
+        my $path = "$sourcename/".str_to_base64url($editionname);
+        format_part_nested($path, $partname, $paart)
+    }
+
     sub format_edition {
         my ($sourcename, $editionname, $ediition) = @_;
         my $editionid = str_to_base64url($editionname);
@@ -5695,11 +5777,7 @@ package MHFS::Plugin::Kodi {
         if (%$ediition) {
             my @sortedkeys = sort {basename($a) cmp basename($b)} keys %$ediition;
             @parts = map {
-                {
-                    path => "$sourcename/$editionid/".str_to_base64url($_),
-                    name => basename($_),
-                    (subs => format_subs($ediition->{$_}{subs})) x exists $ediition->{$_}{subs},
-                }
+                format_part_nested("$sourcename/$editionid", $_, $ediition->{$_})
             } @sortedkeys;
         } else {
             @parts = ({ path => "$sourcename/$editionid", name => basename($editionname) });
@@ -5786,22 +5864,14 @@ package MHFS::Plugin::Kodi {
                 return;
             }
             if (substr($request->{'path'}{'unescapepath'}, -1) ne '/') {
-                if (!exists $movieitem->{path}) {
+                if (!exists $movieitem->{b_path}) {
                     $request->SendRedirect(301, substr($request->{'path'}{'unescapepath'}, rindex($request->{'path'}{'unescapepath'}, '/')+1).'/');
                 } else {
-                    $request->SendFile($movieitem->{path});
+                    $request->SendFile($movieitem->{b_path});
                 }
                 return;
-            } elsif (exists $movieitem->{editions}) {
-                $diritems = format_editions($movieitem->{editions});
-            } elsif (exists $movieitem->{edition}) {
-                $diritems = format_edition($movieitem->{source}, $movieitem->{editionname}, $movieitem->{edition});
-            } elsif  (exists $movieitem->{part}) {
-                $diritems = $movieitem->{part};
-            } elsif (exists $movieitem->{subtitle}) {
-                $diritems = $movieitem->{subtitle};
             } else {
-                die "unreachable";
+                $diritems = $movieitem->TO_JSON;
             }
         } else {
             $diritems = {%$diritems};
