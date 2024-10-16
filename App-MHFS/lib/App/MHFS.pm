@@ -5390,6 +5390,7 @@ package MHFS::Plugin::Kodi {
     use Data::Dumper qw(Dumper);
     use Scalar::Util qw(weaken);
     use MIME::Base64 qw(encode_base64url decode_base64url);
+    use Devel::Peek qw(Dump);
     MHFS::Util->import(qw(decode_UTF_8 encode_UTF_8 base64url_to_str str_to_base64url));
     BEGIN {
         if( ! (eval "use JSON; 1")) {
@@ -5564,6 +5565,7 @@ package MHFS::Plugin::Kodi {
                     warn "Skipping $edition, not a movie file" if ($edition !~ /\.(?:txt)$/);
                     next;
                 }
+                $edition{''} = {};
             } else {
                 my $b_path = "$b_moviedir/$b_edition";
                 my @videos;
@@ -5608,7 +5610,7 @@ package MHFS::Plugin::Kodi {
                             $relevantsubs{splice(@subtitles, $i, 1)} = undef;
                         }
                     }
-                    $edition{$videofile} = scalar %relevantsubs ? {subs => \%relevantsubs} : {};
+                    $edition{"/$videofile"} = scalar %relevantsubs ? {subs => \%relevantsubs} : {};
                 }
                 if(@subtitles) {
                     warn "$edition: unmatched subtitle $_" foreach @subtitles;
@@ -5714,7 +5716,7 @@ package MHFS::Plugin::Kodi {
             return undef;
         };
         my $b_editiondir = "$b_moviedir/$b_editionname";
-        if (!$partname) {
+        unless(defined $partname) {
             return bless {b_path => $b_editiondir, source => $source, editionname => $editionname, edition => $movies}, 'MHFS::Plugin::Kodi::MovieEdition';
         }
         unless(exists $movies->{$partname}) {
@@ -5723,11 +5725,11 @@ package MHFS::Plugin::Kodi {
         }
         $movies = $movies->{$partname};
         if (!$subfile) {
-            my $b_partname = encode_UTF_8($partname) or do {
+            my $b_partname = encode_UTF_8($partname) // do {
                 warn "$partname is not UTF-8";
                 return undef;
             };
-            return bless {b_path => "$b_editiondir/$b_partname", source => $source, editionname => $editionname, partname => $partname, part => $movies}, 'MHFS::Plugin::Kodi::MoviePart';
+            return bless {b_path => "$b_editiondir$b_partname", source => $source, editionname => $editionname, partname => $partname, part => $movies}, 'MHFS::Plugin::Kodi::MoviePart';
         }
         unless(exists $movies->{subs} && exists $movies->{subs}{$subfile}) {
             warn "subtitle file not found";
@@ -5744,19 +5746,19 @@ package MHFS::Plugin::Kodi {
     sub format_subs {
         my ($subs) = @_;
         my @subs = map {
-            my ($loc, $filename) = $_ =~ /^(?:(.*)\/)?([^\/]+)$/;
-            $loc //= '.';
+            my ($loc, $filename) = $_ =~ /^(.+\/|)([^\/]+)$/;
             $loc = str_to_base64url($loc);
-            "$loc/$filename"
+            "$loc-sb/$filename"
         } keys %$subs;
         \@subs
     }
 
     sub format_part_nested {
-        my ($path, $fullname, $paart) = @_;
+        my ($path, $editionname, $name, $paart) = @_;
+        my $b64_name = str_to_base64url($name);
         my %part = (
-            path => "$path/".str_to_base64url($fullname),
-            name => basename($fullname)
+            path => "$path/$b64_name-pt",
+            name => basename("$editionname$name")
         );
         if (exists $paart->{subs}) {
             $part{subs} = format_subs($paart->{subs});
@@ -5767,21 +5769,16 @@ package MHFS::Plugin::Kodi {
     sub format_part {
         my ($sourcename, $editionname, $partname, $paart) = @_;
         my $path = "$sourcename/".str_to_base64url($editionname);
-        format_part_nested($path, $partname, $paart)
+        format_part_nested($path, $editionname, $partname, $paart)
     }
 
     sub format_edition {
         my ($sourcename, $editionname, $ediition) = @_;
-        my $editionid = str_to_base64url($editionname);
-        my @parts;
-        if (%$ediition) {
-            my @sortedkeys = sort {basename($a) cmp basename($b)} keys %$ediition;
-            @parts = map {
-                format_part_nested("$sourcename/$editionid", $_, $ediition->{$_})
-            } @sortedkeys;
-        } else {
-            @parts = ({ path => "$sourcename/$editionid", name => basename($editionname) });
-        }
+        my $editionid = "$sourcename/".str_to_base64url($editionname);
+        my @sortedkeys = sort {basename($a) cmp basename($b)} keys %$ediition;
+        my @parts = map {
+            format_part_nested($editionid, $editionname, $_, $ediition->{$_})
+        } @sortedkeys;
         my %edition = ( name => basename($editionname), parts => \@parts);
         \%edition
     }
@@ -5796,6 +5793,18 @@ package MHFS::Plugin::Kodi {
             format_edition($sourcename, $editionname, $ediitions->{$_})
         } @sortedkeys;
         \@editions
+    }
+
+    sub format_movies {
+        my ($moovies) = @_;
+        my @sortedkeys = sort {basename($a) cmp basename($b)} keys %$moovies;
+        my @movies = map {
+            my %movie = %{$moovies->{$_}};
+            $movie{id} = $_;
+            $movie{editions} = format_editions($movie{editions});
+            \%movie
+        } @sortedkeys;
+        {movies => \@movies}
     }
 
     # format movies library for kodi http
@@ -5840,19 +5849,31 @@ package MHFS::Plugin::Kodi {
                     };
                     say "editionname $editionname";
                     if ($b64_partname) {
-                        $partname = base64url_to_str($b64_partname) or do {
+                        if (length($b64_partname) < 3) {
+                            warn "$b64_partname has invalid format";
+                            $request->Send404;
+                            return;
+                        }
+                        $b64_partname = substr($b64_partname, 0, -3);
+                        $partname = base64url_to_str($b64_partname) // do {
                             warn "$b64_partname does not decode to a valid string";;
                             $request->Send404;
                             return;
                         };
                         say "partname $partname";
                         if ($b64_subpath && $subname) {
-                            my $subpath = base64url_to_str($b64_subpath) or do {
+                            if (length($b64_subpath) < 3) {
+                                warn "$b64_subpath has invalid format";
+                                $request->Send404;
+                                return;
+                            }
+                            $b64_subpath = substr($b64_subpath, 0, -3);
+                            my $subpath = base64url_to_str($b64_subpath) // do {
                                 warn "$b64_subpath does not decode to a valid string";
                                 $request->Send404;
                                 return;
                             };
-                            $subfile = $subpath ne '.' ? "$subpath/$subname" : $subname;
+                            $subfile = "$subpath$subname";
                             say "subfile $subfile";
                         }
                     }
@@ -5874,12 +5895,7 @@ package MHFS::Plugin::Kodi {
                 $diritems = $movieitem->TO_JSON;
             }
         } else {
-            $diritems = {%$diritems};
-            while (my ($moviename, $moovie) = each %{$diritems}) {
-                my $editions = format_editions($moovie->{editions});
-                my %movie = (%$moovie, editions => $editions);
-                $diritems->{$moviename} = \%movie;
-            }
+            $diritems = format_movies($diritems);
             if (!defined $request->{qs}{fmt} || $request->{qs}{fmt} eq 'html') {
                 foreach (values %$diritems) {
                     $_->{isdir} = 1;

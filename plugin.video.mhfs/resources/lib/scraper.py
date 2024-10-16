@@ -74,60 +74,58 @@ class myAddon(t1mAddon):
               ilist = self.addMenuItem(name,'GV', ilist, newurl, videoInfo=infoList, isFolder=False)
       return(ilist)
 
-  def buildMovieMeta(self, displayname, moviename, movie):
+  def buildMovieMeta(self, displayname, movie):
       infoList = {'mediatype':'movie', 'Title': displayname}
       if 'year' in movie:
           infoList['Year'] = movie['year']
       if 'plot' in movie:
           infoList['Plot'] = movie['plot']
-      thumb = ''.join([self.MHFSBASE, 'metadata/movies/thumb/', urllib.parse.quote(moviename)])
-      fanart = ''.join([self.MHFSBASE, 'metadata/movies/fanart/', urllib.parse.quote(moviename)])
+      thumb = ''.join([self.MHFSBASE, 'metadata/movies/thumb/', urllib.parse.quote(movie['id'])])
+      fanart = ''.join([self.MHFSBASE, 'metadata/movies/fanart/', urllib.parse.quote(movie['id'])])
       return infoList, thumb, fanart
 
-  def addMoviePart(self, displayname, ilist, moviename, movie, part):
-      newurl = '/'.join(['movies', urllib.parse.quote(moviename), urllib.parse.quote(part['path'])])
+  def addMoviePart(self, displayname, ilist, movie, part):
+      newurl = '/'.join(['movies', urllib.parse.quote(movie['id']), urllib.parse.quote(part['path'])])
       subs = part.get('subs', {})
       if subs:
           newurl = json.dumps({'url': newurl, 'subs': subs})
-      infoList, thumb, fanart = self.buildMovieMeta(displayname, moviename, movie)
+      infoList, thumb, fanart = self.buildMovieMeta(displayname, movie)
       return self.addMenuItem(displayname,'GV', ilist, newurl, thumb=thumb, fanart=fanart, videoInfo=infoList, isFolder=False)
 
-  def addMovieEdition(self, displayname, ilist, moviename, movie, edition):
+  def addMovieEdition(self, displayname, ilist, movie, edition):
       parts = edition['parts']
       if len(parts) > 1:
-          newurl = json.dumps({'id': moviename, 'movie': movie, 'edition': edition})
-          infoList, thumb, fanart = self.buildMovieMeta(displayname, moviename, movie)
+          newurl = json.dumps({'movie': movie, 'edition': edition})
+          infoList, thumb, fanart = self.buildMovieMeta(displayname, movie)
           return self.addMenuItem(displayname,'GM', ilist, newurl, thumb=thumb, fanart=fanart, videoInfo=infoList)
       else:
-          return self.addMoviePart(displayname, ilist, moviename, movie, parts[0])
+          return self.addMoviePart(displayname, ilist, movie, parts[0])
 
   def getAddonMovies(self,url,ilist):
       if url.startswith('{'):
           item = json.loads(url)
-          moviename = item['id']
           movie = item['movie']
           if 'edition' in item:
               # add movie parts
               edition = item['edition']
               for part in edition['parts']:
-                  ilist = self.addMoviePart(part['name'], ilist, moviename, movie, part)
+                  ilist = self.addMoviePart(part['name'], ilist, movie, part)
           else:
               # add movie editions
               for edition in movie['editions']:
-                  ilist = self.addMovieEdition(edition['name'], ilist, moviename, movie, edition)
+                  ilist = self.addMovieEdition(edition['name'], ilist, movie, edition)
       elif url == 'movies':
           # add movies
           fullurl = ''.join([self.MHFSBASE,url,'/?fmt=json'])
           encoded = requests.get(fullurl, headers=self.defaultHeaders).text
-          movies = json.loads(encoded)
-          for moviename in sorted(movies.keys()):
-              movie = movies[moviename]
-              displayname = movie.get('name', moviename)
+          movies = json.loads(encoded)['movies']
+          for movie in movies:
+              displayname = movie.get('name', movie['id'])
               if len(movie['editions']) == 1:
-                  ilist = self.addMovieEdition(displayname, ilist, moviename, movie, movie['editions'][0])
+                  ilist = self.addMovieEdition(displayname, ilist, movie, movie['editions'][0])
               else:
-                  newurl = json.dumps({'id': moviename, 'movie': movie})
-                  infoList, thumb, fanart = self.buildMovieMeta(displayname, moviename, movie)
+                  newurl = json.dumps({'movie': movie})
+                  infoList, thumb, fanart = self.buildMovieMeta(displayname, movie)
                   ilist = self.addMenuItem(displayname,'GM', ilist, newurl, thumb=thumb, fanart=fanart, videoInfo=infoList)
       return(ilist)
 
