@@ -84,8 +84,8 @@ class myAddon(t1mAddon):
       fanart = ''.join([self.MHFSBASE, 'metadata/movies/fanart/', urllib.parse.quote(movie['id'])])
       return infoList, thumb, fanart
 
-  def addMoviePart(self, displayname, ilist, movie, part):
-      newurl = '/'.join(['movies', urllib.parse.quote(movie['id']), urllib.parse.quote(part['path'])])
+  def addMoviePart(self, displayname, ilist, movie, edition, part):
+      newurl = '/'.join(['movies', urllib.parse.quote(movie['id']), urllib.parse.quote(edition['id']), urllib.parse.quote(part['id'])])
       subs = part.get('subs', {})
       if subs:
           newurl = json.dumps({'url': newurl, 'subs': subs})
@@ -99,7 +99,7 @@ class myAddon(t1mAddon):
           infoList, thumb, fanart = self.buildMovieMeta(displayname, movie)
           return self.addMenuItem(displayname,'GM', ilist, newurl, thumb=thumb, fanart=fanart, videoInfo=infoList)
       else:
-          return self.addMoviePart(displayname, ilist, movie, parts[0])
+          return self.addMoviePart(displayname, ilist, movie, edition, parts[0])
 
   def getAddonMovies(self,url,ilist):
       if url.startswith('{'):
@@ -109,7 +109,7 @@ class myAddon(t1mAddon):
               # add movie parts
               edition = item['edition']
               for part in edition['parts']:
-                  ilist = self.addMoviePart(part['name'], ilist, movie, part)
+                  ilist = self.addMoviePart(part['name'], ilist, movie, edition, part)
           else:
               # add movie editions
               for edition in movie['editions']:
