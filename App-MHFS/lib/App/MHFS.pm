@@ -5340,13 +5340,23 @@ M3U8END
     1;
 }
 
+package MHFS::Plugin::Kodi::Movies {
+    use strict; use warnings;
+
+    sub TO_JSON {
+        my ($self) = @_;
+        {movies => MHFS::Plugin::Kodi::_format_movies($self->{movies})}
+    }
+    1;
+}
+
 package MHFS::Plugin::Kodi::Movie {
     use strict; use warnings;
 
     sub TO_JSON {
         my ($self) = @_;
         my %movie = %{$self->{movie}};
-        $movie{editions} = MHFS::Plugin::Kodi::format_editions($movie{editions});
+        $movie{editions} = MHFS::Plugin::Kodi::_format_movie_editions($movie{editions});
         {movie => \%movie}
     }
     1;
@@ -5357,7 +5367,7 @@ package MHFS::Plugin::Kodi::MovieEditions {
 
     sub TO_JSON {
         my ($self) = @_;
-        {editions => MHFS::Plugin::Kodi::format_editions($self->{editions})}
+        {editions => MHFS::Plugin::Kodi::_format_movie_editions($self->{editions})}
     }
     1;
 }
@@ -5367,7 +5377,7 @@ package MHFS::Plugin::Kodi::MovieEdition {
 
     sub TO_JSON {
         my ($self) = @_;
-        {edition => MHFS::Plugin::Kodi::format_edition($self->{source}, $self->{editionname}, $self->{edition})}
+        {edition => MHFS::Plugin::Kodi::_format_movie_edition($self->{source}, $self->{editionname}, $self->{edition})}
     }
     1;
 }
@@ -5377,7 +5387,7 @@ package MHFS::Plugin::Kodi::MoviePart {
 
     sub TO_JSON {
         my ($self) = @_;
-        {part => MHFS::Plugin::Kodi::format_part($self->{editionname}, $self->{partname}, $self->{part})}
+        {part => MHFS::Plugin::Kodi::_format_movie_part($self->{editionname}, $self->{partname}, $self->{part})}
     }
     1;
 }
@@ -5573,7 +5583,7 @@ package MHFS::Plugin::Kodi {
             $isdir ||= 0;
             my %edition;
             if (!$isdir) {
-                if ($edition !~ /\.(?:avi|mkv|mp4|m4v)$/) {
+                if ($edition !~ /\.(?:avi|mkv|mp4|m4v|rar)$/) {
                     warn "Skipping $edition, not a movie file" if ($edition !~ /\.(?:txt)$/);
                     next;
                 }
@@ -5591,7 +5601,7 @@ package MHFS::Plugin::Kodi {
                         next;
                     };
                     my $type;
-                    if ($b_editionitem =~ /\.(?:avi|mkv|mp4|m4v)$/) {
+                    if ($b_editionitem =~ /\.(?:avi|mkv|mp4|m4v|rar)$/) {
                         $type = 'video' if ($b_editionitem !~ /sample(?:\-[a-z]+)?\.(?:avi|mkv|mp4)$/);
                     } elsif ($b_editionitem =~ /\.(?:srt|sub|idx)$/) {
                         $type = 'subtitle';
@@ -5754,10 +5764,10 @@ package MHFS::Plugin::Kodi {
         return bless {b_path => "$b_editiondir/$b_subfile", subtitle => $subfile}, 'MHFS::Plugin::Kodi::MovieSubtitle';
     }
 
-    # kodi needs a non-encoded basename
-    sub format_subs {
+    sub _format_movie_subs {
         my ($subs) = @_;
         my @subs = map {
+            # kodi needs a basename with a parsable extension
             my ($loc, $filename) = $_ =~ /^(.+\/|)([^\/]+)$/;
             $loc = str_to_base64url($loc);
             "$loc-sb/$filename"
@@ -5765,7 +5775,7 @@ package MHFS::Plugin::Kodi {
         \@subs
     }
 
-    sub format_part_nested {
+    sub _format_movie_part {
         my ($editionname, $name, $paart) = @_;
         my $b64_name = str_to_base64url($name);
         my %part = (
@@ -5773,21 +5783,16 @@ package MHFS::Plugin::Kodi {
             name => basename("$editionname$name")
         );
         if (exists $paart->{subs}) {
-            $part{subs} = format_subs($paart->{subs});
+            $part{subs} = _format_movie_subs($paart->{subs});
         }
         \%part
     }
 
-    sub format_part {
-        my ($editionname, $partname, $paart) = @_;
-        format_part_nested($editionname, $partname, $paart)
-    }
-
-    sub format_edition {
+    sub _format_movie_edition {
         my ($sourcename, $editionname, $ediition) = @_;
         my @sortedkeys = sort {basename($a) cmp basename($b)} keys %$ediition;
         my @parts = map {
-            format_part_nested($editionname, $_, $ediition->{$_})
+            _format_movie_part($editionname, $_, $ediition->{$_})
         } @sortedkeys;
         my $editionid = "$sourcename/".str_to_base64url($editionname);
         my %edition = ( id => $editionid, name => basename($editionname), parts => \@parts);
@@ -5796,26 +5801,33 @@ package MHFS::Plugin::Kodi {
 
     # transform $diritems{movie}{editions}{source/name}{|parts}
     # to        $diritems{movie}{editions}[{name, parts}]
-    sub format_editions {
+    sub _format_movie_editions {
         my ($ediitions) = @_;
         my @sortedkeys = sort {basename($a) cmp basename($b)} keys %$ediitions;
         my @editions = map {
             my ($sourcename, $editionname) = split('/', $_, 2);
-            format_edition($sourcename, $editionname, $ediitions->{$_})
+            _format_movie_edition($sourcename, $editionname, $ediitions->{$_})
         } @sortedkeys;
         \@editions
     }
 
-    sub format_movies {
+    sub _format_movies {
         my ($moovies) = @_;
         my @sortedkeys = sort {basename($a) cmp basename($b)} keys %$moovies;
         my @movies = map {
             my %movie = %{$moovies->{$_}};
             $movie{id} = $_;
-            $movie{editions} = format_editions($movie{editions});
+            $movie{editions} = _format_movie_editions($movie{editions});
             \%movie
         } @sortedkeys;
-        {movies => \@movies}
+        \@movies
+    }
+
+    sub _add_html_item {
+        my ($buf, $item, $isdir) = @_;
+        my $url = uri_escape($item);
+        $url .= '/?fmt=html' if($isdir);
+        $$buf .= '<a href="' . $url .'">'. ${MHFS::Util::escape_html_noquote($item)} .'</a><br><br>';
     }
 
     # format movies library for kodi http
@@ -5826,6 +5838,7 @@ package MHFS::Plugin::Kodi {
             $request->Send404;
             return;
         };
+        # build the movie library
         if(! exists $self->{movies} || $request_path eq $kodidir) {
             $self->{movies} = $self->_build_movie_library($sources);
         }
@@ -5834,10 +5847,9 @@ package MHFS::Plugin::Kodi {
             $request->Send404;
             return;
         }
-        my $diritems = $movies;
-
+        # find the movie item
+        my $movieitem;
         if($request_path ne $kodidir) {
-            # locate the movie or metadata
             my $fullmoviepath = substr($request_path, length($kodidir)+1);
             say "fullmoviepath $fullmoviepath";
             my ($movieid, $source, $b64_editionname, $b64_partname, $b64_subpath, $subname, $slurp) = split('/', $fullmoviepath, 7);
@@ -5890,43 +5902,29 @@ package MHFS::Plugin::Kodi {
                     }
                 }
             }
-            my $movieitem = $self->_search_movie_library($movies, $movieid, $source, $editionname, $partname, $subfile);
+            $movieitem = $self->_search_movie_library($movies, $movieid, $source, $editionname, $partname, $subfile);
             if (!$movieitem) {
                 $request->Send404;
                 return;
             }
-            if (substr($request->{'path'}{'unescapepath'}, -1) ne '/') {
-                if (!exists $movieitem->{b_path}) {
-                    $request->SendRedirect(301, substr($request->{'path'}{'unescapepath'}, rindex($request->{'path'}{'unescapepath'}, '/')+1).'/');
-                } else {
-                    $request->SendFile($movieitem->{b_path});
-                }
-                return;
-            } else {
-                $diritems = $movieitem->TO_JSON;
-            }
         } else {
-            $diritems = format_movies($diritems);
-            if (!defined $request->{qs}{fmt} || $request->{qs}{fmt} eq 'html') {
-                foreach (values %$diritems) {
-                    $_->{isdir} = 1;
-                }
-            }
+            $movieitem = bless {movies => $movies}, 'MHFS::Plugin::Kodi::Movies';
         }
-
-        # redirect if the slash wasn't there
-        if(index($request->{'path'}{'unescapepath'}, '/', length($request->{'path'}{'unescapepath'})-1) == -1) {
-            $request->SendRedirect(301, substr($request->{'path'}{'unescapepath'}, rindex($request->{'path'}{'unescapepath'}, '/')+1).'/');
+        if (substr($request->{'path'}{'unescapepath'}, -1) ne '/') {
+            # redirect if we aren't accessing a file
+            if (!exists $movieitem->{b_path}) {
+                $request->SendRedirect(301, substr($request->{'path'}{'unescapepath'}, rindex($request->{'path'}{'unescapepath'}, '/')+1).'/');
+            } else {
+                $request->SendFile($movieitem->{b_path});
+            }
             return;
         }
-
-        # generate the directory html
-        if(!defined $request->{qs}{fmt} || $request->{qs}{fmt} eq 'html') {
+        # render
+        my $diritems = $movieitem->TO_JSON;
+        if(exists $request->{qs}{fmt} && $request->{qs}{fmt} eq 'html') {
             my $buf = '';
-            while(my ($showname, $show) = each %$diritems) {
-                my $url = uri_escape($showname);
-                $url .= '/' if($show->{'isdir'});
-                $buf .= '<a href="' . $url .'">'. ${MHFS::Util::escape_html_noquote($showname)} .'</a><br><br>';
+            foreach my $show (@{$diritems->{movies}}) {
+                _add_html_item(\$buf, $show->{id}, 1);
             }
             $request->SendHTML($buf);
         } else {

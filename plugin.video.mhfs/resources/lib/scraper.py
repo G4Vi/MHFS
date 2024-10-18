@@ -85,6 +85,8 @@ class myAddon(t1mAddon):
       return infoList, thumb, fanart
 
   def addMoviePart(self, displayname, ilist, movie, edition, part):
+      if part['name'].endswith('.rar'):
+          return ilist
       newurl = '/'.join(['movies', urllib.parse.quote(movie['id']), urllib.parse.quote(edition['id']), urllib.parse.quote(part['id'])])
       subs = part.get('subs', {})
       if subs:
@@ -94,6 +96,9 @@ class myAddon(t1mAddon):
 
   def addMovieEdition(self, displayname, ilist, movie, edition):
       parts = edition['parts']
+      parts = [part for part in parts if not part['name'].endswith('.rar')]
+      if len(parts) == 0:
+          return ilist
       if len(parts) > 1:
           newurl = json.dumps({'movie': movie, 'edition': edition})
           infoList, thumb, fanart = self.buildMovieMeta(displayname, movie)
