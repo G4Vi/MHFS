@@ -539,9 +539,9 @@ package MHFS::Util {
     use POSIX ();
     use Cwd qw(abs_path getcwd);
     use Encode qw(decode encode);
-    use URI::Escape qw(uri_escape);
+    use URI::Escape qw(uri_escape uri_escape_utf8);
     use MIME::Base64 qw(encode_base64url decode_base64url);
-    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'shell_escape', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME', 'get_printable_utf8', 'small_url_encode', 'uri_escape_path', 'round', 'ceil_div', 'get_SI_size', 'decode_UTF_8', 'encode_UTF_8', 'str_to_base64url', 'base64url_to_str');
+    our @EXPORT = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'function_exists', 'shell_escape', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME', 'get_printable_utf8', 'small_url_encode', 'uri_escape_path', 'uri_escape_path_utf8', 'round', 'ceil_div', 'get_SI_size', 'decode_UTF_8', 'encode_UTF_8', 'str_to_base64url', 'base64url_to_str');
     # single threaded locks
     sub LOCK_GET_LOCKDATA {
         my ($filename) = @_;
@@ -941,10 +941,13 @@ package MHFS::Util {
     }
 
     sub uri_escape_path {
+        my ($b_path) = @_;
+        uri_escape($b_path, qr/[^A-Za-z0-9\-\._~\/]/)
+    }
+
+    sub uri_escape_path_utf8 {
         my ($path) = @_;
-        my @components = split('/', $path);
-        my @encodedcomponents = map(uri_escape($_), @components);
-        return join('/', @encodedcomponents);
+        uri_escape_utf8($path, qr/[^A-Za-z0-9\-\._~\/]/)
     }
 
     sub round {
@@ -5347,6 +5350,17 @@ package MHFS::Plugin::Kodi::Movies {
         my ($self) = @_;
         {movies => MHFS::Plugin::Kodi::_format_movies($self->{movies})}
     }
+
+    sub TO_HTML {
+        my ($self) = @_;
+        my $movies = $self->TO_JSON()->{movies};
+        my $buf = '<style>ul{list-style: none;} li{margin: 10px 0;}</style><ul>';
+        foreach my $movie (@$movies) {
+            $buf .= MHFS::Plugin::Kodi::_html_list_item($movie->{id}, 1);
+        }
+        $buf .= '</ul>';
+        $buf
+    }
     1;
 }
 
@@ -5359,6 +5373,17 @@ package MHFS::Plugin::Kodi::Movie {
         $movie{editions} = MHFS::Plugin::Kodi::_format_movie_editions($movie{editions});
         {movie => \%movie}
     }
+
+    sub TO_HTML {
+        my ($self) = @_;
+        my $editions = $self->TO_JSON()->{movie}{editions};
+        my $buf = '<style>ul{list-style: none;} li{margin: 10px 0;}</style><ul>';
+        foreach my $edition (@$editions) {
+            $buf .= MHFS::Plugin::Kodi::_html_list_item($edition->{id}, 1, $edition->{name});
+        }
+        $buf .= '</ul>';
+        $buf
+    }
     1;
 }
 
@@ -5368,6 +5393,17 @@ package MHFS::Plugin::Kodi::MovieEditions {
     sub TO_JSON {
         my ($self) = @_;
         {editions => MHFS::Plugin::Kodi::_format_movie_editions($self->{editions})}
+    }
+
+    sub TO_HTML {
+        my ($self) = @_;
+        my $editions = $self->TO_JSON()->{editions};
+        my $buf = '<style>ul{list-style: none;} li{margin: 10px 0;}</style><ul>';
+        foreach my $edition (@$editions) {
+            $buf .= MHFS::Plugin::Kodi::_html_list_item("../".$edition->{id}, 1, $edition->{name});
+        }
+        $buf .= '</ul>';
+        $buf
     }
     1;
 }
@@ -5379,24 +5415,58 @@ package MHFS::Plugin::Kodi::MovieEdition {
         my ($self) = @_;
         {edition => MHFS::Plugin::Kodi::_format_movie_edition($self->{source}, $self->{editionname}, $self->{edition})}
     }
+
+    sub TO_HTML {
+        my ($self) = @_;
+        my $parts = $self->TO_JSON()->{edition}{parts};
+        my $buf = '<style>ul{list-style: none;} li{margin: 10px 0;}</style><ul>';
+        foreach my $part (@$parts) {
+            $buf .= MHFS::Plugin::Kodi::_html_list_item($part->{id}, 1, $part->{name});
+        }
+        $buf .= '</ul>';
+        $buf
+    }
     1;
 }
 
 package MHFS::Plugin::Kodi::MoviePart {
     use strict; use warnings;
+    use File::Basename qw(basename);
 
     sub TO_JSON {
         my ($self) = @_;
         {part => MHFS::Plugin::Kodi::_format_movie_part($self->{editionname}, $self->{partname}, $self->{part})}
+    }
+    sub TO_HTML {
+        my ($self) = @_;
+        my $part = $self->TO_JSON()->{part};
+        my $buf = '<style>ul{list-style: none;} li{margin: 10px 0;}</style><ul>';
+        $buf .= MHFS::Plugin::Kodi::_html_list_item("../".$part->{id}, 0, $part->{name});
+        if (exists $part->{subs}) {
+            foreach my $sub (@{$part->{subs}}) {
+                $buf .= MHFS::Plugin::Kodi::_html_list_item($sub, 0, basename($sub));
+            }
+        }
+        $buf .= '</ul>';
+        $buf
     }
     1;
 }
 
 package MHFS::Plugin::Kodi::MovieSubtitle {
     use strict; use warnings;
+    use File::Basename qw(basename);
     sub TO_JSON {
         my ($self) = @_;
         {subtitle => $self->{subtitle}}
+    }
+    sub TO_HTML {
+        my ($self) = @_;
+        my $buf = '<style>ul{list-style: none;} li{margin: 10px 0;}</style><ul>';
+        my $subname = basename($self->{subtitle});
+        $buf .= MHFS::Plugin::Kodi::_html_list_item("../$subname", 0, $subname);
+        $buf .= '</ul>';
+        $buf
     }
     1;
 }
@@ -5413,7 +5483,7 @@ package MHFS::Plugin::Kodi {
     use Scalar::Util qw(weaken);
     use MIME::Base64 qw(encode_base64url decode_base64url);
     use Devel::Peek qw(Dump);
-    MHFS::Util->import(qw(decode_UTF_8 encode_UTF_8 base64url_to_str str_to_base64url));
+    MHFS::Util->import(qw(decode_UTF_8 encode_UTF_8 base64url_to_str str_to_base64url uri_escape_path_utf8));
     BEGIN {
         if( ! (eval "use JSON; 1")) {
             eval "use JSON::PP; 1" or die "No implementation of JSON available";
@@ -5583,7 +5653,7 @@ package MHFS::Plugin::Kodi {
             $isdir ||= 0;
             my %edition;
             if (!$isdir) {
-                if ($edition !~ /\.(?:avi|mkv|mp4|m4v|rar)$/) {
+                if ($edition !~ /\.(?:avi|mkv|mp4|m4v)$/) {
                     warn "Skipping $edition, not a movie file" if ($edition !~ /\.(?:txt)$/);
                     next;
                 }
@@ -5601,7 +5671,7 @@ package MHFS::Plugin::Kodi {
                         next;
                     };
                     my $type;
-                    if ($b_editionitem =~ /\.(?:avi|mkv|mp4|m4v|rar)$/) {
+                    if ($b_editionitem =~ /\.(?:avi|mkv|mp4|m4v)$/) {
                         $type = 'video' if ($b_editionitem !~ /sample(?:\-[a-z]+)?\.(?:avi|mkv|mp4)$/);
                     } elsif ($b_editionitem =~ /\.(?:srt|sub|idx)$/) {
                         $type = 'subtitle';
@@ -5823,11 +5893,12 @@ package MHFS::Plugin::Kodi {
         \@movies
     }
 
-    sub _add_html_item {
-        my ($buf, $item, $isdir) = @_;
-        my $url = uri_escape($item);
+    sub _html_list_item {
+        my ($item, $isdir, $label) = @_;
+        $label //= $item;
+        my $url = uri_escape_path_utf8($item);
         $url .= '/?fmt=html' if($isdir);
-        $$buf .= '<a href="' . $url .'">'. ${MHFS::Util::escape_html_noquote($item)} .'</a><br><br>';
+        '<li><a href="' . $url .'">'. ${MHFS::Util::escape_html_noquote($label)} .'</a></li>'
     }
 
     # format movies library for kodi http
@@ -5920,14 +5991,11 @@ package MHFS::Plugin::Kodi {
             return;
         }
         # render
-        my $diritems = $movieitem->TO_JSON;
         if(exists $request->{qs}{fmt} && $request->{qs}{fmt} eq 'html') {
-            my $buf = '';
-            foreach my $show (@{$diritems->{movies}}) {
-                _add_html_item(\$buf, $show->{id}, 1);
-            }
+            my $buf = $movieitem->TO_HTML;
             $request->SendHTML($buf);
         } else {
+            my $diritems = $movieitem->TO_JSON;
             $request->SendAsJSON($diritems);
         }
     }

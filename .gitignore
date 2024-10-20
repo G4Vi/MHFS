@@ -6,7 +6,9 @@ App-MHFS/share/public_html/static/music_inc/drflac.js
 App-MHFS/share/public_html/static/music_inc/drflac.wasm
 App-MHFS/share/public_html/static/music_worklet_inprogress/decoder/bin
 App-MHFS/share/public_html/static/music_worklet_inprogress/player/worklet_processor_ff.js
-App-MHFS/share/public_html/static/kodi/plugin.video.mhfs.zip
+App-MHFS/share/public_html/static/kodi/plugin.video.mhfs/plugin.video.mhfs*
+App-MHFS/share/public_html/static/kodi/repository.mhfs/repository.mhfs*
+App-MHFS/share/public_html/static/kodi/addons.xml*
 MHFS-XS/thirdparty
 MHFS-XS/Makefile.old
 MHFS-XS/MYMETA.json

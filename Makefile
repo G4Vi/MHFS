@@ -26,7 +26,9 @@ clean: Alien-Tar-Size/Makefile Alien-libFLAC/Makefile MHFS-XS/Makefile $(DECODER
 	$(MAKE) -C $(DECODERDIR) clean
 	$(MAKE) -C $(PLAYERDIR) clean
 	$(MAKE) -C $(MUSICINCDIR) clean
-	rm -f App-MHFS/share/public_html/static/kodi/plugin.video.mhfs.zip
+	rm -f App-MHFS/share/public_html/static/kodi/plugin.video.mhfs/plugin.video.mhfs-$(shell perl get_plugin_version.pl).zip
+	rm -f App-MHFS/share/public_html/static/kodi/repository.mhfs/repository.mhfs.zip
+	rm -f App-MHFS/share/public_html/static/kodi/addons.xml*
 	$(MAKE) -C App-MHFS veryclean
 
 # dists
@@ -149,9 +151,14 @@ music_inc:
 # Kodi plugin
 .PHONY: kodi_plugin
 kodi_plugin:
-	zip -r plugin.video.mhfs.zip plugin.video.mhfs
-	mkdir -p App-MHFS/share/public_html/static/kodi
-	mv plugin.video.mhfs.zip App-MHFS/share/public_html/static/kodi
+	zip -r plugin.video.mhfs-$(shell perl get_plugin_version.pl).zip plugin.video.mhfs
+	mkdir -p App-MHFS/share/public_html/static/kodi/plugin.video.mhfs
+	mv plugin.video.mhfs*.zip App-MHFS/share/public_html/static/kodi/plugin.video.mhfs
+	perl make_addonsxml.pl
+	md5sum App-MHFS/share/public_html/static/kodi/addons.xml >  App-MHFS/share/public_html/static/kodi/addons.xml.md5
+	zip -r repository.mhfs.zip repository.mhfs
+	mkdir -p App-MHFS/share/public_html/static/kodi/repository.mhfs
+	mv repository.mhfs.zip App-MHFS/share/public_html/static/kodi/repository.mhfs
 
 # App-MHFS
 App-MHFS/Makefile: App-MHFS/Makefile.PL
