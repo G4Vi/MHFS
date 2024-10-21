@@ -156,9 +156,6 @@ kodi_plugin:
 	mv plugin.video.mhfs*.zip App-MHFS/share/public_html/static/kodi/plugin.video.mhfs
 	perl make_addonsxml.pl
 	md5sum App-MHFS/share/public_html/static/kodi/addons.xml >  App-MHFS/share/public_html/static/kodi/addons.xml.md5
-	zip -r repository.mhfs.zip repository.mhfs
-	mkdir -p App-MHFS/share/public_html/static/kodi/repository.mhfs
-	mv repository.mhfs.zip App-MHFS/share/public_html/static/kodi/repository.mhfs
 
 # App-MHFS
 App-MHFS/Makefile: App-MHFS/Makefile.PL

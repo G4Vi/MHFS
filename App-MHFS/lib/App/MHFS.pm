@@ -104,6 +104,13 @@ package MHFS::EventLoop::Poll::Base {
     use constant POLLRDHUP => 0;
     use constant ALWAYSMASK => (POLLRDHUP | POLLHUP);
 
+    sub _decode_status {
+        my ($rc) = @_;
+        print "$rc: normal exit with code ". WEXITSTATUS($rc)."\n" if WIFEXITED(  $rc);
+        print "$rc: terminated with signal ".WTERMSIG(   $rc)."\n" if WIFSIGNALED($rc);
+        print "$rc: stopped with signal ".   WSTOPSIG(   $rc)."\n" if WIFSTOPPED( $rc);
+    }
+
     sub new {
         my ($class) = @_;
         my %self = ('poll' => IO::Poll->new(), 'fh_map' => {}, 'timers' => [], 'children' => {}, 'deadchildren' => []);
@@ -114,7 +121,7 @@ package MHFS::EventLoop::Poll::Base {
                 my ($wstatus, $exitcode) = ($?, $?>> 8);
                 if(defined $self{'children'}{$child}) {
                     say "PID $child reaped (func) $exitcode";
-                    push @{$self{'deadchildren'}}, [$self{'children'}{$child}, $child, $exitcode];
+                    push @{$self{'deadchildren'}}, [$self{'children'}{$child}, $child, $wstatus];
                     $self{'children'}{$child} = undef;
                 }
                 else {
@@ -1042,7 +1049,7 @@ package MHFS::Promise {
                 say "adopting promise";
             } else {
                 $self{state} = MHFS_PROMISE_SUCCESS;
-                say "resolved with " . ($_[0] // 'undef');
+                #say "resolved with " . ($_[0] // 'undef');
             }
             $self{end_value} = $_[0];
             finale(\%self);
@@ -2664,6 +2671,7 @@ package MHFS::Process {
             return 1;
         },
         'SIGCHLD' => sub {
+            $context->{exit_status} = $_[0];
             my $obuf;
             my $handle = $process->{'fd'}{'stdout'}{'fd'};
             while(read($handle, $obuf, 100000)) {
@@ -2775,7 +2783,10 @@ package MHFS::Process {
         pipe(my $errreader, my $errwriter) or die("pipe failed $!");
         # the childs stderr will be UTF-8 text
         binmode($errreader, ':encoding(UTF-8)');
-        my $pid = fork();
+        my $pid = fork() // do {
+            say "failed to fork";
+            return undef;
+        };
         if($pid == 0) {
             close($inwriter);
             close($outreader);
@@ -2812,7 +2823,7 @@ package MHFS::Process {
         return _new_ex(\&_new_child, $mpa, {
             'at_exit' => sub {
                 my ($context) = @_;
-                $handler->($context->{'stdout'}, $context->{'stderr'});
+                $handler->($context->{'stdout'}, $context->{'stderr'}, $context->{exit_status});
             }
         });
     }
@@ -5475,7 +5486,7 @@ package MHFS::Plugin::Kodi {
     use strict; use warnings;
     use feature 'say';
     use File::Basename qw(basename);
-    use Cwd qw(abs_path);
+    use Cwd qw(abs_path getcwd);
     use URI::Escape qw(uri_escape);
     use Encode qw(decode encode);
     use File::Path qw(make_path);
@@ -5978,17 +5989,17 @@ package MHFS::Plugin::Kodi {
                 $request->Send404;
                 return;
             }
+            elsif (substr($request->{'path'}{'unescapepath'}, -1) ne '/') {
+                # redirect if we aren't accessing a file
+                if (!exists $movieitem->{b_path}) {
+                    $request->SendRedirect(301, substr($request->{'path'}{'unescapepath'}, rindex($request->{'path'}{'unescapepath'}, '/')+1).'/');
+                } else {
+                    $request->SendFile($movieitem->{b_path});
+                }
+                return;
+            }
         } else {
             $movieitem = bless {movies => $movies}, 'MHFS::Plugin::Kodi::Movies';
-        }
-        if (substr($request->{'path'}{'unescapepath'}, -1) ne '/') {
-            # redirect if we aren't accessing a file
-            if (!exists $movieitem->{b_path}) {
-                $request->SendRedirect(301, substr($request->{'path'}{'unescapepath'}, rindex($request->{'path'}{'unescapepath'}, '/')+1).'/');
-            } else {
-                $request->SendFile($movieitem->{b_path});
-            }
-            return;
         }
         # render
         if(exists $request->{qs}{fmt} && $request->{qs}{fmt} eq 'html') {
@@ -5998,6 +6009,118 @@ package MHFS::Plugin::Kodi {
             my $diritems = $movieitem->TO_JSON;
             $request->SendAsJSON($diritems);
         }
+    }
+
+    sub route_kodi {
+        my ($self, $request, $kodidir) = @_;
+        my $request_path = decode_UTF_8($request->{path}{unsafepath}) or do {
+            warn "$request->{path}{unsafepath} is not, UTF-8, 404";
+            $request->Send404;
+            return;
+        };
+        my $baseurl = $request->getAbsoluteURL;
+        if ($request_path eq $kodidir) {
+            my $html = <<"END_HTML";
+<style>ul{list-style: none;} li{margin: 10px 0;}</style>
+<h1>MHFS Kodi Setup Instructions</h1>
+<ol>
+  <li>Open Kodi</li>
+  <li>Go to <b>Settings->File manager</b>, <b>Add source</b> (you may have to double-click), and add <b>$baseurl$kodidir</b> (the URL of this page) as a source.</li>
+  <li>Go to <b>Settings->Add-ons->Install from zip file</b>, open the source you just added, and select <b>repository.mhfs.zip</b>. The repository add-on should install.</li>
+  <li>From <b>Settings->Add-ons</b> (you should still be on that page), <b>Install from repository->MHFS Repository->Video add-ons->MHFS Video</b> and click <b>Install</b>. The plugin addon should install.</li>
+  <li>Click <b>Configure</b> (or open the MHFS Video settings) and fill in <b>$baseurl</b> (the URL of the MHFS server you want to connect to).</li>
+  <li>MHFS Video should now be installed, you should be able to access it from <b>Add-ons->Video add-ons->MHFS Video</b> on the main menu</li>
+</ol>
+<ul>
+<a href="repository.mhfs.zip">repository.mhfs.zip</a>
+</ul>
+END_HTML
+            $request->SendHTML($html);
+            return;
+        } elsif (substr($request_path, length($kodidir)+1) ne 'repository.mhfs.zip' ||
+                 substr($request->{'path'}{'unescapepath'}, -1) eq '/') {
+            $request->Send404;
+            return;
+        }
+        my $xml = <<"END_XML";
+<?xml version="1.0" encoding="UTF-8"?>
+<addon id="repository.mhfs"
+       name="MHFS Repository"
+       version="1.0.0"
+       provider-name="G4Vi">
+  <extension point="xbmc.addon.repository" name="MHFS Repository">
+    <dir>
+      <info>$baseurl/static/kodi/addons.xml</info>
+      <checksum>$baseurl/static/kodi/addons.xml.md5</checksum>
+      <datadir zip="true">$baseurl/static/kodi</datadir>
+    </dir>
+  </extension>
+  <extension point="xbmc.addon.metadata">
+    <summary lang="en_GB">MHFS Repository</summary>
+    <description lang="en_GB">TODO</description>
+    <disclaimer></disclaimer>
+    <platform>all</platform>
+    <language></language>
+    <license>GPL-2.0-or-later</license>
+    <forum>https://github.com/G4Vi/MHFS/issues</forum>
+    <website>computoid.com</website>
+    <source>https://github.com/G4Vi/MHFS</source>
+  </extension>
+</addon>
+END_XML
+        my $tmpdir = $request->{client}{server}{settings}{GENERIC_TMPDIR};
+        say "tmpdir $tmpdir";
+        my $addondir = "$tmpdir/repository.mhfs";
+        make_path($addondir);
+        open(my $fh, '>', "$addondir/addon.xml") or do {
+            warn "failed to open $addondir/addon.xml";
+            $request->Send404;
+            return;
+        };
+        print $fh $xml;
+        close($fh) or do {
+            warn "failed to close";
+            $request->Send404;
+            return;
+        };
+        _zip_Promise($request->{client}{server}, $tmpdir, ['repository.mhfs'])->then(sub {
+            $request->SendBytes('application/zip', $_[0]);
+        }, sub {
+            warn $_[0];
+            $request->Send404;
+        });
+    }
+
+    sub _zip {
+        my ($server, $start_in, $params, $on_success, $on_failure) = @_;
+        MHFS::Process->new_output_child($server->{evp}, sub {
+            # done in child
+            my ($datachannel) = @_;
+            chdir($start_in);
+            open(STDOUT, ">&", $datachannel) or die("Can't dup \$datachannel to STDOUT");
+            exec('zip', '-r', '-', @$params);
+            #exec('zip', '-r', 'repository.mhfs.zip', 'repository.mhfs');
+            die "failed to run zip";
+        }, sub {
+            my ($out, $err, $status) = @_;
+            if ($status != 0) {
+                $on_failure->('failed to zip');
+                return;
+            }
+            $on_success->($out);
+        }) // $on_failure->('failed to fork');
+    }
+
+    sub _zip_Promise {
+        my ($server, $start_in, $params) = @_;
+        return MHFS::Promise->new($server->{evp}, sub {
+            my ($resolve, $reject) = @_;
+            _zip($server, $start_in, $params, sub {
+                $resolve->($_[0]);
+            }, sub {
+                $reject->($_[0]);
+            });
+        });
     }
 
     sub _curl {
@@ -6182,7 +6305,11 @@ package MHFS::Plugin::Kodi {
             ['/kodi/metadata/*', sub {
                 my ($request) = @_;
                 route_metadata($self, $request);
-            }]
+            }],
+            DirectoryRoute('/kodi', sub {
+                my ($request) = @_;
+                route_kodi($self, $request, '/kodi');
+            }),
         ];
 
         return $self;
