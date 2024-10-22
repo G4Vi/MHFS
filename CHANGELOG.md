@@ -1,5 +1,5 @@
 # MHFS Changelog
-## [0.6.0](https://github.com/G4Vi/MHFS/compare/v0.5.1...dev) - 2024-10-21
+## [0.6.0](https://github.com/G4Vi/MHFS/compare/v0.5.1...v0.6.0) - 2024-10-21
 ### App-MHFS-v0.6.0
 #### Added
 - Kodi JSON API `/kodi/movies` and `/kodi/tv`
