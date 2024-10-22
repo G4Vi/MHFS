@@ -37,12 +37,12 @@ jobs:
         make release
     - name: Archive CPAN logs
       if: ${{ failure() }}
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: cpan_log
         path: /home/runner/.cpanm/work/*/build.log
     - name: Upload build artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: MHFS
         path: |
@@ -65,7 +65,7 @@ jobs:
         install-modules-with: cpanm
         install-modules: LWP::UserAgent LWP::Protocol::https Perl::Dist::APPerl
     - name: Fetch build artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
     - name: Setup mhfs apperl deps
       run: |
         cd MHFS
@@ -87,7 +87,7 @@ jobs:
         apperlm configure -Dcf_by="$CF_BY" -Dcf_email="$CF_EMAIL"
         apperlm build
     - name: Upload build artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: MHFS_bin
         path: |
@@ -126,7 +126,7 @@ jobs:
     name: Test release with ${{ matrix.perl }} on ${{ matrix.os }}
     steps:
     - name: Fetch build artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
     - name: Extract MHFS and rename to unversioned filenames
       run: |
         mv MHFS/*.tar MHFS.tar
@@ -155,7 +155,7 @@ jobs:
         perl -MMHFS::XS  -e 'print $MHFS::XS::VERSION . "\n";'
     - name: Archive CPAN logs
       if: ${{ failure() }}
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: cpan_log
         path: /home/runner/.cpanm/work/*/build.log
@@ -169,7 +169,7 @@ jobs:
   #  name: Test Alien-libFLAC on ${{ matrix.os }}
   #  steps:
   #  - name: Fetch build artifacts
-  #    uses: actions/download-artifact@v3
+  #    uses: actions/download-artifact@v4
   #  - name: Extract MHFS and rename to unversioned filenames
   #    shell: bash
   #    run: |
@@ -193,7 +193,7 @@ jobs:
   #      print $Alien::libFLAC::VERSION . "\n";
   #  - name: Archive CPAN logs
   #    if: ${{ failure() }}
-  #    uses: actions/upload-artifact@v3
+  #    uses: actions/upload-artifact@v4
   #    with:
   #      name: cpan_log
   #      path: C:\Users\RUNNER*\.cpanm\work\*\build.log
@@ -207,7 +207,7 @@ jobs:
     name: Test Alien-Tar-Size with on ${{ matrix.os }}
     steps:
     - name: Fetch build artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
     - name: Extract MHFS and rename to unversioned filenames
       shell: bash
       run: |
@@ -241,7 +241,7 @@ jobs:
         print "Success, error says OS unsupported\n";
     - name: Archive CPAN logs
       if: ${{ failure() }}
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: cpan_log
         path: C:\Users\RUNNER*\.cpanm\work\*\build.log
@@ -253,7 +253,7 @@ jobs:
     steps:
     - name: Fetch build artifacts
       if:   ${{ github.ref_type == 'tag' }}
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
     - name: Publish release
       if:   ${{ github.ref_type == 'tag' }}
       uses: softprops/action-gh-release@v1
