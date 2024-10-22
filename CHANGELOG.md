@@ -1,7 +1,26 @@
 # MHFS Changelog
-## [X.X.X](https://github.com/G4Vi/MHFS/compare/v0.5.1...dev) - 202X-XX-XX
-### App-MHFS-vX.X.X
-- MHFS::Process - Fix incorrect fcntl error handling and usage for turning on O_NONBLOCK
+## [0.6.0](https://github.com/G4Vi/MHFS/compare/v0.5.1...dev) - 2024-10-21
+### App-MHFS-v0.6.0
+#### Added
+- Kodi JSON API `/kodi/movies` and `/kodi/tv`
+    - TMDB metadata and art fetching
+    - Supports multiple editions of movies and multiple files per movie.
+      Multi-part rar is not supported yet.
+    - movies loads from multiple file sources
+- Kodi video add-on
+- Promise system (MHFS::Promise) to reduce callback hell.
+#### Fixed
+- MHFS::Process - Fix incorrect fcntl error handling and usage for turning on
+  O_NONBLOCK, fixes [GH#1](https://github.com/G4Vi/MHFS/issues/1)
+- Web Music Player stack overflow on emscripten 3.1.27 and higher by
+  hardcoding stack size to 128KB.
+- Web Music Player adding collections (Parent nodes of disc dirs) to playlist
+#### Changed
+- MHFS::Settings - change default receive request timeout from 75 to 10 seconds
+### MHFS-XS-v0.2.4
+- Link `-latomic` on 32-bit ARM
+### Alien-Tar-Size-v0.2.2 [unchanged]
+### Alien-libFLAC-v0.2.0 [unchanged]
 
 ## [0.5.1](https://github.com/G4Vi/MHFS/compare/v0.5.0...v0.5.1) - 2022-12-03
 - Version is no longer based on App-MHFS version. MHFS releases will

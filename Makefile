@@ -5,7 +5,7 @@ PLAYERDIR:=App-MHFS/share/public_html/static/music_worklet_inprogress/player
 MUSICINCDIR=App-MHFS/share/public_html/static/music_inc
 
 # MHFSVERSION := $(shell perl -I App-MHFS/lib -MApp::MHFS -e 'print substr($$App::MHFS::VERSION, 1)' 2>/dev/null)
-MHFSVERSION:=0.5.1
+MHFSVERSION:=0.6.0
 APPERLM := $(shell command -v apperlm || echo perl -I$$(realpath ../Perl-Dist-APPerl/lib) $$(realpath ../Perl-Dist-APPerl/script/apperlm))
 
 # build everything
@@ -26,8 +26,7 @@ clean: Alien-Tar-Size/Makefile Alien-libFLAC/Makefile MHFS-XS/Makefile $(DECODER
 	$(MAKE) -C $(DECODERDIR) clean
 	$(MAKE) -C $(PLAYERDIR) clean
 	$(MAKE) -C $(MUSICINCDIR) clean
-	rm -f App-MHFS/share/public_html/static/kodi/plugin.video.mhfs/plugin.video.mhfs-$(shell perl get_plugin_version.pl).zip
-	rm -f App-MHFS/share/public_html/static/kodi/repository.mhfs/repository.mhfs.zip
+	rm -f App-MHFS/share/public_html/static/kodi/plugin.video.mhfs/plugin.video.mhfs-*.zip
 	rm -f App-MHFS/share/public_html/static/kodi/addons.xml*
 	$(MAKE) -C App-MHFS veryclean
 

@@ -5606,7 +5606,7 @@ package MHFS::Plugin::Kodi {
         }
 
         # generate the directory html
-        if(!defined $request->{qs}{fmt} || $request->{qs}{fmt} eq 'html') {
+        if(exists $request->{qs}{fmt} && $request->{qs}{fmt} eq 'html') {
             my $buf = '';
             foreach my $show (@diritems) {
                 my $showname = $show->{'item'};
@@ -6019,6 +6019,8 @@ package MHFS::Plugin::Kodi {
             return;
         };
         my $baseurl = $request->getAbsoluteURL;
+        my $repo_addon_version = '0.1.0';
+        my $repo_addon_name = "repository.mhfs-$repo_addon_version.zip";
         if ($request_path eq $kodidir) {
             my $html = <<"END_HTML";
 <style>ul{list-style: none;} li{margin: 10px 0;}</style>
@@ -6026,18 +6028,18 @@ package MHFS::Plugin::Kodi {
 <ol>
   <li>Open Kodi</li>
   <li>Go to <b>Settings->File manager</b>, <b>Add source</b> (you may have to double-click), and add <b>$baseurl$kodidir</b> (the URL of this page) as a source.</li>
-  <li>Go to <b>Settings->Add-ons->Install from zip file</b>, open the source you just added, and select <b>repository.mhfs.zip</b>. The repository add-on should install.</li>
+  <li>Go to <b>Settings->Add-ons->Install from zip file</b>, open the source you just added, and select <b>$repo_addon_name</b>. The repository add-on should install.</li>
   <li>From <b>Settings->Add-ons</b> (you should still be on that page), <b>Install from repository->MHFS Repository->Video add-ons->MHFS Video</b> and click <b>Install</b>. The plugin addon should install.</li>
   <li>Click <b>Configure</b> (or open the MHFS Video settings) and fill in <b>$baseurl</b> (the URL of the MHFS server you want to connect to).</li>
   <li>MHFS Video should now be installed, you should be able to access it from <b>Add-ons->Video add-ons->MHFS Video</b> on the main menu</li>
 </ol>
 <ul>
-<a href="repository.mhfs.zip">repository.mhfs.zip</a>
+<a href="$repo_addon_name">$repo_addon_name</a>
 </ul>
 END_HTML
             $request->SendHTML($html);
             return;
-        } elsif (substr($request_path, length($kodidir)+1) ne 'repository.mhfs.zip' ||
+        } elsif (substr($request_path, length($kodidir)+1) ne $repo_addon_name ||
                  substr($request->{'path'}{'unescapepath'}, -1) eq '/') {
             $request->Send404;
             return;
@@ -6046,7 +6048,7 @@ END_HTML
 <?xml version="1.0" encoding="UTF-8"?>
 <addon id="repository.mhfs"
        name="MHFS Repository"
-       version="1.0.0"
+       version="$repo_addon_name"
        provider-name="G4Vi">
   <extension point="xbmc.addon.repository" name="MHFS Repository">
     <dir>
@@ -7878,7 +7880,7 @@ package MHFS::Plugin::VideoLibrary {
 }
 
 package App::MHFS; #Media Http File Server
-use version; our $VERSION = version->declare("v0.5.0");
+use version; our $VERSION = version->declare("v0.6.0");
 use strict; use warnings;
 use feature 'say';
 use Getopt::Long qw(GetOptions);

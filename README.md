@@ -3,7 +3,7 @@
 - HTTP/1.1 server [keepalive, byte serving, chunked encoding, and more]
 - Gapless streaming web audio player using AudioWorklet and [miniaudio](https://raw.githubusercontent.com/mackron/miniaudio/master/miniaudio.h) with fallback players for incompatible browsers
 - server-side audio and video transcoding
-- Kodi open directory interface for playing from kodi as http source [video only currently]
+- [Kodi interface](#kodi--xbmc) - plugin and accompanying JSON API [video only currently]
 - M3U8 playlist interface for easy streaming in video players such as VLC
 - [Incomplete] web video players to stream your movies and tv shows in the browser
 - automatic media library scanning
@@ -197,11 +197,13 @@ For convenience `M3U` playlist files are provided to ease streaming outside of t
 
 #### Kodi / XBMC
 
-Kodi may access media via http sources in kodi. MHFS attempts to provide your libraries with kodi's desired naming structures, so that it will be organized with metadata accurately.
+There is a MHFS Kodi plugin (video add-on) and accompanying JSON API.
 
-`/kodi/movies/` - Kodi formatted *Movies* directory listing
+`/kodi/` - plugin installation instructions and link to repository add-on. The repository add-on only connects to your instance of MHFS.
 
-`/kodi/tv/` - Kodi formatted *TV* directory listing
+`/kodi/movies/` - Movies JSON API, somewhat available as HTML with `?fmt=html`
+
+`/kodi/tv/` - TV JSON API, somewhat available as HTML with `?fmt=html`
 
 ## Development Info
 
