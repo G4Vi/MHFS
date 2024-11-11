@@ -1,4 +1,5 @@
-package MHFS::Plugin::BitTorrent::Tracker;
+package MHFS::Plugin::BitTorrent::Tracker v0.7.0;
+use 5.014;
 use strict; use warnings;
 use feature 'say';
 use Time::HiRes qw( clock_gettime CLOCK_MONOTONIC);

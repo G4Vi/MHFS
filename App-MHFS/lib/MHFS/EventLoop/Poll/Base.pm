@@ -1,6 +1,5 @@
-# You must provide event handlers for the events you are listening for
-# return undef to have them removed from poll's structures
-package MHFS::EventLoop::Poll::Base;
+package MHFS::EventLoop::Poll::Base v0.7.0;
+use 5.014;
 use strict; use warnings;
 use feature 'say';
 use POSIX ":sys_wait_h";
@@ -13,6 +12,9 @@ use Devel::Peek;
 
 use constant POLLRDHUP => 0;
 use constant ALWAYSMASK => (POLLRDHUP | POLLHUP);
+
+# You must provide event handlers for the events you are listening for
+# return undef to have them removed from poll's structures
 
 sub _decode_status {
     my ($rc) = @_;

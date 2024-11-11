@@ -1,4 +1,5 @@
-package MHFS::Plugin::VideoLibrary;
+package MHFS::Plugin::VideoLibrary v0.7.0;
+use 5.014;
 use strict; use warnings;
 use feature 'say';
 use Encode qw(decode);

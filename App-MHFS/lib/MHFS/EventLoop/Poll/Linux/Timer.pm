@@ -1,4 +1,5 @@
-package MHFS::EventLoop::Poll::Linux::Timer;
+package MHFS::EventLoop::Poll::Linux::Timer v0.7.0;
+use 5.014;
 use strict; use warnings;
 use IO::Poll qw(POLLIN POLLOUT POLLHUP);
 use POSIX qw/floor/;

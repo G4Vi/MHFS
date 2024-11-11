@@ -1,4 +1,5 @@
-package MHFS::HTTP::Server::Client;
+package MHFS::HTTP::Server::Client v0.7.0;
+use 5.014;
 use strict; use warnings;
 use feature 'say';
 use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);

@@ -1,4 +1,5 @@
-package MHFS::Kodi::MoviePart;
+package MHFS::Kodi::MoviePart v0.7.0;
+use 5.014;
 use strict; use warnings;
 use File::Basename qw(basename);
 

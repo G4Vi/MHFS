@@ -1,7 +1,7 @@
-package MHFS::EventLoop::Poll::Linux;
+package MHFS::EventLoop::Poll::Linux v0.7.0;
+use 5.014;
 use strict; use warnings;
 use feature 'say';
-#use parent -norequire, 'MHFS::EventLoop::Poll::Base';
 use parent 'MHFS::EventLoop::Poll::Base';
 use MHFS::EventLoop::Poll::Linux::Timer;
 sub new {

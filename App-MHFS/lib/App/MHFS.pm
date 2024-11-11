@@ -1,10 +1,11 @@
-package App::MHFS; # Media Http File Server
-use version; our $VERSION = version->declare("v0.6.0");
+package App::MHFS v0.7.0;
+use 5.014;
 use strict; use warnings;
 use feature 'say';
 use Getopt::Long qw(GetOptions);
 use MHFS::HTTP::Server;
 Getopt::Long::Configure qw(gnu_getopt);
+our $VERSION;
 
 our $USAGE = "Usage: $0 ".<<'END_USAGE';
 [-h|--help] [-v|--version] [--flush] [--cfgdir <directory>] [--appdir <directory>]

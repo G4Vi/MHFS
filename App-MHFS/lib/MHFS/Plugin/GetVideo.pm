@@ -1,4 +1,5 @@
-package MHFS::Plugin::GetVideo;
+package MHFS::Plugin::GetVideo v0.7.0;
+use 5.014;
 use strict; use warnings;
 use feature 'say';
 use Data::Dumper qw (Dumper);

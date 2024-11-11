@@ -1,4 +1,5 @@
-package MHFS::FD::Reader;
+package MHFS::FD::Reader v0.7.0;
+use 5.014;
 use strict; use warnings;
 use feature 'say';
 use Time::HiRes qw( usleep clock_gettime CLOCK_MONOTONIC);

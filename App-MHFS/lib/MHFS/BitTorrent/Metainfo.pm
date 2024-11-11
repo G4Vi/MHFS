@@ -1,4 +1,5 @@
-package MHFS::BitTorrent::Metainfo;
+package MHFS::BitTorrent::Metainfo v0.7.0;
+use 5.014;
 use strict;
 use warnings;
 use feature 'say';

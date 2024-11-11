@@ -1,4 +1,5 @@
-package MHFS::Kodi::Movies;
+package MHFS::Kodi::Movies v0.7.0;
+use 5.014;
 use strict; use warnings;
 
 sub TO_JSON {

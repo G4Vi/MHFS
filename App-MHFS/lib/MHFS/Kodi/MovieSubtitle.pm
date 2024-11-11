@@ -1,4 +1,5 @@
-package MHFS::Kodi::MovieSubtitle;
+package MHFS::Kodi::MovieSubtitle v0.7.0;
+use 5.014;
 use strict; use warnings;
 use File::Basename qw(basename);
 sub TO_JSON {
