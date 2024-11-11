@@ -21,7 +21,7 @@ use FindBin;
 use File::Spec;
 use MHFS::EventLoop::Poll;
 use MHFS::Process;
-use MHFS::Util;
+use MHFS::Util qw(get_printable_utf8 LOCK_GET_LOCKDATA getMIME shell_escape escape_html_noquote);
 BEGIN {
     if( ! (eval "use JSON; 1")) {
         eval "use JSON::PP; 1" or die "No implementation of JSON available";

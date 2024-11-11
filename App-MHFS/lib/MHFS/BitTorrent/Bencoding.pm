@@ -2,7 +2,7 @@ package MHFS::BitTorrent::Bencoding v0.7.0;
 use 5.014;
 use strict; use warnings;
 use Exporter 'import';
-our @EXPORT = ('bencode', 'bdecode');
+our @EXPORT_OK = ('bencode', 'bdecode');
 use feature 'say';
 
 # a node is an array with the first element being the type, followed by the value(s)

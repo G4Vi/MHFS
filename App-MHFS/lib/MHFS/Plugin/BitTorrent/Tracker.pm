@@ -3,7 +3,7 @@ use 5.014;
 use strict; use warnings;
 use feature 'say';
 use Time::HiRes qw( clock_gettime CLOCK_MONOTONIC);
-use MHFS::BitTorrent::Bencoding;
+use MHFS::BitTorrent::Bencoding qw(bencode);
 use Data::Dumper;
 use MHFS::BitTorrent::Client;
 use MHFS::BitTorrent::Metainfo;

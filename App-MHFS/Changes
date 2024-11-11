@@ -2,6 +2,7 @@ Revision history for App-MHFS, note the CHANGELOG.md of the repository is much m
 v0.7.0  XXXX-XX-XX
         Split App/MHFS.pm into multiple modules.
         `use 5.014;` consistently across packages
+        MHFS::BitTorrent::Bencoding, MHFS::Util - export with @EXPORT_OK
 
 v0.6.0  2024-10-21
         Kodi JSON API `/kodi/movies` and `/kodi/tv`

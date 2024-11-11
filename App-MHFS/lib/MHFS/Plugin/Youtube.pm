@@ -9,7 +9,7 @@ use URI::Escape;
 use Scalar::Util qw(looks_like_number weaken);
 use File::stat;
 use MHFS::Process;
-use MHFS::Util;
+use MHFS::Util qw(escape_html LOCK_WRITE UNLOCK_WRITE);
 BEGIN {
     if( ! (eval "use JSON; 1")) {
         eval "use JSON::PP; 1" or die "No implementation of JSON available";

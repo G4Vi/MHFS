@@ -10,7 +10,7 @@ use Devel::Peek qw(Dump);
 no warnings "portable";
 use Config;
 use MHFS::Process;
-use MHFS::Util;
+use MHFS::Util qw(space2us LOCK_WRITE round shellcmd_unlock ASYNC pid_running read_file write_file ceil_div);
 
 sub new {
     my ($class, $settings) = @_;

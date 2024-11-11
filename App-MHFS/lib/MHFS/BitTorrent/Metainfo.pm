@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use feature 'say';
 use Digest::SHA qw(sha1);
-use MHFS::BitTorrent::Bencoding;
+use MHFS::BitTorrent::Bencoding qw(bdecode bencode);
 use Data::Dumper;
 use MHFS::Process;
 

@@ -11,7 +11,7 @@ use Cwd qw(abs_path);
 use File::ShareDir qw(dist_dir);
 use File::Path qw(make_path);
 use File::Spec::Functions qw(rel2abs);
-use MHFS::Util;
+use MHFS::Util qw(write_file);
 
 sub write_settings_file {
     my ($SETTINGS, $filepath) = @_;
