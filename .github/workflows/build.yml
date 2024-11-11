@@ -39,7 +39,7 @@ jobs:
       if: ${{ failure() }}
       uses: actions/upload-artifact@v4
       with:
-        name: cpan_log
+        name: cpan_log_build_linux
         path: /home/runner/.cpanm/work/*/build.log
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
@@ -121,7 +121,48 @@ jobs:
     strategy:
       matrix:
         os: ['ubuntu-latest']
-        perl: [ '5.36', '5.34', '5.20', '5.20.2' ]
+        perl: [ '5.14', '5.16', '5.18' ]
+    runs-on: ${{ matrix.os }}
+    name: Test release with ${{ matrix.perl }} on ${{ matrix.os }}
+    steps:
+    - name: Fetch build artifacts
+      uses: actions/download-artifact@v4
+    - name: Extract MHFS and rename to unversioned filenames
+      run: |
+        mv MHFS/*.tar MHFS.tar
+        tar -xvf MHFS.tar
+        rm -r MHFS MHFS.tar
+        mv MHFS_* MHFS
+        cd MHFS
+        mv Alien-Tar-Size*.tar.gz Alien-Tar-Size.tar.gz
+        mv App-MHFS*.tar.gz App-MHFS.tar.gz
+    - name: Install System Prerequisites
+      run: |
+        sudo apt-get update -y
+        sudo apt-get install -y --no-install-recommends build-essential wget curl
+    - name: Install Perl and MHFS using cpanm
+      uses: shogo82148/actions-setup-perl@v1
+      with:
+        perl-version: ${{ matrix.perl }}
+        working-directory: MHFS
+        install-modules-with: cpanm
+        install-modules: Alien-Tar-Size.tar.gz App-MHFS.tar.gz
+    - name: Try loading App::MHFS
+      run: |
+        perl -MApp::MHFS  -e 'print $App::MHFS::VERSION . "\n";'
+    - name: Archive CPAN logs
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: cpan_log_test_release
+        path: /home/runner/.cpanm/work/*/build.log
+
+  test-full-release:
+    needs:   [ build-linux ]
+    strategy:
+      matrix:
+        os: ['ubuntu-latest']
+        perl: [ '5.20', '5.22' '5.24', '5.26', '5.28', '5.30', '5.32', '5.34', '5.36', '5.38', '5.40', '5' ]
     runs-on: ${{ matrix.os }}
     name: Test release with ${{ matrix.perl }} on ${{ matrix.os }}
     steps:
@@ -157,46 +198,8 @@ jobs:
       if: ${{ failure() }}
       uses: actions/upload-artifact@v4
       with:
-        name: cpan_log
+        name: cpan_log_test_full_release
         path: /home/runner/.cpanm/work/*/build.log
-
-  #test-windows-Alien-libFLAC:
-  #  needs:   [ build-linux ]
-  #  strategy:
-  #    matrix:
-  #      os: ['windows-latest']
-  #  runs-on: ${{ matrix.os }}
-  #  name: Test Alien-libFLAC on ${{ matrix.os }}
-  #  steps:
-  #  - name: Fetch build artifacts
-  #    uses: actions/download-artifact@v4
-  #  - name: Extract MHFS and rename to unversioned filenames
-  #    shell: bash
-  #    run: |
-  #      mv MHFS/*.tar MHFS.tar
-  #      tar -xvf MHFS.tar
-  #      rm -r MHFS MHFS.tar
-  #      mv MHFS_* MHFS
-  #      cd MHFS
-  #      mv Alien-libFLAC*.tar.gz Alien-libFLAC.tar.gz
-  #  - name: Install Perl and Alien-libFLAC using cpanm
-  #    uses: shogo82148/actions-setup-perl@v1
-  #    with:
-  #      distribution: strawberry
-  #      working-directory: MHFS
-  #      install-modules-with: cpanm
-  #      install-modules: Alien-libFLAC.tar.gz
-  #  - name: Try loading Alien::libFLAC
-  #    shell: perl {0}
-  #    run: |
-  #      use Alien::libFLAC;
-  #      print $Alien::libFLAC::VERSION . "\n";
-  #  - name: Archive CPAN logs
-  #    if: ${{ failure() }}
-  #    uses: actions/upload-artifact@v4
-  #    with:
-  #      name: cpan_log
-  #      path: C:\Users\RUNNER*\.cpanm\work\*\build.log
 
   test-windows-Alien-Tar-Size:
     needs:   [ build-linux ]
@@ -243,13 +246,13 @@ jobs:
       if: ${{ failure() }}
       uses: actions/upload-artifact@v4
       with:
-        name: cpan_log
+        name: cpan_log_test_windows_Alien_libFLAC
         path: C:\Users\RUNNER*\.cpanm\work\*\build.log
 
   create-release:
     name:    Create release
     runs-on: ubuntu-latest
-    needs:   [ build-linux, build-apperl, test-release, test-emcc, test-windows-Alien-Tar-Size ]
+    needs:   [ build-linux, build-apperl, 'test-release', test-full-release, test-emcc, test-windows-Alien-Tar-Size ]
     steps:
     - name: Fetch build artifacts
       if:   ${{ github.ref_type == 'tag' }}
