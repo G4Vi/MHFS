@@ -47,6 +47,12 @@ my %WriteMakefileArgs = (
                     'MHFS::XS' => '0',
                     'Alien::Tar::Size' => '0'
                 }
+            },
+            develop => {
+                recommends => {
+                    "Test::CheckManifest" => "0.9",
+                    "Test::Pod" => "1.22",
+                }
             }
         }
     },
