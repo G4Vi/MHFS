@@ -36,7 +36,7 @@ unsafedists: Alien-Tar-Size/Makefile Alien-libFLAC/Makefile MHFS-XS/Makefile mus
 	$(MAKE) -C Alien-Tar-Size manifest && $(MAKE) -C Alien-Tar-Size distcheck && $(MAKE) -C Alien-Tar-Size dist
 	$(MAKE) -C Alien-libFLAC manifest && $(MAKE) -C Alien-libFLAC distcheck && $(MAKE) -C Alien-libFLAC dist
 	$(MAKE) -C MHFS-XS manifest && $(MAKE) -C MHFS-XS distcheck && $(MAKE) -C MHFS-XS dist
-	$(MAKE) -C App-MHFS manifest && $(MAKE) -C App-MHFS distcheck && $(MAKE) -C App-MHFS dist
+	$(MAKE) -C App-MHFS manifest && $(MAKE) -C App-MHFS distcheck && $(MAKE) -C App-MHFS authortest && $(MAKE) -C App-MHFS dist
 
 .PHONY: dists
 dists: clean

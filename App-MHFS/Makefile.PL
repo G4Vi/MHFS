@@ -18,7 +18,7 @@ my %WriteMakefileArgs = (
         "File::ShareDir::Install" => "0.13"
     },
     TEST_REQUIRES => {
-        'Test::More' => '0',
+        'Test2::V0' => '0',
     },
     PREREQ_PM => {
         "URI::Escape" => "5.09",
@@ -46,6 +46,12 @@ my %WriteMakefileArgs = (
                 recommends => {
                     'MHFS::XS' => '0',
                     'Alien::Tar::Size' => '0'
+                }
+            },
+            develop => {
+                recommends => {
+                    "Test::CheckManifest" => "0.9",
+                    "Test::Pod" => "1.22",
                 }
             }
         }
@@ -76,8 +82,15 @@ delete $WriteMakefileArgs{LICENSE}
     unless eval { ExtUtils::MakeMaker->VERSION('6.31'); 1 };
 
 WriteMakefile(%WriteMakefileArgs);
-{
-package
-MY;
-use File::ShareDir::Install qw(postamble);
+
+sub MY::postamble {
+    return File::ShareDir::Install::postamble(@_) . "\n"
+    ."authortest: test\n\tAUTHOR_TESTING=1 "
+      . $_[0]->test_via_harness( '$(FULLPERLRUN)', 'xt/author/*.t' );
 }
+
+#{
+#package
+#MY;
+#use File::ShareDir::Install qw(postamble);
+#}
