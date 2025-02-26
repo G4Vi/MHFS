@@ -57,7 +57,7 @@ sub route_tv {
                 my %diritem = ('item' => $showname, 'isdir' => 1);
                 my $plot = $self->{tvmeta}."/$showname/plot.txt";
                 if(-f $plot) {
-                    my $plotcontents = MHFS::Util::read_file($plot);
+                    my $plotcontents = MHFS::Util::read_text_file($plot);
                     $diritem{plot} = $plotcontents;
                 }
                 push @diritems, \%diritem;
@@ -290,7 +290,7 @@ sub readmoviedir {
             if (my $b_showname = encode_UTF_8($showname)) {
                 my $plot = $self->{moviemeta}."/$b_showname/plot.txt";
                 if(-f $plot) {
-                    my $plotcontents = MHFS::Util::read_file($plot);
+                    my $plotcontents = MHFS::Util::read_text_file($plot);
                     $diritem{plot} = $plotcontents;
                 }
             } else {
@@ -771,7 +771,7 @@ sub route_metadata {
         _TMDB_api_promise($request->{client}{server}, 'search/'.$params->{search}, {'query' => $searchname})->then( sub {
             if($metadatatype eq 'plot' || ! -f "$metadir/plot.txt") {
                 make_path($metadir);
-                MHFS::Util::write_file("$metadir/plot.txt", $_[0]->{results}[0]{overview});
+                MHFS::Util::write_text_file("$metadir/plot.txt", $_[0]->{results}[0]{overview});
             }
             if($metadatatype eq 'plot') {
                 $request->SendLocalFile("$metadir/plot.txt");

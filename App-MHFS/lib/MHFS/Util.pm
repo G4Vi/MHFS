@@ -10,7 +10,7 @@ use Cwd qw(abs_path getcwd);
 use Encode qw(decode encode);
 use URI::Escape qw(uri_escape uri_escape_utf8);
 use MIME::Base64 qw(encode_base64url decode_base64url);
-our @EXPORT_OK = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'read_file', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'shell_escape', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME', 'get_printable_utf8', 'small_url_encode', 'uri_escape_path', 'uri_escape_path_utf8', 'round', 'ceil_div', 'get_SI_size', 'decode_UTF_8', 'encode_UTF_8', 'str_to_base64url', 'base64url_to_str');
+our @EXPORT_OK = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'write_text_file', 'read_file', 'read_text_file', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'shell_escape', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME', 'get_printable_utf8', 'small_url_encode', 'uri_escape_path', 'uri_escape_path_utf8', 'round', 'ceil_div', 'get_SI_size', 'decode_UTF_8', 'encode_UTF_8', 'str_to_base64url', 'base64url_to_str');
 
 # single threaded locks
 sub LOCK_GET_LOCKDATA {
@@ -50,11 +50,21 @@ sub UNLOCK_WRITE {
 
 sub write_file {
     my ($filename, $text) = @_;
+    if (utf8::is_utf8($text)) {
+        say "BUG: UTF-8 flag is set in write_file for $text";
+    }
     open (my $fh, '>', $filename) or die("$! $filename");
     print $fh $text;
     close($fh);
 }
 
+sub write_text_file {
+    my ($filename, $text) = @_;
+    my $bytes = encode_UTF_8($text);
+    open (my $fh, '>', $filename) or die("$! $filename");
+    print $fh $bytes;
+    close($fh);
+}
 
 sub read_file {
     my ($filename) = @_;
@@ -68,6 +78,20 @@ sub read_file {
             <$fh>;
         }
     };
+}
+
+sub read_text_file {
+    my ($filename) = @_;
+    decode_UTF_8(do {
+        local $/ = undef;
+        if(!(open my $fh, "<", $filename)) {
+            #say "could not open $filename: $!";
+            return undef;
+        }
+        else {
+            <$fh>;
+        }
+    })
 }
 
 # This is not fast
