@@ -332,34 +332,6 @@ sub peek_utf8_codepoint {
 
 sub get_printable_utf8 {
     my ($octets) = @_;
-
-    #my $cp = ((0xF0 & 0x07) << 18) | ((0x9F & 0x3F) << 12) | ((0x8E & 0x3F) << 6) | (0x84 & 0x3F);
-    #say "codepoint $cp";
-
-    #my @tests = (
-    ##    #(chr(1 << 7) . chr(1 << 7)),
-    ##    #chr(0xED).chr(0xA0).chr(0xBC),
-    ##    #chr(0xED).chr(0xA0).chr(0xBC) . chr(1 << 7) . chr(1 << 7),
-    ##    #chr(0xED).chr(0xED).chr(0xED),
-    ##    chr(0xF0).chr(0xBF).chr(0xBF).chr(0xBF),
-    ##    chr(0xED).chr(0xA0),
-    ##    chr(0xF0).chr(0x9F).chr(0x8E).chr(0x84),
-    ##    chr(0xF0).chr(0x9F).chr(0x8E),
-    #    chr(0xF0).chr(0x9F).chr(0x8E).chr(0x84),
-    #    chr(0xF0).chr(0x9F).chr(0x8E).chr(0x04),
-    #    chr(0x7F),
-    #    chr(0xC1).chr(0x80),
-    #    chr(0xC2).chr(0x80)
-    #);
-
-    #foreach my $test (@tests) {
-    #    my $unsafedec = decode("utf8", $test, Encode::LEAVE_SRC);
-    #    my $safedec = decode('UTF-8', $test);
-    #    say "udec $unsafedec len ".length($unsafedec)." sdec $safedec len ".length($safedec);
-    #    say "udec codepoint ".ord($unsafedec)." sdec codepoint " . ord($safedec);
-    #}
-    #die;
-
     my $res;
     while(length($octets)) {
         $res .= decode('UTF-8', $octets, Encode::FB_QUIET);
