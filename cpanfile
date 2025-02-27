@@ -11,6 +11,7 @@ on 'runtime' => sub {
     requires "URI::Escape" => "5.09";
     requires "HTML::Template" => "2.97";
     requires "File::ShareDir" => "0";
+    requires "Feature::Compat::Try" => "0.05";
 };
 
 on 'test' => sub {

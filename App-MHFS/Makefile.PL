@@ -24,6 +24,7 @@ my %WriteMakefileArgs = (
         "URI::Escape" => "5.09",
         "HTML::Template" => "2.97",
         "File::ShareDir" => 0,
+        "Feature::Compat::Try" => "0.05"
     },
     EXE_FILES => ['bin/mhfs'],
     dist  => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },

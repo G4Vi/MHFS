@@ -19,7 +19,8 @@ use MHFS::Kodi::Movies;
 use MHFS::Kodi::MovieSubtitle;
 use MHFS::Process;
 use MHFS::Promise;
-use MHFS::Util qw(decode_UTF_8 encode_UTF_8 base64url_to_str str_to_base64url uri_escape_path_utf8);
+use MHFS::Util qw(decode_UTF_8 encode_UTF_8 base64url_to_str str_to_base64url uri_escape_path_utf8 read_text_file_lossy);
+use Feature::Compat::Try;
 BEGIN {
     if( ! (eval "use JSON; 1")) {
         eval "use JSON::PP; 1" or die "No implementation of JSON available";
@@ -289,9 +290,9 @@ sub readmoviedir {
             }
             if (my $b_showname = encode_UTF_8($showname)) {
                 my $plot = $self->{moviemeta}."/$b_showname/plot.txt";
-                if(-f $plot) {
-                    my $plotcontents = MHFS::Util::read_text_file($plot);
-                    $diritem{plot} = $plotcontents;
+                try {
+                    $diritem{plot} = read_text_file_lossy($plot);
+                } catch($e) {
                 }
             } else {
                 warn "$showname is not UTF-8, not reading plot";
