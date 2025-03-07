@@ -5,7 +5,7 @@ use feature 'say';
 use File::Basename qw(basename);
 use Cwd qw(abs_path getcwd);
 use URI::Escape qw(uri_escape);
-use Encode qw(decode encode);
+use Encode qw(decode encode encode_utf8);
 use File::Path qw(make_path);
 use Data::Dumper qw(Dumper);
 use Scalar::Util qw(weaken);
@@ -170,13 +170,16 @@ sub readmoviedir {
     my ($self, $movies, $source, $b_moviedir) = @_;
     opendir(my $dh, $b_moviedir ) or do {
         warn "Error in opening dir $b_moviedir\n";
-        return undef;
+        return;
     };
     while(my $b_edition = readdir($dh)) {
         next if(($b_edition eq '.') || ($b_edition eq '..'));
-        my $edition = decode_UTF_8($b_edition) or do {
-            warn "$b_edition is not, UTF-8, skipping";
-            next;
+        my $edition = do {
+            try { decode('UTF-8', $b_edition, Encode::FB_CROAK | Encode::LEAVE_SRC) }
+            catch($e) {
+                warn "$b_edition is not, UTF-8, skipping";
+                next;
+            }
         };
         # recurse on collections
         if ($edition =~ /(?:Duology|Trilogy|Quadrilogy)/) {
@@ -203,16 +206,19 @@ sub readmoviedir {
             opendir(my $dh, $b_path) or die('failed to open dir');
             while(my $b_editionitem = readdir($dh)) {
                 next if(($b_editionitem eq '.') || ($b_editionitem eq '..'));
-                my $editionitem = decode_UTF_8($b_editionitem) or do {
-                    warn "$b_editionitem is not, UTF-8, skipping";
-                    next;
+                my $editionitem = do {
+                    try { decode('UTF-8', $b_editionitem, Encode::FB_CROAK | Encode::LEAVE_SRC) }
+                    catch($e) {
+                        warn "$b_editionitem is not, UTF-8, skipping";
+                        next;
+                    }
                 };
                 my $type;
-                if ($b_editionitem =~ /\.(?:avi|mkv|mp4|m4v)$/) {
-                    $type = 'video' if ($b_editionitem !~ /sample(?:\-[a-z]+)?\.(?:avi|mkv|mp4)$/);
-                } elsif ($b_editionitem =~ /\.(?:srt|sub|idx)$/) {
+                if ($editionitem =~ /\.(?:avi|mkv|mp4|m4v)$/) {
+                    $type = 'video' if ($editionitem !~ /sample(?:\-[a-z]+)?\.(?:avi|mkv|mp4)$/);
+                } elsif ($editionitem =~ /\.(?:srt|sub|idx)$/) {
                     $type = 'subtitle';
-                } elsif ($b_editionitem =~ /^Subs$/i) {
+                } elsif ($editionitem =~ /^Subs$/i) {
                     $type = 'subtitledir';
                 }
                 $type or next;
@@ -288,15 +294,10 @@ sub readmoviedir {
                 $diritem{name} = $withoutyear;
                 $diritem{year} = $year;
             }
-            if (my $b_showname = encode_UTF_8($showname)) {
-                my $plot = $self->{moviemeta}."/$b_showname/plot.txt";
-                try {
-                    $diritem{plot} = read_text_file_lossy($plot);
-                } catch($e) {
-                }
-            } else {
-                warn "$showname is not UTF-8, not reading plot";
-            }
+            my $b_showname = encode_utf8($showname);
+            my $plot = $self->{moviemeta}."/$b_showname/plot.txt";
+            try { $diritem{plot} = read_text_file_lossy($plot); }
+            catch($e) {}
             $movies->{$showname} = \%diritem;
         }
         $movies->{$showname}{editions}{"$source/$edition"} = \%edition;

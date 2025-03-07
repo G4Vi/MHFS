@@ -3,9 +3,9 @@ use 5.014;
 use strict;
 use warnings;
 use Test2::V0;
-use MHFS::Util qw(space2us escape_html escape_html_noquote shell_escape get_printable_utf8);
+use MHFS::Util qw(space2us escape_html escape_html_noquote shell_escape get_printable_utf8 read_text_file_lossy);
 
-plan 13;
+plan 14;
 
 is(space2us('hello world'), 'hello_world');
 
@@ -50,4 +50,15 @@ is(MHFS::Util::ParseIPv4('8.8.8.8'), 8 | (8 << 8) | (8 << 16) | (8 << 24));
 {
     my $result = get_printable_utf8("A\xED\xA0\xBC\xED\xBE\x84B");
     is($result, 'A'.chr(0x1F384).'B', 'Valid low surrogate high surrogate valid');
+}
+
+{
+    my $fname = 'test_read_text_file_lossy.txt';
+    if(open(my $fh, '>:raw', $fname)) {
+        print $fh 'A'.chr(0xFF).'B';
+        close($fh);
+        my $text = read_text_file_lossy($fname);
+        is($text,  'A'.chr(0xFFFD).'B', 'read_text_file_lossy Valid invalid valid');
+        unlink($fname);
+    }
 }

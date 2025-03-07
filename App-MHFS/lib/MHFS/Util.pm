@@ -10,6 +10,7 @@ use Cwd qw(abs_path getcwd);
 use Encode qw(decode encode);
 use URI::Escape qw(uri_escape uri_escape_utf8);
 use MIME::Base64 qw(encode_base64url decode_base64url);
+use PerlIO::encoding;
 our @EXPORT_OK = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'write_text_file', 'read_file', 'read_text_file', 'read_text_file_lossy', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'shell_escape', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME', 'get_printable_utf8', 'small_url_encode', 'uri_escape_path', 'uri_escape_path_utf8', 'round', 'ceil_div', 'get_SI_size', 'decode_UTF_8', 'encode_UTF_8', 'str_to_base64url', 'base64url_to_str');
 
 # single threaded locks
@@ -97,9 +98,13 @@ sub read_text_file {
 sub read_text_file_lossy {
     my ($filename) = @_;
     local $/ = undef;
-    open my $fh, "<", $filename or die "Failed to open $filename";
-    my $bytes = <$fh> // die "Error reading from $filename";
-    decode('UTF-8', $bytes)
+    local $PerlIO::encoding::fallback = Encode::ONLY_PRAGMA_WARNINGS | Encode::WARN_ON_ERR;
+    open my $fh, '<:encoding(UTF-8)', $filename or die "Failed to open $filename";
+    my $res = <$fh> // die "Error reading from $filename";
+    if ($res =~ /\x{FFFD}/) {
+        say "corrupt plot $filename";
+    }
+    $res
 }
 
 # This is not fast
