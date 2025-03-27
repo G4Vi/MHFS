@@ -19,7 +19,7 @@ use MHFS::Kodi::Movies;
 use MHFS::Kodi::MovieSubtitle;
 use MHFS::Process;
 use MHFS::Promise;
-use MHFS::Util qw(decode_UTF_8 encode_UTF_8 base64url_to_str str_to_base64url uri_escape_path_utf8 read_text_file_lossy);
+use MHFS::Util qw(base64url_to_str str_to_base64url uri_escape_path_utf8 read_text_file_lossy);
 use Feature::Compat::Try;
 BEGIN {
     if( ! (eval "use JSON; 1")) {
@@ -151,9 +151,12 @@ sub readsubdir{
     opendir( my $dh, $b_path ) or return;
     while(my $b_filename = readdir($dh)) {
         next if(($b_filename eq '.') || ($b_filename eq '..'));
-        my $filename = decode_UTF_8($b_filename) or do {
-            warn "$b_filename is not, UTF-8, skipping";
-            next;
+        my $filename = do {
+            try { decode('UTF-8', $b_filename, Encode::FB_CROAK | Encode::LEAVE_SRC) }
+            catch($e) {
+                warn "$b_filename is not, UTF-8, skipping";
+                next;
+            }
         };
         my $b_nextpath = "$b_path/$b_filename";
         my $nextsource = "$source/$filename";
@@ -181,13 +184,14 @@ sub readmoviedir {
                 next;
             }
         };
+        my $b_path = "$b_moviedir/$b_edition";
         # recurse on collections
         if ($edition =~ /(?:Duology|Trilogy|Quadrilogy)/) {
             next if ($edition =~ /\.nfo$/);
-            $self->readmoviedir($movies, "$source/$edition", "$b_moviedir/$b_edition");
+            $self->readmoviedir($movies, "$source/$edition", $b_path);
             next;
         }
-        -s "$b_moviedir/$b_edition" or next;
+        -s $b_path or next;
         my $isdir = -d _;
         $isdir || -f _ or next;
         $isdir ||= 0;
@@ -199,11 +203,13 @@ sub readmoviedir {
             }
             $edition{''} = {};
         } else {
-            my $b_path = "$b_moviedir/$b_edition";
             my @videos;
             my @subtitles;
             my @subtitledirs;
-            opendir(my $dh, $b_path) or die('failed to open dir');
+            opendir(my $dh, $b_path) or do {
+                warn 'failed to open dir';
+                next;
+            };
             while(my $b_editionitem = readdir($dh)) {
                 next if(($b_editionitem eq '.') || ($b_editionitem eq '..'));
                 my $editionitem = do {
@@ -319,12 +325,11 @@ sub _build_movie_library {
     \%movies
 }
 
-# returns undef on not found
+# dies on not found/error
 sub _search_movie_library {
     my ($self, $movies, $movieid, $source, $editionname, $partname, $subfile) = @_;
     unless(exists $movies->{$movieid}) {
-        warn "movie not found";
-        return undef;
+        die "movie not found";
     }
     $movies = $movies->{$movieid};
     if (!$source) {
@@ -336,39 +341,27 @@ sub _search_movie_library {
         return bless {editions => \%editions}, 'MHFS::Kodi::MovieEditions';
     }
     unless(exists $movies->{"$source/$editionname"}) {
-        warn "movie source not found";
-        return undef;
+        die "movie source not found";
     }
     $movies = $movies->{"$source/$editionname"};
     unless(defined $partname) {
         return bless {source => $source, editionname => $editionname, edition => $movies}, 'MHFS::Kodi::MovieEdition';
     }
     unless(exists $movies->{$partname}) {
-        warn "movie part not found";
-        return undef;
+        die "movie part not found";
     }
     my $b_moviedir = $self->{server}{settings}{SOURCES}{$source}{folder};
-    my $b_editionname = encode_UTF_8($editionname) or do {
-        warn "$editionname is not UTF-8";
-        return undef;
-    };
+    my $b_editionname = encode_utf8($editionname);
     my $b_editiondir = "$b_moviedir/$b_editionname";
     $movies = $movies->{$partname};
     if (!$subfile) {
-        my $b_partname = encode_UTF_8($partname) // do {
-            warn "$partname is not UTF-8";
-            return undef;
-        };
+        my $b_partname = encode_utf8($partname);
         return bless {b_path => "$b_editiondir$b_partname", editionname => $editionname, partname => $partname, part => $movies}, 'MHFS::Kodi::MoviePart';
     }
     unless(exists $movies->{subs} && exists $movies->{subs}{$subfile}) {
-        warn "subtitle file not found";
-        return undef;
+        die "subtitle file not found";
     }
-    my $b_subfile = encode_UTF_8($subfile) or do {
-        warn "$subfile is not UTF-8";
-        return undef;
-    };
+    my $b_subfile = encode_utf8($subfile);
     return bless {b_path => "$b_editiondir/$b_subfile", subtitle => $subfile}, 'MHFS::Kodi::MovieSubtitle';
 }
 
@@ -442,20 +435,19 @@ sub _html_list_item {
 # format movies library for kodi http
 sub route_movies {
     my ($self, $request, $sources, $kodidir) = @_;
-    my $request_path = decode_UTF_8($request->{path}{unsafepath}) or do {
-        warn "$request->{path}{unsafepath} is not, UTF-8, 404";
-        $request->Send404;
-        return;
+    my $request_path = do {
+        try { decode('UTF-8', $request->{path}{unsafepath}, Encode::FB_CROAK | Encode::LEAVE_SRC) }
+        catch($e) {
+            warn "$request->{path}{unsafepath} is not, UTF-8, 404";
+            $request->Send404;
+            return;
+        }
     };
     # build the movie library
     if(! exists $self->{movies} || $request_path eq $kodidir) {
         $self->{movies} = $self->_build_movie_library($sources);
     }
     my $movies = $self->{movies};
-    unless ($movies) {
-        $request->Send404;
-        return;
-    }
     # find the movie item
     my $movieitem;
     if($request_path ne $kodidir) {
@@ -471,52 +463,41 @@ sub route_movies {
         my $editionname;
         my $partname;
         my $subfile;
-        if ($source) {
-            say "source $source";
-            if ($b64_editionname) {
-                $editionname = base64url_to_str($b64_editionname) or do {
-                    warn "$b64_editionname does not decode to a valid string";
-                    $request->Send404;
-                    return;
-                };
-                say "editionname $editionname";
-                if ($b64_partname) {
-                    if (length($b64_partname) < 3) {
-                        warn "$b64_partname has invalid format";
-                        $request->Send404;
-                        return;
-                    }
-                    $b64_partname = substr($b64_partname, 0, -3);
-                    $partname = base64url_to_str($b64_partname) // do {
-                        warn "$b64_partname does not decode to a valid string";;
-                        $request->Send404;
-                        return;
-                    };
-                    say "partname $partname";
-                    if ($b64_subpath && $subname) {
-                        if (length($b64_subpath) < 3) {
-                            warn "$b64_subpath has invalid format";
+        try {
+            if ($source) {
+                say "source $source";
+                if ($b64_editionname) {
+                    $editionname = base64url_to_str($b64_editionname);
+                    say "editionname $editionname";
+                    if ($b64_partname) {
+                        if (length($b64_partname) < 3) {
+                            warn "$b64_partname has invalid format";
                             $request->Send404;
                             return;
                         }
-                        $b64_subpath = substr($b64_subpath, 0, -3);
-                        my $subpath = base64url_to_str($b64_subpath) // do {
-                            warn "$b64_subpath does not decode to a valid string";
-                            $request->Send404;
-                            return;
-                        };
-                        $subfile = "$subpath$subname";
-                        say "subfile $subfile";
+                        $b64_partname = substr($b64_partname, 0, -3);
+                        $partname = base64url_to_str($b64_partname);
+                        say "partname $partname";
+                        if ($b64_subpath && $subname) {
+                            if (length($b64_subpath) < 3) {
+                                warn "$b64_subpath has invalid format";
+                                $request->Send404;
+                                return;
+                            }
+                            $b64_subpath = substr($b64_subpath, 0, -3);
+                            my $subpath = base64url_to_str($b64_subpath);
+                            $subfile = "$subpath$subname";
+                            say "subfile $subfile";
+                        }
                     }
                 }
             }
-        }
-        $movieitem = $self->_search_movie_library($movies, $movieid, $source, $editionname, $partname, $subfile);
-        if (!$movieitem) {
+            $movieitem = $self->_search_movie_library($movies, $movieid, $source, $editionname, $partname, $subfile);
+        } catch ($e) {
             $request->Send404;
             return;
         }
-        elsif (substr($request->{'path'}{'unescapepath'}, -1) ne '/') {
+        if (substr($request->{'path'}{'unescapepath'}, -1) ne '/') {
             # redirect if we aren't accessing a file
             if (!exists $movieitem->{b_path}) {
                 $request->SendRedirect(301, substr($request->{'path'}{'unescapepath'}, rindex($request->{'path'}{'unescapepath'}, '/')+1).'/');
@@ -540,10 +521,13 @@ sub route_movies {
 
 sub route_kodi {
     my ($self, $request, $kodidir) = @_;
-    my $request_path = decode_UTF_8($request->{path}{unsafepath}) or do {
-        warn "$request->{path}{unsafepath} is not, UTF-8, 404";
-        $request->Send404;
-        return;
+    my $request_path = do {
+        try { decode('UTF-8', $request->{path}{unsafepath}, Encode::FB_CROAK | Encode::LEAVE_SRC) }
+        catch($e) {
+            warn "$request->{path}{unsafepath} is not, UTF-8, 404";
+            $request->Send404;
+            return;
+        }
     };
     my $baseurl = $request->getAbsoluteURL;
     my $repo_addon_version = '0.1.0';

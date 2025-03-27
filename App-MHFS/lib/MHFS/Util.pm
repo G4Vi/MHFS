@@ -468,7 +468,7 @@ sub str_to_base64url {
 sub base64url_to_str {
     my ($base64url) = @_;
     my $bstr = decode_base64url($base64url);
-    decode_UTF_8($bstr)
+    decode('UTF-8', $bstr, Encode::FB_CROAK)
 }
 
 1;
