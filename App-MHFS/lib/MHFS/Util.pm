@@ -12,7 +12,9 @@ use URI::Escape qw(uri_escape uri_escape_utf8);
 use MIME::Base64 qw(encode_base64url decode_base64url);
 use PerlIO::encoding;
 our @EXPORT_OK = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'write_text_file', 'read_file', 'read_text_file', 'read_text_file_lossy', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'shell_escape', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME', 'get_printable_utf8', 'small_url_encode', 'uri_escape_path', 'uri_escape_path_utf8', 'round', 'ceil_div', 'get_SI_size', 'decode_UTF_8', 'encode_UTF_8', 'str_to_base64url', 'base64url_to_str');
-
+BEGIN {
+    say "\nencode version $Encode::VERSION";
+}
 # single threaded locks
 sub LOCK_GET_LOCKDATA {
     my ($filename) = @_;
