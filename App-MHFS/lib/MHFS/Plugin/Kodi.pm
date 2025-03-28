@@ -19,7 +19,7 @@ use MHFS::Kodi::Movies;
 use MHFS::Kodi::MovieSubtitle;
 use MHFS::Process;
 use MHFS::Promise;
-use MHFS::Util qw(base64url_to_str str_to_base64url uri_escape_path_utf8 read_text_file_lossy);
+use MHFS::Util qw(base64url_to_str str_to_base64url uri_escape_path_utf8 read_text_file_lossy write_text_file_lossy);
 use Feature::Compat::Try;
 BEGIN {
     if( ! (eval "use JSON; 1")) {
@@ -57,10 +57,8 @@ sub route_tv {
                 $shows{$showname} = [];
                 my %diritem = ('item' => $showname, 'isdir' => 1);
                 my $plot = $self->{tvmeta}."/$showname/plot.txt";
-                if(-f $plot) {
-                    my $plotcontents = MHFS::Util::read_text_file($plot);
-                    $diritem{plot} = $plotcontents;
-                }
+                try { $diritem{plot} = read_text_file_lossy($plot); }
+                catch($e) {}
                 push @diritems, \%diritem;
             }
             push @{$shows{$showname}}, "$tvdir/$filename";
@@ -757,7 +755,8 @@ sub route_metadata {
         _TMDB_api_promise($request->{client}{server}, 'search/'.$params->{search}, {'query' => $searchname})->then( sub {
             if($metadatatype eq 'plot' || ! -f "$metadir/plot.txt") {
                 make_path($metadir);
-                MHFS::Util::write_text_file("$metadir/plot.txt", $_[0]->{results}[0]{overview});
+                try { write_text_file_lossy("$metadir/plot.txt", $_[0]->{results}[0]{overview}) }
+                catch ($e) { say "wierd, creating file failed?"; }
             }
             if($metadatatype eq 'plot') {
                 $request->SendLocalFile("$metadir/plot.txt");

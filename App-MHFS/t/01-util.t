@@ -3,9 +3,10 @@ use 5.014;
 use strict;
 use warnings;
 use Test2::V0;
-use MHFS::Util qw(space2us escape_html escape_html_noquote shell_escape get_printable_utf8 read_text_file_lossy);
+use Feature::Compat::Try;
+use MHFS::Util qw(space2us escape_html escape_html_noquote shell_escape get_printable_utf8 read_text_file_lossy read_text_file write_text_file write_text_file_lossy);
 
-plan 14;
+plan 17;
 
 is(space2us('hello world'), 'hello_world');
 
@@ -53,12 +54,40 @@ is(MHFS::Util::ParseIPv4('8.8.8.8'), 8 | (8 << 8) | (8 << 16) | (8 << 24));
 }
 
 {
-    my $fname = 'test_read_text_file_lossy.txt';
+    my $fname = 'test_read_text_file.txt';
     if(open(my $fh, '>:raw', $fname)) {
         print $fh 'A'.chr(0xFF).'B';
         close($fh);
         my $text = read_text_file_lossy($fname);
         is($text,  'A'.chr(0xFFFD).'B', 'read_text_file_lossy Valid invalid valid');
+        my $message = 'read_text_file throws on invalid file';
+        try {
+            read_text_file($fname);
+            fail($message);
+        } catch ($e) {
+            pass($message);
+        }
         unlink($fname);
     }
+}
+
+{
+    my $fname = 'test_write_text_file.txt';
+    my $message = 'write_text_file throws on invalid text';
+    my $input = "A\x{D800}B";
+    try {
+        write_text_file($fname, $input);
+        fail($message);
+    } catch ($e) {
+        pass($message);
+    }
+    unlink($fname);
+    try {
+        write_text_file_lossy($fname, $input);
+        my $text = read_text_file($fname);
+        is($text,  'A'.chr(0xFFFD).'B', 'write_text_file_lossy Valid invalid valid');
+    } catch ($e) {
+        fail("write_text_file_lossy does not crash");
+    }
+    unlink($fname);
 }

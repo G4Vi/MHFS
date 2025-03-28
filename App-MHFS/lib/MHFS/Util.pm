@@ -11,10 +11,8 @@ use Encode qw(decode encode);
 use URI::Escape qw(uri_escape uri_escape_utf8);
 use MIME::Base64 qw(encode_base64url decode_base64url);
 use PerlIO::encoding;
-our @EXPORT_OK = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'write_text_file', 'read_file', 'read_text_file', 'read_text_file_lossy', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'shell_escape', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME', 'get_printable_utf8', 'small_url_encode', 'uri_escape_path', 'uri_escape_path_utf8', 'round', 'ceil_div', 'get_SI_size', 'decode_UTF_8', 'encode_UTF_8', 'str_to_base64url', 'base64url_to_str');
-BEGIN {
-    say "\nencode version $Encode::VERSION";
-}
+our @EXPORT_OK = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'write_text_file', 'write_text_file_lossy', 'read_file', 'read_text_file', 'read_text_file_lossy', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'shell_escape', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME', 'get_printable_utf8', 'small_url_encode', 'uri_escape_path', 'uri_escape_path_utf8', 'round', 'ceil_div', 'get_SI_size', 'str_to_base64url', 'base64url_to_str');
+
 # single threaded locks
 sub LOCK_GET_LOCKDATA {
     my ($filename) = @_;
@@ -63,9 +61,17 @@ sub write_file {
 
 sub write_text_file {
     my ($filename, $text) = @_;
-    my $bytes = encode_UTF_8($text);
-    open (my $fh, '>', $filename) or die("$! $filename");
-    print $fh $bytes;
+    local $PerlIO::encoding::fallback = Encode::FB_CROAK;
+    open (my $fh, '>:encoding(UTF-8)', $filename) or die("$! $filename");
+    print $fh $text;
+    close($fh);
+}
+
+sub write_text_file_lossy {
+    my ($filename, $text) = @_;
+    local $PerlIO::encoding::fallback = Encode::ONLY_PRAGMA_WARNINGS | Encode::WARN_ON_ERR;
+    open (my $fh, '>:encoding(UTF-8)', $filename) or die("$! $filename");
+    print $fh $text;
     close($fh);
 }
 
@@ -85,16 +91,10 @@ sub read_file {
 
 sub read_text_file {
     my ($filename) = @_;
-    decode_UTF_8(do {
-        local $/ = undef;
-        if(!(open my $fh, "<", $filename)) {
-            #say "could not open $filename: $!";
-            return undef;
-        }
-        else {
-            <$fh>;
-        }
-    })
+    local $/ = undef;
+    local $PerlIO::encoding::fallback = Encode::FB_CROAK;
+    open my $fh, '<:encoding(UTF-8)', $filename or die "Failed to open $filename";
+    <$fh> // die "Error reading from $filename"
 }
 
 sub read_text_file_lossy {
@@ -441,24 +441,6 @@ sub get_SI_size {
     else {
         return sprintf("%.2f MiB", $mebibytes);
     }
-}
-
-sub decode_UTF_8 {
-    my ($input) = @_;
-    my $output = decode('UTF-8', $input, Encode::FB_QUIET);
-    if (length($input)) {
-        return undef;
-    }
-    return $output;
-}
-
-sub encode_UTF_8 {
-    my ($input) = @_;
-    my $b_output = encode('UTF-8', $input, Encode::FB_QUIET);
-    if (length($input)) {
-        return undef;
-    }
-    $b_output
 }
 
 sub str_to_base64url {
