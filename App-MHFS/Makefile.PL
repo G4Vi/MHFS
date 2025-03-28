@@ -21,6 +21,7 @@ my %WriteMakefileArgs = (
         'Test2::V0' => '0',
     },
     PREREQ_PM => {
+        "Encode" => "2.98",
         "URI::Escape" => "5.09",
         "HTML::Template" => "2.97",
         "File::ShareDir" => 0,

@@ -8,6 +8,7 @@ on 'configure' => sub {
 };
 
 on 'runtime' => sub {
+    requires "Encode" => "2.98";
     requires "URI::Escape" => "5.09";
     requires "HTML::Template" => "2.97";
     requires "File::ShareDir" => "0";
