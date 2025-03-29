@@ -443,10 +443,11 @@ sub get_SI_size {
     }
 }
 
+# does not check for valid UTF-8
 sub str_to_base64url {
     my ($str) = @_;
-    my $bstr = encode('UTF-8', $str, Encode::FB_DEFAULT);
-    encode_base64url($bstr)
+    utf8::encode($str);
+    encode_base64url($str)
 }
 
 sub base64url_to_str {
