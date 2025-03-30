@@ -19,7 +19,7 @@ use MHFS::Kodi::Movies;
 use MHFS::Kodi::MovieSubtitle;
 use MHFS::Process;
 use MHFS::Promise;
-use MHFS::Util qw(base64url_to_str str_to_base64url uri_escape_path_utf8 read_text_file_lossy write_text_file_lossy);
+use MHFS::Util qw(base64url_to_str str_to_base64url uri_escape_path_utf8 read_text_file_lossy write_text_file_lossy decode_utf_8);
 use Feature::Compat::Try;
 BEGIN {
     if( ! (eval "use JSON; 1")) {
@@ -150,7 +150,7 @@ sub readsubdir{
     while(my $b_filename = readdir($dh)) {
         next if(($b_filename eq '.') || ($b_filename eq '..'));
         my $filename = do {
-            try { decode('UTF-8', $b_filename, Encode::FB_CROAK | Encode::LEAVE_SRC) }
+            try { decode_utf_8($b_filename) }
             catch($e) {
                 warn "$b_filename is not, UTF-8, skipping";
                 next;
@@ -176,7 +176,7 @@ sub readmoviedir {
     while(my $b_edition = readdir($dh)) {
         next if(($b_edition eq '.') || ($b_edition eq '..'));
         my $edition = do {
-            try { decode('UTF-8', $b_edition, Encode::FB_CROAK | Encode::LEAVE_SRC) }
+            try { decode_utf_8($b_edition) }
             catch($e) {
                 warn "$b_edition is not, UTF-8, skipping";
                 next;
@@ -211,7 +211,7 @@ sub readmoviedir {
             while(my $b_editionitem = readdir($dh)) {
                 next if(($b_editionitem eq '.') || ($b_editionitem eq '..'));
                 my $editionitem = do {
-                    try { decode('UTF-8', $b_editionitem, Encode::FB_CROAK | Encode::LEAVE_SRC) }
+                    try { decode_utf_8($b_editionitem) }
                     catch($e) {
                         warn "$b_editionitem is not, UTF-8, skipping";
                         next;
@@ -434,7 +434,7 @@ sub _html_list_item {
 sub route_movies {
     my ($self, $request, $sources, $kodidir) = @_;
     my $request_path = do {
-        try { decode('UTF-8', $request->{path}{unsafepath}, Encode::FB_CROAK | Encode::LEAVE_SRC) }
+        try { decode_utf_8($request->{path}{unsafepath}) }
         catch($e) {
             warn "$request->{path}{unsafepath} is not, UTF-8, 404";
             $request->Send404;
@@ -520,7 +520,7 @@ sub route_movies {
 sub route_kodi {
     my ($self, $request, $kodidir) = @_;
     my $request_path = do {
-        try { decode('UTF-8', $request->{path}{unsafepath}, Encode::FB_CROAK | Encode::LEAVE_SRC) }
+        try { decode_utf_8($request->{path}{unsafepath}) }
         catch($e) {
             warn "$request->{path}{unsafepath} is not, UTF-8, 404";
             $request->Send404;

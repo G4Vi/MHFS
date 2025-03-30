@@ -11,7 +11,7 @@ use Encode qw(decode encode);
 use URI::Escape qw(uri_escape uri_escape_utf8);
 use MIME::Base64 qw(encode_base64url decode_base64url);
 use PerlIO::encoding;
-our @EXPORT_OK = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'write_text_file', 'write_text_file_lossy', 'read_file', 'read_text_file', 'read_text_file_lossy', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'shell_escape', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME', 'get_printable_utf8', 'small_url_encode', 'uri_escape_path', 'uri_escape_path_utf8', 'round', 'ceil_div', 'get_SI_size', 'str_to_base64url', 'base64url_to_str');
+our @EXPORT_OK = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'write_text_file', 'write_text_file_lossy', 'read_file', 'read_text_file', 'read_text_file_lossy', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'shell_escape', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME', 'get_printable_utf8', 'small_url_encode', 'uri_escape_path', 'uri_escape_path_utf8', 'round', 'ceil_div', 'get_SI_size', 'str_to_base64url', 'base64url_to_str', 'decode_utf_8');
 
 # single threaded locks
 sub LOCK_GET_LOCKDATA {
@@ -19,7 +19,7 @@ sub LOCK_GET_LOCKDATA {
     my $lockname = "$filename.lock";
     my $bytes = read_file($lockname);
     if(! defined $bytes) {
-        return undef;
+        return;
     }
     return $bytes;
 }
@@ -81,7 +81,7 @@ sub read_file {
         local $/ = undef;
         if(!(open my $fh, "<", $filename)) {
             #say "could not open $filename: $!";
-            return undef;
+            return;
         }
         else {
             <$fh>;
@@ -102,11 +102,7 @@ sub read_text_file_lossy {
     local $/ = undef;
     local $PerlIO::encoding::fallback = Encode::ONLY_PRAGMA_WARNINGS | Encode::WARN_ON_ERR;
     open my $fh, '<:encoding(UTF-8)', $filename or die "Failed to open $filename";
-    my $res = <$fh> // die "Error reading from $filename";
-    if ($res =~ /\x{FFFD}/) {
-        say "corrupt plot $filename";
-    }
-    $res
+    <$fh> // die "Error reading from $filename"
 }
 
 # This is not fast
@@ -322,10 +318,10 @@ sub ParseIPv4 {
     my ($ipstring) = @_;
     my @values = $ipstring =~ /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
     if(scalar(@values) != 4) {
-        return undef;
+        return;
     }
     foreach my $i (0..3) {
-        ($values[$i] <= 255) or return undef;
+        ($values[$i] <= 255) or return;
     }
     return ($values[0] << 24) | ($values[1] << 16) | ($values[2] << 8) | ($values[3]);
 }
@@ -351,7 +347,7 @@ sub peek_utf8_codepoint {
         [0XF8, 0xF0, 4]  # 4 byte sequence
     );
 
-    length($$octets) >= 1 or return undef;
+    length($$octets) >= 1 or return;
     my $byte = substr($$octets, 0, 1);
     my $byteval = ord($byte);
     my $charlen = 1;
@@ -361,7 +357,7 @@ sub peek_utf8_codepoint {
             last;
         }
     }
-    length($octets) >= $charlen or return undef;
+    length($octets) >= $charlen or return;
     my $char = decode("utf8", substr($$octets, 0, $charlen));
     if(length($char) > 1) {
         return {'codepoint' => 0xFFFD, 'bytelength' => 1};
@@ -454,6 +450,10 @@ sub base64url_to_str {
     my ($base64url) = @_;
     my $bstr = decode_base64url($base64url);
     decode('UTF-8', $bstr, Encode::FB_CROAK)
+}
+
+sub decode_utf_8 {
+    decode('UTF-8', $_[0], Encode::FB_CROAK | Encode::LEAVE_SRC)
 }
 
 1;
