@@ -5,7 +5,7 @@ use feature 'say';
 use File::Basename qw(basename);
 use Cwd qw(abs_path getcwd);
 use URI::Escape qw(uri_escape);
-use Encode qw(decode encode encode_utf8);
+use Encode qw(decode encode_utf8);
 use File::Path qw(make_path);
 use Data::Dumper qw(Dumper);
 use Scalar::Util qw(weaken);
@@ -19,7 +19,7 @@ use MHFS::Kodi::Movies;
 use MHFS::Kodi::MovieSubtitle;
 use MHFS::Process;
 use MHFS::Promise;
-use MHFS::Util qw(base64url_to_str str_to_base64url uri_escape_path_utf8 read_text_file_lossy write_text_file_lossy decode_utf_8);
+use MHFS::Util qw(base64url_to_str str_to_base64url uri_escape_path_utf8 read_text_file_lossy write_text_file_lossy decode_utf_8 escape_html_noquote);
 use Feature::Compat::Try;
 BEGIN {
     if( ! (eval "use JSON; 1")) {
@@ -136,7 +136,7 @@ sub route_tv {
             my $showname = $show->{'item'};
             my $url = uri_escape($showname);
             $url .= '/' if($show->{'isdir'});
-            $buf .= '<a href="' . $url .'">'.${MHFS::Util::escape_html_noquote(decode('UTF-8', $showname, Encode::LEAVE_SRC))} .'</a><br><br>';
+            $buf .= '<a href="' . $url .'">'.${escape_html_noquote(decode('UTF-8', $showname, Encode::LEAVE_SRC))} .'</a><br><br>';
         }
         $request->SendHTML($buf);
     } else {
@@ -427,7 +427,7 @@ sub _html_list_item {
     $label //= $item;
     my $url = uri_escape_path_utf8($item);
     $url .= '/?fmt=html' if($isdir);
-    '<li><a href="' . $url .'">'. ${MHFS::Util::escape_html_noquote($label)} .'</a></li>'
+    '<li><a href="' . $url .'">'. ${escape_html_noquote($label)} .'</a></li>'
 }
 
 # format movies library for kodi http

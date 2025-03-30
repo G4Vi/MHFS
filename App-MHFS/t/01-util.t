@@ -4,9 +4,10 @@ use strict;
 use warnings;
 use Test2::V0;
 use Feature::Compat::Try;
-use MHFS::Util qw(space2us escape_html escape_html_noquote shell_escape get_printable_utf8 read_text_file_lossy read_text_file write_text_file write_text_file_lossy);
+use Encode qw(decode encode);
+use MHFS::Util qw(space2us escape_html escape_html_noquote shell_escape get_printable_utf8 read_text_file_lossy read_text_file write_text_file write_text_file_lossy decode_utf_8);
 
-plan 17;
+plan 21;
 
 is(space2us('hello world'), 'hello_world');
 
@@ -90,4 +91,29 @@ is(MHFS::Util::ParseIPv4('8.8.8.8'), 8 | (8 << 8) | (8 << 16) | (8 << 24));
         fail("write_text_file_lossy does not crash");
     }
     unlink($fname);
+}
+
+{
+    my $str = 'A'.chr(0xFF).'B';
+    my $bytes = encode('UTF-8', $str, Encode::FB_CROAK | Encode::LEAVE_SRC);
+    try {
+        my $bcopy = $bytes;
+        is(decode_utf_8($bytes), $str, 'string decodes to original string');
+        is($bytes, $bcopy, "decode_utf_8 doesn't modify original string");
+    } catch ($e) {
+        fail('decode_utf_8 decodes valid string without crashing')
+    }
+}
+{
+    my $str = "A\x{D800}B";
+    my $bytes = encode('utf8', $str, Encode::FB_CROAK | Encode::LEAVE_SRC);
+    my $bcopy = $bytes;
+    my $message = 'decode_utf_8 throws on invalid string';
+    try {
+        decode_utf_8($bytes);
+        fail($message);
+    } catch ($e) {
+        pass($message);
+        is($bytes, $bcopy, "decode_utf_8 doesn't modify original string");
+    }
 }
