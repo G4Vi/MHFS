@@ -503,10 +503,10 @@ sub SendLocalFile {
     my $done;
     my $ts;
     my $get_max_size = sub {
-        my $locksz = LOCK_GET_LOCKDATA($requestfile);
         if($done) {
             return $ts;
         }
+        my $locksz = LOCK_GET_LOCKDATA($requestfile);
         if(defined($locksz)) {
             $ts = ($locksz || 0);
         }

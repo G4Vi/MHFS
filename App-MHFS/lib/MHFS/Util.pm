@@ -213,7 +213,7 @@ sub output_dir_versatile {
         next if($file =~ /^..?$/);
         push @newpaths,  "$path/$file";
     }
-    @files = @files ? (@newpaths, undef, @files) : @newpaths;
+    @files = (@newpaths, @files);
     while(@files)
     {
         $path = shift @files;
@@ -224,6 +224,7 @@ sub output_dir_versatile {
         my $file = basename($path);
         if(-d $path) {
             $options->{'on_dir_start'}->($path, $file) if($options->{'on_dir_start'});
+            @files = (undef, @files);
             goto ON_DIR;
         }
 
