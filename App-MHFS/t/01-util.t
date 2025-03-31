@@ -5,9 +5,9 @@ use warnings;
 use Test2::V0;
 use Feature::Compat::Try;
 use Encode qw(decode encode);
-use MHFS::Util qw(space2us escape_html escape_html_noquote shell_escape get_printable_utf8 read_text_file_lossy read_text_file write_text_file write_text_file_lossy decode_utf_8);
+use MHFS::Util qw(space2us escape_html escape_html_noquote shell_escape get_printable_utf8 read_text_file_lossy read_text_file write_text_file write_text_file_lossy decode_utf_8 parse_ipv4);
 
-plan 21;
+plan 24;
 
 is(space2us('hello world'), 'hello_world');
 
@@ -17,7 +17,30 @@ is(${escape_html_noquote($unsafe_chars)}, q|"'&lt;&gt;/|);
 
 is(shell_escape(q|it's|), q|it'"'"'s|);
 
-is(MHFS::Util::ParseIPv4('8.8.8.8'), 8 | (8 << 8) | (8 << 16) | (8 << 24));
+{
+    my $message = 'valid ip parses';
+    try {
+        is(parse_ipv4('8.8.8.8'), 8 | (8 << 8) | (8 << 16) | (8 << 24), $message);
+        is(parse_ipv4('255.255.255.255'), 0xFFFFFFFF, $message);
+    } catch ($e) {
+        fail($message);
+    }
+}
+{
+    my $message = 'invalid ip fails to parse';
+    try {
+        parse_ipv4('255.255.255.2551');
+        fail($message);
+    } catch ($e) {
+        pass($message);
+    }
+    try {
+        parse_ipv4('256.255.255.255');
+        fail($message);
+    } catch ($e) {
+        pass($message);
+    }
+}
 
 {
     my $result = MHFS::Util::surrogatepairtochar("\x{D83C}", "\x{DF84}");

@@ -6,6 +6,7 @@ use IO::Socket::INET;
 use Socket qw(IPPROTO_TCP TCP_KEEPALIVE TCP_NODELAY);
 use IO::Poll qw(POLLIN POLLOUT POLLHUP);
 use Scalar::Util qw(weaken);
+use Feature::Compat::Try;
 use File::Path qw(make_path);
 use Data::Dumper;
 use Config;
@@ -13,7 +14,7 @@ use MHFS::EventLoop::Poll;
 use MHFS::FS;
 use MHFS::HTTP::Server::Client;
 use MHFS::Settings;
-use MHFS::Util;
+use MHFS::Util qw(parse_ipv4);
 
 sub new {
     my ($class, $launchsettings, $plugins, $routes) = @_;
@@ -133,11 +134,13 @@ sub onReadReady {
         say "server: no peerhost";
         return 1;
     }
-    my $peerip = MHFS::Util::ParseIPv4($peerhost);
-    if(! defined $peerip) {
-        say "server: error parsing ip";
-        return 1;
-    }
+    my $peerip = do {
+        try { parse_ipv4($peerhost) }
+        catch ($e) {
+            say "server: error parsing ip $peerhost";
+            return 1;
+        }
+    };
     my $ah;
     foreach my $allowedHost (@{$server->{'settings'}{'ARIPHOSTS_PARSED'}}) {
         if(($peerip & $allowedHost->{'subnetmask'}) == $allowedHost->{'ip'}) {

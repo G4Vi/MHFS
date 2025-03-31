@@ -11,7 +11,7 @@ use Cwd qw(abs_path);
 use File::ShareDir qw(dist_dir);
 use File::Path qw(make_path);
 use File::Spec::Functions qw(rel2abs);
-use MHFS::Util qw(write_file);
+use MHFS::Util qw(write_file parse_ipv4);
 
 sub write_settings_file {
     my ($SETTINGS, $filepath) = @_;
@@ -218,8 +218,7 @@ sub load {
         # parse IPv4 with optional CIDR
         $rule->[0] =~ /^([^\/]+)(?:\/(\d{1,2}))?$/ or die("Invalid rule: " . $rule->[0]);
         my $ipstr = $1; my $cidr = $2 // 32;
-        my $ip = MHFS::Util::ParseIPv4($ipstr);
-        defined($ip) or die("Invalid rule: " . $rule->[0]);
+        my $ip = parse_ipv4($ipstr);
         $cidr >= 0 && $cidr <= 32  or die("Invalid rule: " . $rule->[0]);
         my $mask = (0xFFFFFFFF << (32-$cidr)) & 0xFFFFFFFF;
         my %ariphost = (

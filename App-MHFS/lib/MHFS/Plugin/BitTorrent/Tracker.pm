@@ -5,9 +5,10 @@ use feature 'say';
 use Time::HiRes qw( clock_gettime CLOCK_MONOTONIC);
 use MHFS::BitTorrent::Bencoding qw(bencode);
 use Data::Dumper;
+use Feature::Compat::Try;
 use MHFS::BitTorrent::Client;
 use MHFS::BitTorrent::Metainfo;
-use MHFS::Util;
+use MHFS::Util qw(parse_ipv4);
 
 sub createTorrent {
     my ($self, $request) = @_;
@@ -161,8 +162,12 @@ sub announce {
                     my $netmap = $request->{'client'}{'server'}{'settings'}{'NETMAP'};
                     my $pubip = $request->{'client'}{'server'}{'settings'}{'PUBLICIP'};
                     if($netmap && (($values[0] == $netmap->[1]) && (unpack('C', $ipport) != $netmap->[1])) && $pubip) {
-                        say "HACK converting local peer to public ip";
-                        $peer = pack('Nn', MHFS::Util::ParseIPv4($pubip), (($values[4] << 8) | $values[5]));
+                        try {
+                            say "HACK converting local peer to public ip";
+                            $peer = pack('Nn', parse_ipv4($pubip), (($values[4] << 8) | $values[5]));
+                        catch ($e) {
+                            say "public ip didn't parse, cannot convert local peer to public ip"
+                        }
                     }
                     say __PACKAGE__.": sending peer ".peertostring($peer);
                     $pstr .= $peer;

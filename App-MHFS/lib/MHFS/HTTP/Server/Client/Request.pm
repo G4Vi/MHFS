@@ -5,6 +5,7 @@ use feature 'say';
 use Time::HiRes qw( usleep clock_gettime CLOCK_REALTIME CLOCK_MONOTONIC);
 use URI::Escape;
 use Cwd qw(abs_path getcwd);
+use Feature::Compat::Try;
 use File::Basename;
 use File::stat;
 use IO::Poll qw(POLLIN POLLOUT POLLHUP);
@@ -21,7 +22,7 @@ use FindBin;
 use File::Spec;
 use MHFS::EventLoop::Poll;
 use MHFS::Process;
-use MHFS::Util qw(get_printable_utf8 LOCK_GET_LOCKDATA getMIME shell_escape escape_html_noquote);
+use MHFS::Util qw(get_printable_utf8 LOCK_GET_LOCKDATA getMIME shell_escape escape_html_noquote parse_ipv4);
 BEGIN {
     if( ! (eval "use JSON; 1")) {
         eval "use JSON::PP; 1" or die "No implementation of JSON available";
@@ -180,7 +181,8 @@ sub want_headers {
     # process reverse proxy headers
     else {
         delete $self->{'header'}{'X-MHFS-PROXY-KEY'};
-        $self->{'ip'} = MHFS::Util::ParseIPv4($self->{'header'}{'X-Forwarded-For'}) if($self->{'header'}{'X-Forwarded-For'});
+        try { $self->{'ip'} = parse_ipv4($self->{'header'}{'X-Forwarded-For'}) if($self->{'header'}{'X-Forwarded-For'}); }
+        catch ($e) { say "ip not updated, unable to parse X-Forwarded-For: " . $self->{'header'}{'X-Forwarded-For'}; }
     }
     my $netmap = $self->{'client'}{'server'}{'settings'}{'NETMAP'};
     if($netmap && (($self->{'ip'} >> 24) == $netmap->[0])) {
