@@ -698,7 +698,7 @@ sub route_metadata {
             # thumb or fanart
             my $imagepartial = ($metadatatype eq 'thumb') ? $_[0]->{results}[0]{poster_path} : $_[0]->{results}[0]{backdrop_path};
             if (!$imagepartial || $imagepartial !~ /(\.[^\.]+)$/) {
-                return MHFS::Promise::throw('path not matched');
+                die 'path not matched';
             }
             my $ext = $1;
             make_path($metadir);
@@ -719,7 +719,7 @@ sub route_metadata {
                 });
             });
         })->then(undef, sub {
-            say $_[0];
+            print $_[0];
             $request->Send404;
             return;
         });

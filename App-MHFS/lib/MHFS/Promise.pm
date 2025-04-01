@@ -2,7 +2,7 @@ package MHFS::Promise v0.7.0;
 use 5.014;
 use strict; use warnings;
 use feature 'say';
-use MHFS::Promise::FakeException;
+use Feature::Compat::Try;
 use constant {
     MHFS_PROMISE_PENDING => 0,
     MHFS_PROMISE_SUCCESS => 1,
@@ -50,27 +50,24 @@ sub new {
     return $self;
 }
 
-sub throw {
-    return MHFS::Promise::FakeException->new(@_);
-}
-
 sub handleResolved {
     my ($self, $deferred) = @_;
     $self->{evp}->add_timer(0, 0, sub {
         my $success = $self->{state} == MHFS_PROMISE_SUCCESS;
         my $value = $self->{end_value};
         if($success && $deferred->{onFulfilled}) {
-            $value = $deferred->{onFulfilled}($value);
-            if(ref($value) eq 'MHFS::Promise::FakeException') {
+            try {
+                $value = $deferred->{onFulfilled}($value);
+            } catch ($e) {
                 $success = 0;
-                $value = $$value;
+                $value = $e;
             }
         } elsif(!$success && $deferred->{onRejected}) {
-            $value = $deferred->{onRejected}->($value);
-            if(ref($value) ne 'MHFS::Promise::FakeException') {
+            try {
+                $value = $deferred->{onRejected}->($value);
                 $success = 1;
-            } else {
-                $value = $$value;
+            } catch ($e) {
+                $value = $e;
             }
         }
         if($success) {
