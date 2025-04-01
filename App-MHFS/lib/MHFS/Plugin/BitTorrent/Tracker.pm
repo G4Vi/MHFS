@@ -8,7 +8,7 @@ use Data::Dumper;
 use Feature::Compat::Try;
 use MHFS::BitTorrent::Client;
 use MHFS::BitTorrent::Metainfo;
-use MHFS::Util qw(parse_ipv4);
+use MHFS::Util qw(parse_ipv4 read_file);
 
 sub createTorrent {
     my ($self, $request) = @_;
@@ -32,10 +32,13 @@ sub createTorrent {
     my $evp = $server->{'evp'};
     MHFS::BitTorrent::Metainfo::Create($evp, \%maketorrent, sub {
 
-    my $torrentData = MHFS::Util::read_file($outputname);
-    if(!$torrentData) {
-        $request->Send404;
-    }
+    my $torrentData = do {
+        try { read_file($outputname) }
+        catch ($e) {
+            $request->Send404;
+            return;
+        }
+    };
     my $torrent = MHFS::BitTorrent::Metainfo::Parse(\$torrentData);
     if(! $torrent) {
         $request->Send404; return;
@@ -162,6 +165,7 @@ sub announce {
                     my $netmap = $request->{'client'}{'server'}{'settings'}{'NETMAP'};
                     my $pubip = $self->{pubip};
                     if($netmap && (($values[0] == $netmap->[1]) && (unpack('C', $ipport) != $netmap->[1])) && $pubip) {
+                        say "HACK converting local peer to public ip";
                         $peer = pack('Nn', $pubip, (($values[4] << 8) | $values[5]));
                     }
                     say __PACKAGE__.": sending peer ".peertostring($peer);
@@ -211,11 +215,13 @@ sub new {
     while(my $file = readdir($tdh)) {
         next if(substr($file, 0, 1) eq '.');
         my $fullpath = $settings->{'MHFS_TRACKER_TORRENT_DIR'}."/$file";
-        my $torrentcontents = MHFS::Util::read_file($fullpath);
-        if(! $torrentcontents) {
-            say __PACKAGE__.": error reading $fullpath";
-            return undef;
-        }
+        my $torrentcontents = do {
+            try { read_file($fullpath) }
+            catch ($e) {
+                say __PACKAGE__.": error reading $fullpath";
+                return;
+            }
+        };
         my $torrent = MHFS::BitTorrent::Metainfo::Parse(\$torrentcontents);
         if(! $torrent) {
             say __PACKAGE__.": error parsing $fullpath";

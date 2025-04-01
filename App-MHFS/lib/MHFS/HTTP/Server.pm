@@ -14,7 +14,7 @@ use MHFS::EventLoop::Poll;
 use MHFS::FS;
 use MHFS::HTTP::Server::Client;
 use MHFS::Settings;
-use MHFS::Util qw(parse_ipv4);
+use MHFS::Util qw(parse_ipv4 read_text_file);
 
 sub new {
     my ($class, $launchsettings, $plugins, $routes) = @_;
@@ -113,9 +113,9 @@ sub new {
     return \%self;
 }
 
-sub GetResource {
+sub GetTextResource {
     my ($self, $filename) = @_;
-    $self->{'resources'}{$filename} //= MHFS::Util::read_file($filename);
+    $self->{'resources'}{$filename} //= read_text_file($filename);
     return \$self->{'resources'}{$filename};
 }
 

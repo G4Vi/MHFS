@@ -11,7 +11,7 @@ use Cwd qw(abs_path);
 use File::ShareDir qw(dist_dir);
 use File::Path qw(make_path);
 use File::Spec::Functions qw(rel2abs);
-use MHFS::Util qw(write_file parse_ipv4);
+use MHFS::Util qw(write_text_file parse_ipv4);
 
 sub write_settings_file {
     my ($SETTINGS, $filepath) = @_;
@@ -96,7 +96,7 @@ sub write_settings_file {
     $settingscontents .= ";\n\n\$SETTINGS;\n";
     say "making settings folder $filepath";
     make_path(dirname($filepath));
-    write_file($filepath,  $settingscontents);
+    write_text_file($filepath,  $settingscontents);
 }
 
 sub calc_source_id {

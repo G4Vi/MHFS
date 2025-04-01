@@ -2,6 +2,7 @@ package MHFS::Plugin::VideoLibrary v0.7.0;
 use 5.014;
 use strict; use warnings;
 use feature 'say';
+use Feature::Compat::Try;
 use Encode qw(decode);
 use URI::Escape qw (uri_escape);
 use MHFS::Util qw(output_dir_versatile escape_html uri_escape_path);
@@ -17,7 +18,13 @@ sub player_video {
     my $buf =  "<html>";
     $buf .= "<head>";
     $buf .= '<style type="text/css">';
-    my $temp = $server->GetResource($settings->{'DOCUMENTROOT'} . '/static/' . 'video_style.css');
+    my $temp = do {
+        try { $server->GetTextResource($settings->{'DOCUMENTROOT'} . '/static/' . 'video_style.css') }
+        catch ($e) {
+            say "video_style.css not found";
+            \''
+        }
+    };
     $buf .= $$temp;
     $buf .= '.searchfield { width: 50%; margin: 30px;}';
     $buf .= '</style>';
@@ -53,10 +60,22 @@ sub player_video {
     $buf .= '</div>';
 
     # add the video player
-    $temp = $server->GetResource($server->{'loaded_plugins'}{'MHFS::Plugin::GetVideo'}{'VIDEOFORMATS'}{$fmt}->{'player_html'});
+    $temp = do {
+        try { $server->GetTextResource($server->{'loaded_plugins'}{'MHFS::Plugin::GetVideo'}{'VIDEOFORMATS'}{$fmt}->{'player_html'}) }
+        catch ($e) {
+            say "player_html not found";
+            \''
+        }
+    };
     $buf .= $$temp;
     $buf .= '<script>';
-    $temp = $server->GetResource($settings->{'DOCUMENTROOT'} . '/static/' . 'setVideo.js');
+    $temp = do {
+        try { $server->GetTextResource($settings->{'DOCUMENTROOT'} . '/static/' . 'setVideo.js'); }
+        catch ($e) {
+            say "setVideo.js not found";
+            \''
+        }
+    };
     $buf .= $$temp;
     $buf .= '</script>';
     $buf .= "</body>";

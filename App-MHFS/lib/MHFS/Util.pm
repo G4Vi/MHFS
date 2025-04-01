@@ -3,6 +3,7 @@ use 5.014;
 use strict; use warnings;
 use feature 'say';
 use Exporter 'import';
+use Feature::Compat::Try;
 use File::Find;
 use File::Basename;
 use POSIX ();
@@ -17,11 +18,8 @@ our @EXPORT_OK = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file
 sub LOCK_GET_LOCKDATA {
     my ($filename) = @_;
     my $lockname = "$filename.lock";
-    my $bytes = read_file($lockname);
-    if(! defined $bytes) {
-        return;
-    }
-    return $bytes;
+    try { read_text_file($lockname) }
+    catch ($e) { return; }
 }
 
 #sub LOCK_GET_FILESIZE {
@@ -39,7 +37,7 @@ sub LOCK_WRITE {
         return 0;
     }
     $lockdata //= "99999999999"; #99 Billion
-    write_file($lockname, $lockdata);
+    write_text_file($lockname, $lockdata);
     return 1;
 }
 
@@ -77,16 +75,9 @@ sub write_text_file_lossy {
 
 sub read_file {
     my ($filename) = @_;
-    return do {
-        local $/ = undef;
-        if(!(open my $fh, "<", $filename)) {
-            #say "could not open $filename: $!";
-            return;
-        }
-        else {
-            <$fh>;
-        }
-    };
+    local $/ = undef;
+    open my $fh, "<", $filename or die "Failed to open $filename";
+    <$fh> // die "Error reading from $filename"
 }
 
 sub read_text_file {

@@ -4,13 +4,14 @@ use strict; use warnings;
 use feature 'say';
 use Data::Dumper qw (Dumper);
 use Fcntl qw(:seek);
+use Feature::Compat::Try;
 use Scalar::Util qw(weaken);
 use URI::Escape qw (uri_escape);
 use Devel::Peek qw(Dump);
 no warnings "portable";
 use Config;
 use MHFS::Process;
-use MHFS::Util qw(space2us LOCK_WRITE round shellcmd_unlock ASYNC pid_running read_file write_file ceil_div);
+use MHFS::Util qw(space2us LOCK_WRITE round shellcmd_unlock ASYNC pid_running read_text_file write_text_file ceil_div);
 
 sub new {
     my ($class, $settings) = @_;
@@ -218,7 +219,13 @@ sub video_hls_write_master_playlist {
     my $requestfile = $video->{'out_filepath'};
 
     # fix the path to the video playlist to be correct
-    my $m3ucontent = read_file($requestfile);
+    my $m3ucontent = do {
+        try { read_text_file($requestfile) }
+        catch ($e) {
+            say "$requestfile does not exist or is not UTF-8";
+            ''
+        }
+    };
     my $subm3u;
     my $newm3ucontent = '';
     foreach my $line (split("\n", $m3ucontent)) {
@@ -248,7 +255,8 @@ sub video_hls_write_master_playlist {
         # assume its in english
         $newm3ucontent .= '#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="English",DEFAULT='.$default.',FORCED='.$forced.',URI="' . $subm3u . '",LANGUAGE="en"' . "\n";
     }
-    write_file($requestfile, $newm3ucontent);
+    try { write_text_file($requestfile, $newm3ucontent); }
+    catch ($e) { say "writing new m3u failed"; }
     return 1;
 }
 
@@ -1414,7 +1422,8 @@ sub video_on_streams {
             elsif($eline =~ /^\s+Duration:\s+(\d\d):(\d\d):(\d\d)\.(\d\d)/) {
                 #TODO add support for over day long video
                 $video->{'duration'} //= "PT$1H$2M$3.$4S";
-                write_file($video->{'out_location'} . '/duration',  $video->{'duration'});
+                try { write_text_file($video->{'out_location'} . '/duration',  $video->{'duration'}); }
+                catch ($e) { say "writing new duration file failed"; }
             }
             elsif(defined $current_stream) {
                 if($eline !~ /^\s\s+/) {
