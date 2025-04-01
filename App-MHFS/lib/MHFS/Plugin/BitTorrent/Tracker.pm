@@ -160,14 +160,9 @@ sub announce {
                 if($peer ne $ipport) {
                     my @values = unpack('CCCCCC', $peer);
                     my $netmap = $request->{'client'}{'server'}{'settings'}{'NETMAP'};
-                    my $pubip = $request->{'client'}{'server'}{'settings'}{'PUBLICIP'};
+                    my $pubip = $self->{pubip};
                     if($netmap && (($values[0] == $netmap->[1]) && (unpack('C', $ipport) != $netmap->[1])) && $pubip) {
-                        try {
-                            say "HACK converting local peer to public ip";
-                            $peer = pack('Nn', parse_ipv4($pubip), (($values[4] << 8) | $values[5]));
-                        catch ($e) {
-                            say "public ip didn't parse, cannot convert local peer to public ip"
-                        }
+                        $peer = pack('Nn', $pubip, (($values[4] << 8) | $values[5]));
                     }
                     say __PACKAGE__.": sending peer ".peertostring($peer);
                     $pstr .= $peer;
@@ -201,6 +196,11 @@ sub new {
     my $self =  {'settings' => $settings, 'torrents' => \%{$settings->{'TORRENTS'}}, 'announce_interval' => $ai, 'fs' => $server->{'fs'}};
     bless $self, $class;
     say __PACKAGE__.": announce interval: ".$self->{'announce_interval'};
+
+    if (exists $settings->{'PUBLICIP'}) {
+        try { $self->{pubip} = parse_ipv4($settings->{'PUBLICIP'}); }
+        catch ($e) {}
+    }
 
     # load the existing torrents
     my $odres = opendir(my $tdh, $settings->{'MHFS_TRACKER_TORRENT_DIR'});
