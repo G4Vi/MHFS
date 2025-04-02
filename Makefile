@@ -5,7 +5,7 @@ PLAYERDIR:=App-MHFS/share/public_html/static/music_worklet_inprogress/player
 MUSICINCDIR=App-MHFS/share/public_html/static/music_inc
 
 # MHFSVERSION := $(shell perl -I App-MHFS/lib -MApp::MHFS -e 'print substr($$App::MHFS::VERSION, 1)' 2>/dev/null)
-MHFSVERSION:=0.6.0
+MHFSVERSION:=0.7.0
 APPERLM := $(shell command -v apperlm || echo perl -I$$(realpath ../Perl-Dist-APPerl/lib) $$(realpath ../Perl-Dist-APPerl/script/apperlm))
 
 # build everything
@@ -72,6 +72,12 @@ apperl/File-ShareDir-Install:
 	cd apperl && mv File-ShareDir-Install-* File-ShareDir-Install
 	cd apperl && rm File-ShareDir-Install.*
 
+apperl/Feature-Compat-Try:
+	cd apperl && perl download_package.pl Class::Inspector
+	cd apperl && tar xf Feature-Compat-Try.*
+	cd apperl && mv Feature-Compat-Try-* Feature-Compat-Try
+	cd apperl && rm Feature-Compat-Try.*
+
 apperl/App-MHFS: release
 	rm -rf apperl/MHFS* apperl/App-MHFS*
 	cd apperl && tar xf ../MHFS*.tar
@@ -80,7 +86,7 @@ apperl/App-MHFS: release
 	cd apperl && rm -r MHFS*
 
 .PHONY: apperl
-apperl: apperl/HTML-Template apperl/URI apperl/Class-Inspector apperl/File-ShareDir apperl/File-ShareDir-Install apperl/App-MHFS
+apperl: apperl/HTML-Template apperl/URI apperl/Class-Inspector apperl/File-ShareDir apperl/File-ShareDir-Install apperl/Feature-Compat-Try apperl/App-MHFS
 	cd apperl && $(APPERLM) checkout mhfs
 	cd apperl && $(APPERLM) configure
 	cd apperl && $(APPERLM) build
