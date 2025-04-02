@@ -73,7 +73,7 @@ apperl/File-ShareDir-Install:
 	cd apperl && rm File-ShareDir-Install.*
 
 apperl/Feature-Compat-Try:
-	cd apperl && perl download_package.pl Class::Inspector
+	cd apperl && perl download_package.pl Feature::Compat::Try
 	cd apperl && tar xf Feature-Compat-Try.*
 	cd apperl && mv Feature-Compat-Try-* Feature-Compat-Try
 	cd apperl && rm Feature-Compat-Try.*
