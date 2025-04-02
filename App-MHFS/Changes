@@ -4,6 +4,12 @@ v0.7.0  XXXX-XX-XX
         `use 5.014;` consistently across packages
         MHFS::BitTorrent::Bencoding, MHFS::Util - export with @EXPORT_OK
         Add running tests to release process
+        Switch much of the error handling to try catch with Feature::Compat::Try
+          Mostly in MHFS::Plugin::Kodi and MHFS::Util
+          MHFS::Promise: use actual exceptions instead of fake exception system
+        Fix circular dependencies with MHFS::Kodi::* and MHFS::Plugin::Kodi
+        Fix output_dir_versatile not properly terminating some directories,
+        Fix SendLocalFile having some unnecessary lock checks
 
 v0.6.0  2024-10-21
         Kodi JSON API `/kodi/movies` and `/kodi/tv`
