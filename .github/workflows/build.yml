@@ -69,7 +69,7 @@ jobs:
     - name: Setup mhfs apperl deps
       run: |
         cd MHFS
-        make apperl/HTML-Template apperl/URI apperl/Class-Inspector apperl/File-ShareDir apperl/File-ShareDir-Install
+        make apperl/HTML-Template apperl/URI apperl/Class-Inspector apperl/File-ShareDir apperl/File-ShareDir-Install apperl/Feature-Compat-Try
         tar xvf MHFS*.tar
         rm MHFS*.tar
         tar xvf MHFS*/App-MHFS-*.tar.gz
