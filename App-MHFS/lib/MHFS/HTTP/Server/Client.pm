@@ -12,7 +12,6 @@ use Scalar::Util qw(looks_like_number weaken);
 use Data::Dumper;
 use Carp;
 use MHFS::HTTP::Server::Client::Request;
-#$SIG{ __DIE__ } = sub { Carp::confess( @_ ) };
 
 sub new {
     my ($class, $sock, $server, $serverhostinfo, $ip) = @_;

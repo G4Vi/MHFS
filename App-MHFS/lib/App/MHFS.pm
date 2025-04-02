@@ -30,14 +30,15 @@ sub run {
 
     # parse command line args into launchsettings
     my %launchsettings;
-    my ($flush, $cfgdir, $fallback_data_root, $appdir, $help, $versionflag);
+    my ($flush, $cfgdir, $fallback_data_root, $appdir, $help, $versionflag, $debug);
     if(!GetOptions(
         'flush' => \$flush,
         'cfgdir=s' => \$cfgdir,
         'fallback_data_root=s' => \$fallback_data_root,
         'appdir=s' => \$appdir,
-        '--help|h' =>\$help,
-        '--version|v' => \$versionflag,
+        'help|h' =>\$help,
+        'version|v' => \$versionflag,
+        'debug|d' => \$debug,
     )) {
         print STDERR "$0: Invalid param\n";
         print STDERR $USAGE;
@@ -58,6 +59,7 @@ sub run {
     $launchsettings{CFGDIR} = $cfgdir if($cfgdir);
     $launchsettings{FALLBACK_DATA_ROOT} = $fallback_data_root if($fallback_data_root);
     $launchsettings{APPDIR} = $appdir if($appdir);
+    $launchsettings{debug} = $debug if ($debug);
 
     # start the server (blocks)
     say __PACKAGE__.": starting MHFS::HTTP::Server";

@@ -17,9 +17,7 @@ use Devel::Peek;
 use MHFS::FD::Reader;
 use MHFS::FD::Writer;
 use MHFS::EventLoop::Poll;
-
 use Carp;
-#$SIG{ __DIE__ } = sub { Carp::confess( @_ ) };
 
 #my %CHILDREN;
 #$SIG{CHLD} = sub {

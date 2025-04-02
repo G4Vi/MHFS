@@ -9,6 +9,7 @@ use Scalar::Util qw(weaken);
 use Feature::Compat::Try;
 use File::Path qw(make_path);
 use Data::Dumper;
+use Carp ();
 use Config;
 use MHFS::EventLoop::Poll;
 use MHFS::FS;
@@ -19,9 +20,10 @@ use MHFS::Util qw(parse_ipv4 read_text_file);
 sub new {
     my ($class, $launchsettings, $plugins, $routes) = @_;
 
-    $SIG{PIPE} = sub {
+    local $SIG{PIPE} = sub {
         print STDERR "SIGPIPE @_\n";
     };
+    local $SIG{ __DIE__ } = \&Carp::confess if ($launchsettings->{debug});
 
     binmode(STDOUT, ":utf8");
     binmode(STDERR, ":utf8");
