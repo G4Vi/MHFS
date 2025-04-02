@@ -72,6 +72,12 @@ apperl/File-ShareDir-Install:
 	cd apperl && mv File-ShareDir-Install-* File-ShareDir-Install
 	cd apperl && rm File-ShareDir-Install.*
 
+apperl/Module-Build:
+	cd apperl && perl download_package.pl Module::Build
+	cd apperl && tar xf Module-Build.*
+	cd apperl && mv Module-Build-* Module-Build
+	cd apperl && rm Module-Build.*
+
 apperl/Feature-Compat-Try:
 	cd apperl && perl download_package.pl Feature::Compat::Try
 	cd apperl && tar xf Feature-Compat-Try.*
@@ -86,7 +92,7 @@ apperl/App-MHFS: release
 	cd apperl && rm -r MHFS*
 
 .PHONY: apperl
-apperl: apperl/HTML-Template apperl/URI apperl/Class-Inspector apperl/File-ShareDir apperl/File-ShareDir-Install apperl/Feature-Compat-Try apperl/App-MHFS
+apperl: apperl/HTML-Template apperl/URI apperl/Class-Inspector apperl/File-ShareDir apperl/File-ShareDir-Install apperl/Module-Build apperl/Feature-Compat-Try apperl/App-MHFS
 	cd apperl && $(APPERLM) checkout mhfs
 	cd apperl && $(APPERLM) configure
 	cd apperl && $(APPERLM) build

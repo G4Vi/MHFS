@@ -11,6 +11,7 @@
             "./Class-Inspector",
             "./File-ShareDir-Install",
             "./File-ShareDir",
+            "./Module-Build",
             "./Feature-Compat-Try",
             "./App-MHFS"
          ]
