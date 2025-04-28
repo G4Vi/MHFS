@@ -2,6 +2,7 @@ package MHFS::Util v0.7.0;
 use 5.014;
 use strict; use warnings;
 use feature 'say';
+use Carp qw(croak);
 use Exporter 'import';
 use Feature::Compat::Try;
 use File::Find;
@@ -12,6 +13,7 @@ use Encode qw(decode encode);
 use URI::Escape qw(uri_escape uri_escape_utf8);
 use MIME::Base64 qw(encode_base64url decode_base64url);
 use PerlIO::encoding;
+use warnings::register;
 our @EXPORT_OK = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'write_text_file', 'write_text_file_lossy', 'read_file', 'read_text_file', 'read_text_file_lossy', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'shell_escape', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME', 'get_printable_utf8', 'small_url_encode', 'uri_escape_path', 'uri_escape_path_utf8', 'round', 'ceil_div', 'get_SI_size', 'str_to_base64url', 'base64url_to_str', 'decode_utf_8', 'parse_ipv4');
 
 # single threaded locks
@@ -48,19 +50,20 @@ sub UNLOCK_WRITE {
 }
 
 sub write_file {
-    my ($filename, $text) = @_;
-    if (utf8::is_utf8($text)) {
-        say "BUG: UTF-8 flag is set in write_file for $text";
+    my ($filename, $data) = @_;
+    if (utf8::is_utf8($data)) {
+        warnings::warnif "UTF8 string in write_file";
+        Encode::_utf8_off($data);
     }
-    open (my $fh, '>', $filename) or die("$! $filename");
-    print $fh $text;
+    open (my $fh, '>', $filename) or croak "$! $filename";
+    print $fh $data;
     close($fh);
 }
 
 sub write_text_file {
     my ($filename, $text) = @_;
     local $PerlIO::encoding::fallback = Encode::FB_CROAK;
-    open (my $fh, '>:encoding(UTF-8)', $filename) or die("$! $filename");
+    open (my $fh, '>:encoding(UTF-8)', $filename) or croak "$! $filename";
     print $fh $text;
     close($fh);
 }
@@ -68,7 +71,7 @@ sub write_text_file {
 sub write_text_file_lossy {
     my ($filename, $text) = @_;
     local $PerlIO::encoding::fallback = Encode::ONLY_PRAGMA_WARNINGS | Encode::WARN_ON_ERR;
-    open (my $fh, '>:encoding(UTF-8)', $filename) or die("$! $filename");
+    open (my $fh, '>:encoding(UTF-8)', $filename) or croak "$! $filename";
     print $fh $text;
     close($fh);
 }
@@ -76,24 +79,24 @@ sub write_text_file_lossy {
 sub read_file {
     my ($filename) = @_;
     local $/ = undef;
-    open my $fh, "<", $filename or die "Failed to open $filename";
-    <$fh> // die "Error reading from $filename"
+    open my $fh, "<", $filename or croak "Failed to open $filename";
+    <$fh> // croak "Error reading from $filename"
 }
 
 sub read_text_file {
     my ($filename) = @_;
     local $/ = undef;
     local $PerlIO::encoding::fallback = Encode::FB_CROAK;
-    open my $fh, '<:encoding(UTF-8)', $filename or die "Failed to open $filename";
-    <$fh> // die "Error reading from $filename"
+    open my $fh, '<:encoding(UTF-8)', $filename or croak "Failed to open $filename";
+    <$fh> // croak "Error reading from $filename"
 }
 
 sub read_text_file_lossy {
     my ($filename) = @_;
     local $/ = undef;
     local $PerlIO::encoding::fallback = Encode::ONLY_PRAGMA_WARNINGS | Encode::WARN_ON_ERR;
-    open my $fh, '<:encoding(UTF-8)', $filename or die "Failed to open $filename";
-    <$fh> // die "Error reading from $filename"
+    open my $fh, '<:encoding(UTF-8)', $filename or croak "Failed to open $filename";
+    <$fh> // croak "Error reading from $filename"
 }
 
 # This is not fast
@@ -311,10 +314,10 @@ sub parse_ipv4 {
     my $failmessage = "invalid ip: $ipstring";
     my @values = $ipstring =~ /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
     if(scalar(@values) != 4) {
-        die $failmessage;
+        croak $failmessage;
     }
     foreach my $i (0..3) {
-        ($values[$i] <= 255) or die $failmessage;
+        ($values[$i] <= 255) or croak $failmessage;
     }
     return ($values[0] << 24) | ($values[1] << 16) | ($values[2] << 8) | ($values[3]);
 }

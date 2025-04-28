@@ -5,9 +5,9 @@ use warnings;
 use Test2::V0;
 use Feature::Compat::Try;
 use Encode qw(decode encode);
-use MHFS::Util qw(space2us escape_html escape_html_noquote shell_escape get_printable_utf8 read_text_file_lossy read_text_file write_text_file write_text_file_lossy decode_utf_8 parse_ipv4);
+use MHFS::Util qw(space2us escape_html escape_html_noquote shell_escape get_printable_utf8 read_text_file_lossy read_text_file write_text_file write_text_file_lossy decode_utf_8 parse_ipv4 write_file read_file);
 
-plan 24;
+plan 26;
 
 is(space2us('hello world'), 'hello_world');
 
@@ -82,7 +82,10 @@ is(shell_escape(q|it's|), q|it'"'"'s|);
     if(open(my $fh, '>:raw', $fname)) {
         print $fh 'A'.chr(0xFF).'B';
         close($fh);
-        my $text = read_text_file_lossy($fname);
+        my $text = do {
+            local $SIG{__WARN__} = sub {};
+            read_text_file_lossy($fname)
+        };
         is($text,  'A'.chr(0xFFFD).'B', 'read_text_file_lossy Valid invalid valid');
         my $message = 'read_text_file throws on invalid file';
         try {
@@ -100,14 +103,20 @@ is(shell_escape(q|it's|), q|it'"'"'s|);
     my $message = 'write_text_file throws on invalid text';
     my $input = "A\x{D800}B";
     try {
-        write_text_file($fname, $input);
+        {
+            local $SIG{__WARN__} = sub {};
+            write_text_file($fname, $input);
+        }
         fail($message);
     } catch ($e) {
         pass($message);
     }
     unlink($fname);
     try {
-        write_text_file_lossy($fname, $input);
+        {
+            local $SIG{__WARN__} = sub {};
+            write_text_file_lossy($fname, $input);
+        }
         my $text = read_text_file($fname);
         is($text,  'A'.chr(0xFFFD).'B', 'write_text_file_lossy Valid invalid valid');
     } catch ($e) {
@@ -138,5 +147,29 @@ is(shell_escape(q|it's|), q|it'"'"'s|);
     } catch ($e) {
         pass($message);
         is($bytes, $bcopy, "decode_utf_8 doesn't modify original string");
+    }
+}
+
+{
+    my $scalar = chr(0xFF);
+    my $filename = 'test_write_file.txt';
+    my $message = 'Write 0xFF works';
+    try {
+        write_file($filename, $scalar);
+        my $readback = read_file($filename);
+        is($readback, $scalar, $message);
+    } catch ($e) {
+        fail($message);
+    }
+    $message = 'Write (UTF8) 0xFF works';
+    utf8::upgrade($scalar);
+    try {
+        no warnings 'MHFS::Util';
+        write_file($filename , $scalar);
+        my $readback = read_file($filename);
+        is($readback, "\xC3\xBF", $message);
+    } catch ($e) {
+        print $e;
+        fail($message);
     }
 }
