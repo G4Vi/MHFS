@@ -10,6 +10,9 @@ v0.7.0  XXXX-XX-XX
         Fix circular dependencies with MHFS::Kodi::* and MHFS::Plugin::Kodi
         Fix output_dir_versatile not properly terminating some directories,
         Fix SendLocalFile having some unnecessary lock checks
+        Disable global Carp::confess
+        Add debug flag to turn on Carp::confess on $SIG{ __DIE__ }
+        MHFS::Util - croak instead of die, warnif instead of say for warnings
 
 v0.6.0  2024-10-21
         Kodi JSON API `/kodi/movies` and `/kodi/tv`
