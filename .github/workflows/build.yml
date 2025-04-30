@@ -27,7 +27,7 @@ jobs:
         install-modules-with: cpanm
         install-modules-args: --with-develop --with-configure --with-recommends
     - name: Setup emscripten
-      uses: mymindstorm/setup-emsdk@v11
+      uses: mymindstorm/setup-emsdk@v14
       with:
         version: latest
         actions-cache-folder: 'emsdk-cache'
@@ -107,7 +107,7 @@ jobs:
         path: 'MHFS'
         submodules: 'true'
     - name: Setup emscripten
-      uses: mymindstorm/setup-emsdk@v11
+      uses: mymindstorm/setup-emsdk@v14
       with:
         version: ${{ matrix.emcc }}
         actions-cache-folder: 'emsdk-cache'
