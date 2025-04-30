@@ -161,6 +161,7 @@ is(shell_escape(q|it's|), q|it'"'"'s|);
     } catch ($e) {
         fail($message);
     }
+    unlink($filename);
     $message = 'Write (UTF8) 0xFF works';
     utf8::upgrade($scalar);
     try {
@@ -172,4 +173,5 @@ is(shell_escape(q|it's|), q|it'"'"'s|);
         print $e;
         fail($message);
     }
+    unlink($filename);
 }
