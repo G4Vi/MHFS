@@ -28,6 +28,72 @@ BEGIN {
     }
 }
 
+sub readtvdir {
+    my ($self, $tvshows, $source, $b_tvdir) = @_;
+    my $dh;
+    if(! opendir ( $dh, $b_tvdir )) {
+        warn "Error in opening dir $b_tvdir\n";
+        return;
+    }
+    my @diritems;
+    while( (my $b_filename = readdir($dh))) {
+        next if(($b_filename eq '.') || ($b_filename eq '..'));
+        next if(!(-s "$b_tvdir/$b_filename"));
+        if($b_filename !~ /^(.+)[\.\s]+S(?:eason\s)?(\d+)/) {
+            say "suspicious: $b_filename";
+        }
+        my $b_showname = $1 || $b_filename;
+        my $season = $2;
+        next if (! $b_showname);
+        $b_showname =~ s/\./ /g;
+        if(! $tvshows->{$b_showname}) {
+            my %show = (items => {});
+            my $plot = $self->{tvmeta}."/$b_showname/plot.txt";
+            try { $show{plot} = read_text_file_lossy($plot); }
+            catch($e) {}
+            $tvshows->{$b_showname} = \%show;
+        }
+        my %item;
+        $item{season} = $season + 0 if (defined $season);
+        $tvshows->{$b_showname}{items}{"$source/$b_filename"} = \%item;
+    }
+
+    closedir($dh);
+}
+
+sub _build_tv_library {
+    my ($self, $sources) = @_;
+    my %tvshows;
+    foreach my $source (@$sources) {
+        if ($self->{server}{settings}{SOURCES}{$source}{type} ne 'local') {
+            warn "skipping source $source, only local implemented";
+            next;
+        }
+        my $b_tvdir = $self->{server}{settings}{SOURCES}{$source}{folder};
+        $self->readtvdir(\%tvshows, $source, $b_tvdir);
+    }
+    \%tvshows
+}
+
+# format tv library for kodi http
+sub route_tvnew {
+    my ($self, $request, $sources, $kodidir) = @_;
+    my $request_path = do {
+        try { decode_utf_8($request->{path}{unsafepath}) }
+        catch($e) {
+            warn "$request->{path}{unsafepath} is not, UTF-8, 404";
+            $request->Send404;
+            return;
+        }
+    };
+    # build the tv show library
+    if(! exists $self->{tvshows} || $request_path eq $kodidir) {
+        $self->{tvshows} = $self->_build_tv_library($sources);
+    }
+    my $tvshows = $self->{tvshows};
+    $request->SendAsJSON($tvshows);
+}
+
 # format tv library for kodi http
 sub route_tv {
     my ($self, $request, $absdir, $kodidir) = @_;
@@ -745,7 +811,11 @@ sub new {
         }),
         DirectoryRoute('/kodi/tv', sub {
             my ($request) = @_;
-            route_tv($self, $request, $settings->{'MEDIALIBRARIES'}{'tv'}, '/kodi/tv');
+            route_tv($self, $request, $settings->{SOURCES}{$settings->{MEDIASOURCES}{tv}[0]}{folder}, '/kodi/tv');
+        }),
+        DirectoryRoute('/kodi/tvnew', sub {
+            my ($request) = @_;
+            route_tvnew($self, $request, $settings->{'MEDIASOURCES'}{'tv'}, '/kodi/tvnew');
         }),
         ['/kodi/metadata/*', sub {
             my ($request) = @_;
