@@ -39,23 +39,28 @@ sub readtvdir {
     while( (my $b_filename = readdir($dh))) {
         next if(($b_filename eq '.') || ($b_filename eq '..'));
         next if(!(-s "$b_tvdir/$b_filename"));
-        if($b_filename !~ /^(.+)[\.\s]+S(?:eason\s)?(\d+)/) {
-            say "suspicious: $b_filename";
+        my $filename = decode('UTF-8', $b_filename, Encode::FB_DEFAULT | Encode::LEAVE_SRC);
+        if($filename !~ /^(.+)[\.\s]+S(?:eason\s)?(\d+)/) {
+            say "suspicious: $filename";
         }
-        my $b_showname = $1 || $b_filename;
+        my $showname = $1 || $filename;
         my $season = $2;
-        next if (! $b_showname);
-        $b_showname =~ s/\./ /g;
-        if(! $tvshows->{$b_showname}) {
-            my %show = (items => {});
-            my $plot = $self->{tvmeta}."/$b_showname/plot.txt";
+        next if (! $showname);
+        $showname =~ s/\./ /g;
+        if(! $tvshows->{$showname}) {
+            my %show = (items => {}, seasons => {});
+            my $plot = $self->{tvmeta}."/$showname/plot.txt";
             try { $show{plot} = read_text_file_lossy($plot); }
             catch($e) {}
-            $tvshows->{$b_showname} = \%show;
+            $tvshows->{$showname} = \%show;
         }
-        my %item;
-        $item{season} = $season + 0 if (defined $season);
-        $tvshows->{$b_showname}{items}{"$source/$b_filename"} = \%item;
+        my %item = (name => $filename);
+        if (defined $season) {
+            $season += 0;
+            $tvshows->{$showname}{seasons}{$season} //= {};
+            $item{season} = $season + 0;
+        }
+        $tvshows->{$showname}{items}{"$source/$b_filename"} = \%item;
     }
 
     closedir($dh);
