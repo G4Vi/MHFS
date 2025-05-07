@@ -19,7 +19,7 @@ use MHFS::Kodi::Movies;
 use MHFS::Kodi::MovieSubtitle;
 use MHFS::Process;
 use MHFS::Promise;
-use MHFS::Util qw(base64url_to_str str_to_base64url uri_escape_path_utf8 read_text_file_lossy write_text_file_lossy decode_utf_8 escape_html_noquote);
+use MHFS::Util qw(base64url_to_str str_to_base64url uri_escape_path_utf8 read_text_file_lossy write_text_file_lossy decode_utf_8 escape_html_noquote fold_case);
 use Feature::Compat::Try;
 BEGIN {
     if( ! (eval "use JSON; 1")) {
@@ -31,38 +31,34 @@ BEGIN {
 sub readtvdir {
     my ($self, $tvshows, $source, $b_tvdir) = @_;
     my $dh;
-    if(! opendir ( $dh, $b_tvdir )) {
+    if (! opendir ( $dh, $b_tvdir )) {
         warn "Error in opening dir $b_tvdir\n";
         return;
     }
     my @diritems;
-    while( (my $b_filename = readdir($dh))) {
+    while (my $b_filename = readdir($dh)) {
         next if(($b_filename eq '.') || ($b_filename eq '..'));
         next if(!(-s "$b_tvdir/$b_filename"));
         my $filename = decode('UTF-8', $b_filename, Encode::FB_DEFAULT | Encode::LEAVE_SRC);
-        if($filename !~ /^(.+)[\.\s]+S(?:eason\s)?(\d+)/) {
+        if ($filename !~ /^(.+?)(?:[\.\s]+(\d{4}))?[\.\s]+S(?:eason\s)?0*(\d+)/) {
             say "suspicious: $filename";
         }
         my $showname = $1 || $filename;
-        my $season = $2;
+        my $year = $2;
+        my $season = $3 // 0;
         next if (! $showname);
         $showname =~ s/\./ /g;
-        if(! $tvshows->{$showname}) {
-            my %show = (items => {}, seasons => {});
-            my $plot = $self->{tvmeta}."/$showname/plot.txt";
+        my $showid = fold_case($showname);
+        if (! $tvshows->{$showid}) {
+            my %show = (name => $showname, seasons => {});
+            my $plot = $self->{tvmeta}."/$showid/plot.txt";
             try { $show{plot} = read_text_file_lossy($plot); }
             catch($e) {}
-            $tvshows->{$showname} = \%show;
+            $tvshows->{$showid} = \%show;
         }
-        my %item = (name => $filename);
-        if (defined $season) {
-            $season += 0;
-            $tvshows->{$showname}{seasons}{$season} //= {};
-            $item{season} = $season + 0;
-        }
-        $tvshows->{$showname}{items}{"$source/$b_filename"} = \%item;
+        $tvshows->{$showid}{seasons}{$season} //= {};
+        $tvshows->{$showid}{seasons}{$season}{"$source/$b_filename"} = (name => $filename, isdir => (-d _ // 0)+0);
     }
-
     closedir($dh);
 }
 

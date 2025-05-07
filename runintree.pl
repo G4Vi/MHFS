@@ -18,7 +18,7 @@ if($^O ne 'MSWin32') {
 
     # run
     my @cmd = ('perl', @include , "$FindBin::Bin/App-MHFS/bin/mhfs", @ARGV);
-    print join(' ', @cmd);
+    print join(' ', @cmd)."\n";
     exec {$cmd[0]} @cmd;
 }
 # exec is weird on windows so instead just load the module and run

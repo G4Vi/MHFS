@@ -5,9 +5,9 @@ use warnings;
 use Test2::V0;
 use Feature::Compat::Try;
 use Encode qw(decode encode);
-use MHFS::Util qw(space2us escape_html escape_html_noquote shell_escape get_printable_utf8 read_text_file_lossy read_text_file write_text_file write_text_file_lossy decode_utf_8 parse_ipv4 write_file read_file);
+use MHFS::Util qw(space2us escape_html escape_html_noquote shell_escape get_printable_utf8 read_text_file_lossy read_text_file write_text_file write_text_file_lossy decode_utf_8 parse_ipv4 write_file read_file fold_case);
 
-plan 26;
+plan 27;
 
 is(space2us('hello world'), 'hello_world');
 
@@ -170,8 +170,11 @@ is(shell_escape(q|it's|), q|it'"'"'s|);
         my $readback = read_file($filename);
         is($readback, "\xC3\xBF", $message);
     } catch ($e) {
-        print $e;
         fail($message);
     }
     unlink($filename);
+}
+
+{
+    is(fold_case('HARAMBE'), 'harambe', 'fold_case works');
 }

@@ -14,7 +14,15 @@ use URI::Escape qw(uri_escape uri_escape_utf8);
 use MIME::Base64 qw(encode_base64url decode_base64url);
 use PerlIO::encoding;
 use warnings::register;
-our @EXPORT_OK = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'write_text_file', 'write_text_file_lossy', 'read_file', 'read_text_file', 'read_text_file_lossy', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'shell_escape', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME', 'get_printable_utf8', 'small_url_encode', 'uri_escape_path', 'uri_escape_path_utf8', 'round', 'ceil_div', 'get_SI_size', 'str_to_base64url', 'base64url_to_str', 'decode_utf_8', 'parse_ipv4');
+our @EXPORT_OK = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'write_text_file', 'write_text_file_lossy', 'read_file', 'read_text_file', 'read_text_file_lossy', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'shell_escape', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME', 'get_printable_utf8', 'small_url_encode', 'uri_escape_path', 'uri_escape_path_utf8', 'round', 'ceil_div', 'get_SI_size', 'str_to_base64url', 'base64url_to_str', 'decode_utf_8', 'parse_ipv4', 'fold_case');
+
+BEGIN {
+    if (eval "use feature 'fc'; 1;") {
+        *fold_case = \&CORE::fc;
+    } else {
+        *fold_case = \&lc;
+    }
+}
 
 # single threaded locks
 sub LOCK_GET_LOCKDATA {
@@ -448,8 +456,32 @@ sub base64url_to_str {
     decode('UTF-8', $bstr, Encode::FB_CROAK)
 }
 
+sub die2croak {
+    local $SIG{__DIE__} = sub {
+        my ($message) = @_;
+        chomp $message;
+        $message =~ s/\sat\s.+\sline\s\d+\.$//;
+        local $Carp::CarpLevel;
+        if ($Carp::Verbose) {
+            $Carp::CarpLevel += 2;
+        }
+        croak $message;
+    };
+    my $call = shift @_;
+    &$call;
+}
+
 sub decode_utf_8 {
-    decode('UTF-8', $_[0], Encode::FB_CROAK | Encode::LEAVE_SRC)
+    #local $SIG{__DIE__} = sub {
+    #    my ($message) = @_;
+    #    chomp $message;
+    #    $message =~ s/\sat\s.+\sline\s\d+\.$//;
+    #    local $Carp::CarpLevel;
+    #    $Carp::CarpLevel++ if ($Carp::Verbose);
+    #    croak $message;
+    #};
+    #decode('UTF-8', $_[0], Encode::FB_CROAK | Encode::LEAVE_SRC)
+    die2croak(\&decode, 'UTF-8', $_[0], Encode::FB_CROAK | Encode::LEAVE_SRC)
 }
 
 1;
