@@ -11,6 +11,7 @@ use Data::Dumper qw(Dumper);
 use Scalar::Util qw(weaken);
 use MIME::Base64 qw(encode_base64url decode_base64url);
 use Devel::Peek qw(Dump);
+use MHFS::Kodi::TVShows;
 use MHFS::Kodi::Movie;
 use MHFS::Kodi::MovieEdition;
 use MHFS::Kodi::MovieEditions;
@@ -57,7 +58,7 @@ sub readtvdir {
             $tvshows->{$showid} = \%show;
         }
         $tvshows->{$showid}{seasons}{$season} //= {};
-        $tvshows->{$showid}{seasons}{$season}{"$source/$b_filename"} = (name => $filename, isdir => (-d _ // 0)+0);
+        $tvshows->{$showid}{seasons}{$season}{"$source/$b_filename"} = {name => $filename, isdir => (-d _ // 0)+0};
     }
     closedir($dh);
 }
@@ -92,7 +93,19 @@ sub route_tvnew {
         $self->{tvshows} = $self->_build_tv_library($sources);
     }
     my $tvshows = $self->{tvshows};
-    $request->SendAsJSON($tvshows);
+    my $tvitem;
+    if ($request_path ne $kodidir) {
+        die "ENOTIMPLEMENTED";
+    } else {
+        $tvitem = bless {tvshows => $tvshows}, 'MHFS::Kodi::TVShows';
+    }
+    if(exists $request->{qs}{fmt} && $request->{qs}{fmt} eq 'html') {
+        my $buf = $tvitem->TO_HTML;
+        $request->SendHTML($buf);
+    } else {
+        my $diritems = $tvitem->TO_JSON;
+        $request->SendAsJSON($diritems);
+    }
 }
 
 # format tv library for kodi http
