@@ -4,6 +4,7 @@ use strict; use warnings;
 use File::Basename qw(basename);
 use MHFS::Kodi::Util qw(html_list_item);
 use MIME::Base64 qw(encode_base64url);
+use MHFS::Kodi::SeasonLite;
 
 sub Format {
     my ($tvvshows) = @_;
@@ -13,16 +14,7 @@ sub Format {
         my @sortedseasons = sort keys %{$tvshow{seasons}};
         my @seasons = map {
             my $season = $tvshow{seasons}{$_};
-            my @sorteditems = sort {
-                basename($tvshow{seasons}{$_}{$a}{name}) cmp basename($tvshow{seasons}{$_}{$b}{name})
-            } keys %{$tvshow{seasons}{$_}};
-            my @items = map {
-                my ($source, $item) = split('/', $_, 2);
-                my %item = %{$season->{$_}};
-                $item{id} = "$source/".encode_base64url($item);
-                \%item
-            } @sorteditems;
-            {id => $_+0, items => \@items, name => "Season $_"}
+            MHFS::Kodi::SeasonLite::Format($season, $_)
         } @sortedseasons;
         $tvshow{seasons} = \@seasons;
         \%tvshow

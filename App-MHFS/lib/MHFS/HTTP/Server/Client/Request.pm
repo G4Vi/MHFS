@@ -373,6 +373,12 @@ sub _SendDataItem {
     $self->_SendResponse($dataitem);
 }
 
+sub Send400 {
+    my ($self) = @_;
+    my $msg = "400 Bad Request\r\n";
+    $self->SendHTML($msg, {'code' => 403});
+}
+
 sub Send403 {
     my ($self) = @_;
     my $msg = "403 Forbidden\r\n";

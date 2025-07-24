@@ -18,6 +18,7 @@ use MHFS::Kodi::MovieEditions;
 use MHFS::Kodi::MoviePart;
 use MHFS::Kodi::Movies;
 use MHFS::Kodi::MovieSubtitle;
+use MHFS::Kodi::Season;
 use MHFS::Process;
 use MHFS::Promise;
 use MHFS::Util qw(base64url_to_str str_to_base64url uri_escape_path_utf8 read_text_file_lossy write_text_file_lossy decode_utf_8 escape_html_noquote fold_case);
@@ -77,6 +78,17 @@ sub _build_tv_library {
     \%tvshows
 }
 
+sub _get_tv_item {
+    my ($self, $tvshows, $showid, $seasonid, $source, $b64_item) = @_;
+    exists $tvshows->{$showid} or die "showid $showid does not exist";
+    exists $tvshows->{$showid}{seasons}{$seasonid} or die "season $seasonid does not exist";
+    my $seasonitem = $tvshows->{$showid}{seasons}{$seasonid};
+    my $sourcemap = $self->{server}{settings}{SOURCES};
+    $source or return bless {season => $seasonitem, id => $seasonid, sourcemap => $sourcemap}, 'MHFS::Kodi::Season';
+    $b64_item or die "b64_item not provided";
+    die "not implemented";
+}
+
 # format tv library for kodi http
 sub route_tvnew {
     my ($self, $request, $sources, $kodidir) = @_;
@@ -95,7 +107,27 @@ sub route_tvnew {
     my $tvshows = $self->{tvshows};
     my $tvitem;
     if ($request_path ne $kodidir) {
-        die "ENOTIMPLEMENTED";
+        my $fulltvpath = substr($request_path, length($kodidir)+1);
+        say "fulltvpath $fulltvpath";
+        my ($showid, $season, $source, $b64_item, $slurp) = split('/', $fulltvpath, 5);
+        if ($slurp) {
+            say "too many parts";
+            $request->Send400;
+            return;
+        }
+        $showid = fold_case($showid);
+        $season // do {
+            say "no season provided";
+            $request->Send400;
+            return;
+        };
+        try {
+            $tvitem = $self->_get_tv_item($tvshows, $showid, $season, $source, $b64_item);
+        } catch($e) {
+            say "exception $e";
+            $request->Send404;
+            return;
+        }
     } else {
         $tvitem = bless {tvshows => $tvshows}, 'MHFS::Kodi::TVShows';
     }
