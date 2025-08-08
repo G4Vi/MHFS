@@ -296,7 +296,7 @@ sub getMIME {
         'html' => 'text/html; charset=utf-8',
         'json' => 'application/json',
         'js'   => 'application/javascript',
-        'txt' => 'text/plain',
+        'txt' => 'text/plain; charset=utf-8',
         'css' => 'text/css',
         # images
         'jpg' => 'image/jpeg',
