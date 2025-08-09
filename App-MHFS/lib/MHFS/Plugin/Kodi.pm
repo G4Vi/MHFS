@@ -21,7 +21,7 @@ use MHFS::Kodi::MovieSubtitle;
 use MHFS::Kodi::Season;
 use MHFS::Process;
 use MHFS::Promise;
-use MHFS::Util qw(base64url_to_str str_to_base64url uri_escape_path_utf8 read_text_file_lossy write_text_file_lossy decode_utf_8 escape_html_noquote fold_case);
+use MHFS::Util qw(base64url_to_str str_to_base64url uri_escape_path_utf8 read_text_file_lossy write_text_file_lossy decode_utf_8 escape_html_noquote fold_case write_file read_file);
 use Feature::Compat::Try;
 BEGIN {
     if( ! (eval "use JSON; 1")) {
@@ -84,7 +84,13 @@ sub _get_tv_item {
     exists $tvshows->{$showid}{seasons}{$seasonid} or die "season $seasonid does not exist";
     my $seasonitem = $tvshows->{$showid}{seasons}{$seasonid};
     my $sourcemap = $self->{server}{settings}{SOURCES};
-    $source or return bless {season => $seasonitem, id => $seasonid, sourcemap => $sourcemap}, 'MHFS::Kodi::Season';
+    my $meta;
+    try {
+        my $bytes = read_file($self->{tvmeta}."/$showid/$seasonid/season.json");
+        $meta = decode_json($bytes);
+    } catch($e) {}
+    say "got meta" if ($meta);
+    $source or return bless {season => $seasonitem, id => $seasonid, sourcemap => $sourcemap, ($meta ? (meta => $meta) : ())}, 'MHFS::Kodi::Season';
     $b64_item or die "b64_item not provided";
     die "not implemented";
 }
@@ -778,6 +784,7 @@ sub route_metadata {
         $request->Send400;
         return;
     }
+    $medianame = fold_case($medianame);
     say "mt $mediatype mmt $metadatatype mn $medianame". (defined $season ? " season $season". (defined $episode ? " episode $episode" : '') : '');
     my %allmediaparams  = ( 'movies' => {
         'meta' => $self->{moviemeta},
@@ -788,8 +795,19 @@ sub route_metadata {
     });
     my $params = $allmediaparams{$mediatype};
     my $b_metadir = $params->{meta} . '/' . encode_utf8($medianame) . (defined $season ? '/'.encode_utf8($season). (defined $episode ? '/'.encode_utf8($episode) : '') : '');
-    # fast path, exists on disk
-    if (-d $b_metadir) {
+    my $b_plotfile =  $params->{meta} . '/' . encode_utf8($medianame) . '/'. (defined $season ? encode_utf8($season).'/season.json' : 'plot.txt');
+    # fast path, check disk
+    if (defined $season && $metadatatype eq 'plot') {
+        try {
+            my $bytes = read_file($b_plotfile);
+            my $json = decode_json($bytes);
+            if (defined $episode) {
+                $json = MHFS::Kodi::Season::_get_season_episode($json, $episode);
+            }
+            $request->SendText('text/plain; charset=utf-8', $json->{overview});
+            return;
+        } catch ($e){}
+    } elsif (-d $b_metadir) {
         my %acceptable = ( 'thumb' => ['png', 'jpg'], 'fanart' => ['png', 'jpg'], 'plot' => ['txt']);
         if(exists $acceptable{$metadatatype}) {
             foreach my $totry (@{$acceptable{$metadatatype}}) {
@@ -811,30 +829,30 @@ sub route_metadata {
     $searchname =~ s/\s\(\d\d\d\d\)// if($mediatype eq 'movies');
     say "searchname $searchname";
     weaken($request);
-    my $metadataPromise = _TMDB_api_promise($request->{client}{server}, 'search/'.$params->{search}, {'query' => $searchname})->then(sub {
-        return $_[0]->{results}[0];
-    });
-    # find the season or episode if applicable
-    if (defined $episode) {
-        $metadataPromise = $metadataPromise->then(sub {
-            my $showid = $_[0]->{id} // die "showid not available";
-            return _TMDB_api_promise($request->{client}{server}, "tv/$showid/season/$season/episode/$episode");
-        });
-    } elsif (defined $season) {
-        $metadataPromise = $metadataPromise->then(sub {
-            my $showid = $_[0]->{id} // die "showid not available";
-            return _TMDB_api_promise($request->{client}{server}, "tv/$showid/season/$season");
-        });
-    }
-    # fetch the metadata
-    $metadataPromise->then( sub {
-        if($metadatatype eq 'plot' || ! -f "$b_metadir/plot.txt") {
+    _TMDB_api_promise($request->{client}{server}, 'search/'.$params->{search}, {'query' => $searchname})->then(sub {
+        my $json = $_[0]->{results}[0];
+        $season // return $json;
+        # find the season and then the episode if applicable
+        my $showid = $json->{id} // die "showid not available";
+        _TMDB_api_promise($request->{client}{server}, "tv/$showid/season/$season")->then(sub {
+            if ($metadatatype eq 'plot' || ! -f $b_plotfile) {
+                make_path($b_metadir);
+                my $bytes = encode_json($_[0]);
+                try { write_file($b_plotfile, $bytes) }
+                catch ($e) { say "wierd, creating file failed?"; }
+            }
+            $episode // return $_[0];
+            MHFS::Kodi::Season::_get_season_episode($_[0], $episode)
+        })
+    })->then(sub {
+        # get the metadata
+        if (! defined $season && ($metadatatype eq 'plot' || ! -f "$b_metadir/plot.txt")) {
             make_path($b_metadir);
             try { write_text_file_lossy("$b_metadir/plot.txt", $_[0]->{overview}) }
             catch ($e) { say "wierd, creating file failed?"; }
         }
         if($metadatatype eq 'plot') {
-            $request->SendLocalFile("$b_metadir/plot.txt");
+            $request->SendText('text/plain; charset=utf-8', $_[0]->{overview});
             return;
         }
         # thumb or fanart

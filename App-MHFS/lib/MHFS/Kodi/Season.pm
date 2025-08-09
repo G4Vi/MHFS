@@ -3,13 +3,23 @@ use 5.014;
 use strict; use warnings;
 use Encode qw(decode);
 use MHFS::Kodi::Util qw(html_list_item);
+use MHFS::Util qw(fold_case);
 use MIME::Base64 qw(encode_base64url);
+use Feature::Compat::Try;
+
+sub _get_season_episode {
+    my ($season, $episode) = @_;
+    foreach my $ep (@{$season->{episodes}}) {
+        return $ep if ($ep->{episode_number} == $episode);
+    }
+    die "episode not found";
+}
 
 sub _encode_item {
     my ($id, $fullname) = @_;
     my ($prefix, $itemname) = split(/S\d+[\s\.]*/i, $fullname, 2);
     $itemname //= $fullname;
-    {id => $id, name => $itemname}
+    {id => $id, name => $itemname, ($itemname =~ /E0*(\d+)/i ? (episode => $1+0) : ())}
 }
 
 sub _read_season_dir {
@@ -30,7 +40,7 @@ sub _read_season_dir {
 }
 
 sub Format {
-    my ($seeason, $id, $sourcemap) = @_;
+    my ($seeason, $id, $sourcemap, $meta) = @_;
     my @unsorted;
     foreach my $path (keys %$seeason) {
         my ($source, $item) = split('/', $path, 2);
@@ -41,21 +51,29 @@ sub Format {
         my $b_path = $sourcemap->{$source}{folder}."/$item";
         _read_season_dir(\@unsorted, $path, $b_path);
     }
-    my @season = sort {
-        $a->{name} cmp $b->{name}
+    my @items = sort {
+        fold_case($a->{name}) cmp fold_case($b->{name})
     } @unsorted;
-    my @items = @season;
-    {id => $id+0, items => \@items, name => "Season $id"}
+    my %season = (id => $id+0, items => \@items, name => "Season $id");
+    if ($meta) {
+        $season{plot} = $meta->{overview};
+        foreach my $item (@items) {
+            next if (! defined $item->{episode});
+            try { $item->{plot} = _get_season_episode($meta, $item->{episode})->{overview} }
+            catch ($e) {}
+        }
+    }
+    \%season
 }
 
 sub TO_JSON {
     my ($self) = @_;
-    {season => Format($self->{season}, $self->{id}, $self->{sourcemap})}
+    {season => Format($self->{season}, $self->{id}, $self->{sourcemap}, $self->{meta})}
 }
 
 sub TO_HTML {
     my ($self) = @_;
-    my $season = Format($self->{season}, $self->{id}, $self->{sourcemap});
+    my $season = Format($self->{season}, $self->{id}, $self->{sourcemap}, $self->{meta});
     my $buf = '<style>ul{list-style: none;} li{margin: 10px 0;}</style><ul>';
     foreach my $item (@{$season->{items}}) {
         $buf .= html_list_item($item->{name}, 1);
