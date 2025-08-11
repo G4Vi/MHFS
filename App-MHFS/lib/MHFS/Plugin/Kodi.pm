@@ -75,6 +75,21 @@ sub _build_tv_library {
         my $b_tvdir = $self->{server}{settings}{SOURCES}{$source}{folder};
         $self->readtvdir(\%tvshows, $source, $b_tvdir);
     }
+    # load the season metadata, maybe remove this if we allow querying a show without a season
+    while (my ($showid, $show) = each %tvshows) {
+        while (my ($seasonid, $season) = each %{$show->{seasons}}) {
+            my $meta;
+            try {
+                my $bytes = read_file($self->{tvmeta}."/$showid/$seasonid/season.json");
+                $meta = decode_json($bytes);
+            } catch($e) {}
+            $meta or next;
+            # HACK: modifies each season item as there isn't a season object
+            foreach my $value (values %$season) {
+                $value->{plot} = $meta->{overview};
+            }
+        }
+    }
     \%tvshows
 }
 
@@ -89,7 +104,6 @@ sub _get_tv_item {
         my $bytes = read_file($self->{tvmeta}."/$showid/$seasonid/season.json");
         $meta = decode_json($bytes);
     } catch($e) {}
-    say "got meta" if ($meta);
     $source or return bless {season => $seasonitem, id => $seasonid, sourcemap => $sourcemap, ($meta ? (meta => $meta) : ())}, 'MHFS::Kodi::Season';
     $b64_item or die "b64_item not provided";
     die "not implemented";

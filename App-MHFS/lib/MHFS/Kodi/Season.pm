@@ -19,7 +19,9 @@ sub _encode_item {
     my ($id, $fullname) = @_;
     my ($prefix, $itemname) = split(/S\d+[\s\.]*/i, $fullname, 2);
     $itemname //= $fullname;
-    {id => $id, name => $itemname, ($itemname =~ /E0*(\d+)/i ? (episode => $1+0) : ())}
+    my (undef, $episode, $tempname) = split(/E0*(\d+)[\s\.]*/i, $itemname, 2);
+    $tempname and $itemname = sprintf "%02d - $tempname", $episode;
+    {id => $id, name => $itemname, (defined $episode ? (episode => $episode) : ())}
 }
 
 sub _read_season_dir {
@@ -59,7 +61,11 @@ sub Format {
         $season{plot} = $meta->{overview};
         foreach my $item (@items) {
             next if (! defined $item->{episode});
-            try { $item->{plot} = _get_season_episode($meta, $item->{episode})->{overview} }
+            try {
+                my $ep = _get_season_episode($meta, $item->{episode});
+                $item->{plot} = $ep->{overview};
+                $item->{name} = sprintf "%02d - $ep->{name}", $item->{episode};
+            }
             catch ($e) {}
         }
     }
