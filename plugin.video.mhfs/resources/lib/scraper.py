@@ -21,57 +21,76 @@ class myAddon(t1mAddon):
       if not mhfsurl.endswith('/'):
           mhfsurl = ''.join([mhfsurl, '/'])
       self.MHFSBASE = ''.join([mhfsurl, 'kodi/'])
+      self.tvprefix = 'tvnew'
 
   def getAddonMenu(self,url,ilist):
       eprint(''.join(['MHFSBASE ', self.MHFSBASE]))
-      ilist = self.addMenuItem('TV', 'GS', ilist, "tv", videoInfo={'mediatype':'tvshow'})
+      ilist = self.addMenuItem('TV', 'GS', ilist, self.tvprefix, videoInfo={'mediatype':'tvshow'})
       ilist = self.addMenuItem('Movies', 'GM', ilist, "movies", videoInfo={'mediatype':'movie'})
       return(ilist)
 
   def getAddonShows(self,url,ilist):
-      fullurl = ''.join([self.MHFSBASE,url,'/?fmt=json'])
-      eprint(fullurl)
+      fullurl = ''.join([self.MHFSBASE,url,'/'])
       encoded = requests.get(fullurl, headers=self.defaultHeaders).text
       a = json.loads(encoded)
-      sortedlist = sorted(a, key=lambda d: d['item'])
+      sortedlist = sorted(a['tvshows'], key=lambda d: d['name'])
       for item in sortedlist:
-          name = item['item']
-          if item['isdir']:
-              infoList = {'mediatype':'tvshow',
-                         'TVShowTitle': name,
-                         'Title': name}
-              if 'plot' in item:
-                  infoList['Plot'] = item['plot']
-              thumb = ''.join([self.MHFSBASE, 'metadata/tv/thumb/', urllib.parse.quote(name)])
-              fanart = ''.join([self.MHFSBASE, 'metadata/tv/fanart/', urllib.parse.quote(name)])
-              ilist = self.addMenuItem(name,'GE', ilist, name, thumb=thumb, fanart=fanart, videoInfo=infoList, isFolder=True)
+          name = item['name']
+          infoList = {'mediatype':'tvshow',
+                      'TVShowTitle': name,
+                      'Title': name}
+          if 'plot' in item:
+              infoList['Plot'] = item['plot']
+          thumb = ''.join([self.MHFSBASE, 'metadata/tv/thumb/', urllib.parse.quote(name)])
+          fanart = ''.join([self.MHFSBASE, 'metadata/tv/fanart/', urllib.parse.quote(name)])
+          # common case, go to season selection
+          if (len(item['seasons']) > 1) or (item['seasons'][0]['id'] != 0):
+              ilist = self.addMenuItem(name,'GE', ilist, json.dumps({'show':item}), thumb=thumb, fanart=fanart, videoInfo=infoList, isFolder=True)
           else:
-              infoList = {'mediatype':'episode',
-                          'Title': name,
-                          'TVShowTitle': name}
-              ilist = self.addMenuItem(name,'GV', ilist, name, videoInfo=infoList, isFolder=False)
+              newurl = ''.join([url, '/', urllib.parse.quote(name), '/', '0'])
+              # skip to episode selection
+              if (len(item['seasons'][0]['items']) != 1) or (item['seasons'][0]['items'][0]['isdir'] == 1):
+                  ilist = self.addMenuItem(name,'GE', ilist, newurl, thumb=thumb, fanart=fanart, videoInfo=infoList, isFolder=True)
+              # or skip to video
+              else:
+                  newurl = ''.join([newurl, '/', urllib.parse.quote(str(item['seasons'][0]['items'][0]['id']))])
+                  ilist = self.addMenuItem(name,'GV', ilist, newurl, thumb=thumb, fanart=fanart, videoInfo=infoList, isFolder=False)
       return(ilist)
 
   def getAddonEpisodes(self,url,ilist):
-      fullurl = ''.join([self.MHFSBASE,'tv/', url,'/?fmt=json'])
-      eprint(fullurl)
-      encoded = requests.get(fullurl, headers=self.defaultHeaders).text
-      a = json.loads(encoded)
-      sortedlist = sorted(a, key=lambda d: d['item'])
-      for item in sortedlist:
-          name = item['item']
-          newurl = ''.join(['tv/', urllib.parse.quote(url), '/', urllib.parse.quote(name)])
-          eprint(newurl)
-          if item['isdir']:
+      if url.startswith('{'):
+          a = json.loads(url)
+          a = a['show']
+          for item in a['seasons']:
+              name = item['name']
+              newurl = ''.join([self.tvprefix, '/', urllib.parse.quote(a['name']), '/', urllib.parse.quote(str(item['id']))])
               infoList = {'mediatype':'tvshow',
-                         'TVShowTitle': xbmc.getInfoLabel('ListItem.TVShowTitle'),
-                         'Title': name}
-              ilist = self.addMenuItem(name,'GE', ilist, newurl, videoInfo=infoList, isFolder=True)
-          else:
+                          'TVShowTitle': xbmc.getInfoLabel('ListItem.TVShowTitle'),
+                          'Title': name}
+              if 'plot' in item:
+                  infoList['Plot'] = item['plot']
+              meta_id = '/'.join([urllib.parse.quote(a['name']), urllib.parse.quote(str(item['id']))])
+              thumb = ''.join([self.MHFSBASE, 'metadata/tv/thumb/', meta_id])
+              fanart = ''.join([self.MHFSBASE, 'metadata/tv/fanart/', meta_id])
+              ilist = self.addMenuItem(name,'GE', ilist, newurl, thumb=thumb, fanart=fanart, videoInfo=infoList, isFolder=True)
+      else:
+          fullurl = ''.join([self.MHFSBASE, url,'/'])
+          encoded = requests.get(fullurl, headers=self.defaultHeaders).text
+          a = json.loads(encoded)
+          for item in a['season']['items']:
+              name = item['name']
+              newurl = ''.join([url,'/',item['id']])
               infoList = {'mediatype':'episode',
                           'Title': name,
                           'TVShowTitle': xbmc.getInfoLabel('ListItem.TVShowTitle')}
-              ilist = self.addMenuItem(name,'GV', ilist, newurl, videoInfo=infoList, isFolder=False)
+              if 'plot' in item:
+                  infoList['Plot'] = item['plot']
+              meta_id = url[len(self.tvprefix):]
+              if 'episode' in item:
+                  meta_id = '/'.join([meta_id, urllib.parse.quote(str(item['episode']))])
+              thumb = ''.join([self.MHFSBASE, 'metadata/tv/thumb', meta_id])
+              fanart = ''.join([self.MHFSBASE, 'metadata/tv/fanart', meta_id])
+              ilist = self.addMenuItem(name,'GV', ilist, newurl, thumb=thumb, fanart=fanart, videoInfo=infoList, isFolder=False)
       return(ilist)
 
   def buildMovieMeta(self, displayname, movie):
