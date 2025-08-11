@@ -31,6 +31,7 @@ sub _read_season_dir {
         next if ($b_file eq '.' || $b_file eq '..');
         my $newsource = "$source/$b_file";
         if (! -d $b_file) {
+            next if($b_file !~ /\.(?:avi|mkv|mp4|m4v)$/);
             my ($actualsource, $item) = split('/', $newsource, 2);
             my $id = "$actualsource/".encode_base64url($item);
             my $name = decode('UTF-8', $b_file, Encode::FB_DEFAULT | Encode::LEAVE_SRC);
@@ -59,12 +60,22 @@ sub Format {
     my %season = (id => $id+0, items => \@items, name => "Season $id");
     if ($meta) {
         $season{plot} = $meta->{overview};
+        my %seen;
+        foreach my $item (@items) {
+            next if (! defined $item->{episode});
+            $seen{$item->{episode}}++;
+        }
         foreach my $item (@items) {
             next if (! defined $item->{episode});
             try {
                 my $ep = _get_season_episode($meta, $item->{episode});
                 $item->{plot} = $ep->{overview};
+                my $oldname = $item->{name};
                 $item->{name} = sprintf "%02d - $ep->{name}", $item->{episode};
+                if ($seen{$item->{episode}} > 1) {
+                    my ($name) = $oldname =~ /\d+\s\-\s(.+)$/;
+                    $item->{name} .= " | $name";
+                }
             }
             catch ($e) {}
         }

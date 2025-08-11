@@ -42,8 +42,13 @@ sub readtvdir {
         next if(($b_filename eq '.') || ($b_filename eq '..'));
         next if(!(-s "$b_tvdir/$b_filename"));
         my $filename = decode('UTF-8', $b_filename, Encode::FB_DEFAULT | Encode::LEAVE_SRC);
+        next if (! -d _ && $filename !~ /\.(?:avi|mkv|mp4|m4v)$/);
         if ($filename !~ /^(.+?)(?:[\.\s]+(\d{4}))?[\.\s]+S(?:eason\s)?0*(\d+)/) {
             say "suspicious: $filename";
+        }
+        if ($filename =~ /S(?:eason\s)?0*(\d+)\-S(?:eason\s)?0*(\d+)/) {
+            $self->readtvdir($tvshows, $source, "$b_tvdir/$b_filename");
+            next;
         }
         my $showname = $1 || $filename;
         my $year = $2;
@@ -364,7 +369,7 @@ sub readmoviedir {
                 };
                 my $type;
                 if ($editionitem =~ /\.(?:avi|mkv|mp4|m4v)$/) {
-                    $type = 'video' if ($editionitem !~ /sample(?:\-[a-z]+)?\.(?:avi|mkv|mp4)$/);
+                    $type = 'video' if ($editionitem !~ /sample(?:\-[a-z]+)?\.(?:avi|mkv|mp4|m4v)$/);
                 } elsif ($editionitem =~ /\.(?:srt|sub|idx)$/) {
                     $type = 'subtitle';
                 } elsif ($editionitem =~ /^Subs$/i) {
@@ -806,10 +811,13 @@ sub route_metadata {
         $request->Send400;
         return;
     };
-    if ($medianame =~ /^.(.)?$/ || ($mediatype eq 'movies' && defined $season) || (defined $season && $metadatatype eq 'fanart')) {
+    if ($medianame =~ /^.(.)?$/ || ($mediatype eq 'movies' && defined $season)) {
         say "no match";
         $request->Send400;
         return;
+    }
+    if ($metadatatype eq 'fanart') {
+        ($season, $episode) = (undef, undef);
     }
     $medianame = fold_case($medianame);
     say "mt $mediatype mmt $metadatatype mn $medianame". (defined $season ? " season $season". (defined $episode ? " episode $episode" : '') : '');
@@ -858,6 +866,7 @@ sub route_metadata {
     weaken($request);
     _TMDB_api_promise($request->{client}{server}, 'search/'.$params->{search}, {'query' => $searchname})->then(sub {
         my $json = $_[0]->{results}[0];
+        $json or die "Failed to find item";
         $season // return $json;
         # find the season and then the episode if applicable
         my $showid = $json->{id} // die "showid not available";
