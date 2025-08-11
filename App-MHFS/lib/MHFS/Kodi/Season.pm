@@ -21,7 +21,7 @@ sub _encode_item {
     $itemname //= $fullname;
     my (undef, $episode, $tempname) = split(/E0*(\d+)[\s\.]*/i, $itemname, 2);
     $tempname and $itemname = sprintf "%02d - $tempname", $episode;
-    {id => $id, name => $itemname, (defined $episode ? (episode => $episode) : ())}
+    {id => $id, name => $itemname, (defined $episode ? (episode => $episode+0) : ())}
 }
 
 sub _read_season_dir {

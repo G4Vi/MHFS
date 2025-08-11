@@ -106,7 +106,11 @@ sub _get_tv_item {
     } catch($e) {}
     $source or return bless {season => $seasonitem, id => $seasonid, sourcemap => $sourcemap, ($meta ? (meta => $meta) : ())}, 'MHFS::Kodi::Season';
     $b64_item or die "b64_item not provided";
-    die "not implemented";
+    my $path = abs_path($self->{server}{settings}{SOURCES}{$source}{folder} .'/' . decode_base64url($b64_item));
+    if (!$path || rindex($path, $self->{server}{settings}{SOURCES}{$source}{folder}, 0) != 0, ! -f $path) {
+        die "item not found";
+    }
+    {b_path => $path}
 }
 
 # format tv library for kodi http
@@ -146,6 +150,15 @@ sub route_tvnew {
         } catch($e) {
             say "exception $e";
             $request->Send404;
+            return;
+        }
+        if (substr($request->{'path'}{'unescapepath'}, -1) ne '/') {
+            # redirect if we aren't accessing a file
+            if (!exists $tvitem->{b_path}) {
+                $request->SendRedirect(301, substr($request->{'path'}{'unescapepath'}, rindex($request->{'path'}{'unescapepath'}, '/')+1).'/');
+            } else {
+                $request->SendFile($tvitem->{b_path});
+            }
             return;
         }
     } else {
