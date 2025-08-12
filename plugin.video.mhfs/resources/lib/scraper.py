@@ -21,7 +21,7 @@ class myAddon(t1mAddon):
       if not mhfsurl.endswith('/'):
           mhfsurl = ''.join([mhfsurl, '/'])
       self.MHFSBASE = ''.join([mhfsurl, 'kodi/'])
-      self.tvprefix = 'tvnew'
+      self.tvprefix = 'tv'
 
   def getAddonMenu(self,url,ilist):
       eprint(''.join(['MHFSBASE ', self.MHFSBASE]))
@@ -50,9 +50,11 @@ class myAddon(t1mAddon):
               newurl = ''.join([url, '/', urllib.parse.quote(name), '/', '0'])
               # skip to episode selection
               if (len(item['seasons'][0]['items']) != 1) or (item['seasons'][0]['items'][0]['isdir'] == 1):
+                  infoList['mediatype'] = 'season'
                   ilist = self.addMenuItem(name,'GE', ilist, newurl, thumb=thumb, fanart=fanart, videoInfo=infoList, isFolder=True)
               # or skip to video
               else:
+                  infoList['mediatype'] = 'episode'
                   newurl = ''.join([newurl, '/', urllib.parse.quote(str(item['seasons'][0]['items'][0]['id']))])
                   ilist = self.addMenuItem(name,'GV', ilist, newurl, thumb=thumb, fanart=fanart, videoInfo=infoList, isFolder=False)
       return(ilist)
@@ -64,9 +66,10 @@ class myAddon(t1mAddon):
           for item in a['seasons']:
               name = item['name']
               newurl = ''.join([self.tvprefix, '/', urllib.parse.quote(a['name']), '/', urllib.parse.quote(str(item['id']))])
-              infoList = {'mediatype':'tvshow',
+              infoList = {'mediatype':'season',
                           'TVShowTitle': xbmc.getInfoLabel('ListItem.TVShowTitle'),
-                          'Title': name}
+                          'Title': name,
+                          'season': item['id']}
               if 'plot' in item:
                   infoList['Plot'] = item['plot']
               meta_id = '/'.join([urllib.parse.quote(a['name']), urllib.parse.quote(str(item['id']))])
@@ -82,12 +85,14 @@ class myAddon(t1mAddon):
               newurl = ''.join([url,'/',item['id']])
               infoList = {'mediatype':'episode',
                           'Title': name,
-                          'TVShowTitle': xbmc.getInfoLabel('ListItem.TVShowTitle')}
+                          'TVShowTitle': xbmc.getInfoLabel('ListItem.TVShowTitle'),
+                          'season': a['season']['id']}
               if 'plot' in item:
                   infoList['Plot'] = item['plot']
               meta_id = url[len(self.tvprefix):]
               if 'episode' in item:
                   meta_id = '/'.join([meta_id, urllib.parse.quote(str(item['episode']))])
+                  infoList['episode'] = item['episode']
               thumb = ''.join([self.MHFSBASE, 'metadata/tv/thumb', meta_id])
               fanart = ''.join([self.MHFSBASE, 'metadata/tv/fanart', meta_id])
               ilist = self.addMenuItem(name,'GV', ilist, newurl, thumb=thumb, fanart=fanart, videoInfo=infoList, isFolder=False)

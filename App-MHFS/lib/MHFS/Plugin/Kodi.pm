@@ -119,7 +119,7 @@ sub _get_tv_item {
 }
 
 # format tv library for kodi http
-sub route_tvnew {
+sub route_tv {
     my ($self, $request, $sources, $kodidir) = @_;
     my $request_path = do {
         try { decode_utf_8($request->{path}{unsafepath}) }
@@ -175,122 +175,6 @@ sub route_tvnew {
     } else {
         my $diritems = $tvitem->TO_JSON;
         $request->SendAsJSON($diritems);
-    }
-}
-
-# format tv library for kodi http
-sub route_tv {
-    my ($self, $request, $absdir, $kodidir) = @_;
-    # read in the shows
-    my $tvdir = abs_path($absdir);
-    if(! defined $tvdir) {
-        $request->Send404;
-        return;
-    }
-    my $dh;
-    if(! opendir ( $dh, $tvdir )) {
-        warn "Error in opening dir $tvdir\n";
-        $request->Send404;
-        return;
-    }
-    my %shows = ();
-    my @diritems;
-    while( (my $filename = readdir($dh))) {
-        next if(($filename eq '.') || ($filename eq '..'));
-        next if(!(-s "$tvdir/$filename"));
-        # extract the showname
-        next if($filename !~ /^(.+)[\.\s]+S\d+/);
-        my $showname = $1;
-        if($showname) {
-            $showname =~ s/\./ /g;
-            if(! $shows{$showname}) {
-                $shows{$showname} = [];
-                my %diritem = ('item' => $showname, 'isdir' => 1);
-                my $plot = $self->{tvmeta}."/$showname/plot.txt";
-                try { $diritem{plot} = read_text_file_lossy($plot); }
-                catch($e) {}
-                push @diritems, \%diritem;
-            }
-            push @{$shows{$showname}}, "$tvdir/$filename";
-        }
-    }
-    closedir($dh);
-
-    # locate the content
-    if($request->{'path'}{'unsafepath'} ne $kodidir) {
-        my $fullshowname = substr($request->{'path'}{'unsafepath'}, length($kodidir)+1);
-        my $slash = index($fullshowname, '/');
-        @diritems = ();
-        my $showname = ($slash != -1) ? substr($fullshowname, 0, $slash) : $fullshowname;
-        my $showfilename = ($slash != -1) ? substr($fullshowname, $slash+1) : undef;
-
-        my $showitems = $shows{$showname};
-        if(!$showitems) {
-            $request->Send404;
-            return;
-        }
-        my @initems = @{$showitems};
-        my @outitems;
-        # TODO replace basename usage?
-        while(@initems) {
-            my $item = shift @initems;
-            $item = abs_path($item);
-            if(! $item) {
-                say "bad item";
-            }
-            elsif(rindex($item, $tvdir, 0) != 0) {
-                say "bad item, path traversal?";
-            }
-            elsif(-f $item) {
-                my $filebasename = basename($item);
-                if(!$showfilename) {
-                    push @diritems, {'item' => $filebasename, 'isdir' => 0};
-                }
-                elsif($showfilename eq $filebasename) {
-                    if(index($request->{'path'}{'unsafecollapse'}, '/', length($request->{'path'}{'unsafecollapse'})-1) == -1) {
-                        say "found show filename";
-                        $request->SendFile($item);
-                    }
-                    else {
-                        $request->Send404;
-                    }
-                    return;
-                }
-            }
-            elsif(-d _) {
-                opendir(my $dh, $item) or die('failed to open dir');
-                my @newitems;
-                while(my $newitem = readdir($dh)) {
-                    next if(($newitem eq '.') || ($newitem eq '..'));
-                    push @newitems, "$item/$newitem";
-                }
-                closedir($dh);
-                unshift @initems, @newitems;
-            }
-            else {
-                say "bad item unknown filetype " . $item;
-            }
-        }
-    }
-
-    # redirect if the slash wasn't there
-    if(index($request->{'path'}{'unescapepath'}, '/', length($request->{'path'}{'unescapepath'})-1) == -1) {
-        $request->SendRedirect(301, substr($request->{'path'}{'unescapepath'}, rindex($request->{'path'}{'unescapepath'}, '/')+1).'/');
-        return;
-    }
-
-    # generate the directory html
-    if(exists $request->{qs}{fmt} && $request->{qs}{fmt} eq 'html') {
-        my $buf = '';
-        foreach my $show (@diritems) {
-            my $showname = $show->{'item'};
-            my $url = uri_escape($showname);
-            $url .= '/' if($show->{'isdir'});
-            $buf .= '<a href="' . $url .'">'.${escape_html_noquote(decode('UTF-8', $showname, Encode::LEAVE_SRC))} .'</a><br><br>';
-        }
-        $request->SendHTML($buf);
-    } else {
-        $request->SendAsJSON(\@diritems);
     }
 }
 
@@ -939,11 +823,7 @@ sub new {
         }),
         DirectoryRoute('/kodi/tv', sub {
             my ($request) = @_;
-            route_tv($self, $request, $settings->{SOURCES}{$settings->{MEDIASOURCES}{tv}[0]}{folder}, '/kodi/tv');
-        }),
-        DirectoryRoute('/kodi/tvnew', sub {
-            my ($request) = @_;
-            route_tvnew($self, $request, $settings->{'MEDIASOURCES'}{'tv'}, '/kodi/tvnew');
+            route_tv($self, $request, $settings->{'MEDIASOURCES'}{'tv'}, '/kodi/tv');
         }),
         ['/kodi/metadata/*', sub {
             my ($request) = @_;
