@@ -22,14 +22,14 @@ jobs:
     - name: Install Perl and MHFS Perl dependencies
       uses: shogo82148/actions-setup-perl@v1
       with:
-        perl-version: '5.38'
+        perl-version: '5.40'
         working-directory: MHFS
         install-modules-with: cpanm
         install-modules-args: --with-develop --with-configure --with-recommends
     - name: Setup emscripten
       uses: mymindstorm/setup-emsdk@v14
       with:
-        version: latest
+        version: '4.0.12'
         actions-cache-folder: 'emsdk-cache'
     - name: Build and package MHFS
       run: |
@@ -60,7 +60,7 @@ jobs:
     - name: Install Perl and MHFS Perl dependencies
       uses: shogo82148/actions-setup-perl@v1
       with:
-        perl-version: '5.38'
+        perl-version: '5.40'
         working-directory: MHFS
         install-modules-with: cpanm
         install-modules: LWP::UserAgent LWP::Protocol::https Perl::Dist::APPerl
@@ -98,7 +98,7 @@ jobs:
     strategy:
       matrix:
         os: ['ubuntu-latest']
-        emcc: ['1.40.1', '2.0.0', '2.0.34', '3.0.0', '3.1.17' ]
+        emcc: ['1.40.1', '2.0.34', '3.1.74', '4.0.0', 'latest']
     runs-on: ${{ matrix.os }}
     steps:
     - name: Fetch repo and submodules
