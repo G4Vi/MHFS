@@ -385,15 +385,16 @@ sub get_printable_utf8 {
         last if(!length($octets));
 
         # by default replace with the replacement char
-        my $chardata = _peek_utf8_codepoint($octets);
+        my $char = _peek_utf8_codepoint($octets);
         my $toappend = chr(0xFFFD);
-        my $toremove = $chardata->{'bytelength'};
+        my $toremove = $char->{bytelength};
 
         # if we find a surrogate pair, make the actual codepoint
-        if(length($octets) >= 6 && ($chardata->{'bytelength'} == 3) && ($chardata->{'codepoint'}  >= 0xD800) && ($chardata->{'codepoint'} <= 0xDBFF)) {
+        my $mask = ~0 << 16 | 0xFC00;
+        if (length($octets) >= 6 && ($char->{bytelength} == 3) && (($char->{codepoint} & $mask) == 0xD800)) {
             my $secondchar = _peek_utf8_codepoint(substr($octets, 3, 3));
-            if($secondchar && ($secondchar->{'bytelength'} == 3) && ($secondchar->{'codepoint'}  >= 0xDC00) && ($secondchar->{'codepoint'} <= 0xDFFF)) {
-                $toappend = surrogatecodepointpairtochar($chardata->{'codepoint'}, $secondchar->{'codepoint'});
+            if(($secondchar->{bytelength} == 3) && (($secondchar->{codepoint} & $mask) == 0xDC00)) {
+                $toappend = surrogatecodepointpairtochar($char->{codepoint}, $secondchar->{codepoint});
                 $toremove += 3;
             }
         }
