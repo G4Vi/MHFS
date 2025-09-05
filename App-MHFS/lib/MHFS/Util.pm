@@ -343,27 +343,35 @@ sub surrogatecodepointpairtochar {
 }
 
 # returns the byte length and the codepoint
-sub peek_utf8_codepoint {
+sub _peek_utf8_codepoint {
     my ($octets) = @_;
     my @rules = (
+        [0x80, 0x00, 1], # 1 byte sequence
         [0xE0, 0xC0, 2], # 2 byte sequence
         [0xF0, 0xE0, 3], # 3 byte sequence
         [0XF8, 0xF0, 4]  # 4 byte sequence
     );
-
-    length($$octets) >= 1 or return;
-    my $byte = substr($$octets, 0, 1);
-    my $byteval = ord($byte);
-    my $charlen = 1;
+    my $byteval = ord(substr($octets, 0, 1));
+    my $charlen;
     foreach my $rule (@rules) {
         if(($byteval & $rule->[0]) == $rule->[1]) {
             $charlen = $rule->[2];
             last;
         }
     }
-    length($octets) >= $charlen or return;
-    my $char = decode("utf8", substr($$octets, 0, $charlen));
+    $charlen or return {'codepoint' => 0xFFFD, 'bytelength' => 1};
+    my $valid_bytes = 1;
+    for my $i (1 .. $charlen - 1) {
+        # this handles length($octets) < $charlen properly
+        my $cont_byte = ord(substr($octets, $i, 1));
+        if (($cont_byte & 0xC0) != 0x80) {
+            return {'codepoint' => 0xFFFD, 'bytelength' => $valid_bytes};
+        }
+        $valid_bytes++;
+    }
+    my $char = decode("utf8", substr($octets, 0, $charlen));
     if(length($char) > 1) {
+        warnings::warnif "impossible situation, decode returned more than one char";
         return {'codepoint' => 0xFFFD, 'bytelength' => 1};
     }
     return { 'codepoint' => ord($char), 'bytelength' => $charlen};
@@ -377,13 +385,13 @@ sub get_printable_utf8 {
         last if(!length($octets));
 
         # by default replace with the replacement char
-        my $chardata = peek_utf8_codepoint(\$octets);
+        my $chardata = _peek_utf8_codepoint($octets);
         my $toappend = chr(0xFFFD);
         my $toremove = $chardata->{'bytelength'};
 
         # if we find a surrogate pair, make the actual codepoint
-        if(($chardata->{'bytelength'} == 3) && ($chardata->{'codepoint'}  >= 0xD800) && ($chardata->{'codepoint'} <= 0xDBFF)) {
-            my $secondchar = peek_utf8_codepoint(\substr($octets, 3, 3));
+        if(length($octets) >= 6 && ($chardata->{'bytelength'} == 3) && ($chardata->{'codepoint'}  >= 0xD800) && ($chardata->{'codepoint'} <= 0xDBFF)) {
+            my $secondchar = _peek_utf8_codepoint(substr($octets, 3, 3));
             if($secondchar && ($secondchar->{'bytelength'} == 3) && ($secondchar->{'codepoint'}  >= 0xDC00) && ($secondchar->{'codepoint'} <= 0xDFFF)) {
                 $toappend = surrogatecodepointpairtochar($chardata->{'codepoint'}, $secondchar->{'codepoint'});
                 $toremove += 3;
