@@ -1,4 +1,19 @@
 # MHFS Changelog
+Starting with 0.7.0 this document tries to only document user facing changes.
+See `Changes` in the various distribution directories for internal details.
+## [0.7.0](https://github.com/G4Vi/MHFS/compare/v0.6.0...v0.7.0) - 2025-10-07
+### App-MHFS-v0.7.0
+#### Changed
+- `/kodi/tv` - improve organization and metadata handling. Descriptions and
+  images should now show for shows, seasons, and episodes.
+- Various internal changes to make the code more maintainable
+#### Fixed
+- MHFS::Plugin::Playlist, MHFS::Plugin::VideoLibrary fix infinite loop with some
+  directories.
+- music player emscripten 4.0.7+ compat
+- MHFS::Plugin::MusicLibrary fix invalid UTF-8 causing valid characters to be
+  omitted from the output.
+
 ## [0.6.0](https://github.com/G4Vi/MHFS/compare/v0.5.1...v0.6.0) - 2024-10-21
 ### App-MHFS-v0.6.0
 #### Added
