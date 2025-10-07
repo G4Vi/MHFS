@@ -13,6 +13,9 @@ See `Changes` in the various distribution directories for internal details.
 - music player emscripten 4.0.7+ compat
 - MHFS::Plugin::MusicLibrary fix invalid UTF-8 causing valid characters to be
   omitted from the output.
+### MHFS-XS-v0.2.4 [unchanged]
+### Alien-Tar-Size-v0.2.2 [unchanged]
+### Alien-libFLAC-v0.2.0 [unchanged]
 
 ## [0.6.0](https://github.com/G4Vi/MHFS/compare/v0.5.1...v0.6.0) - 2024-10-21
 ### App-MHFS-v0.6.0
