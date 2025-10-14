@@ -30,6 +30,16 @@ BEGIN {
     }
 }
 
+sub _read_season_meta {
+    my ($self, $showid, $seasonid) = @_;
+    try {
+        my $bytes = read_file($self->{tvmeta}."/$showid/$seasonid/season.json");
+        my $meta = decode_json($bytes);
+        return $meta;
+    } catch($e) {}
+    return;
+}
+
 sub readtvdir {
     my ($self, $tvshows, $source, $b_tvdir) = @_;
     my $dh;
@@ -63,8 +73,14 @@ sub readtvdir {
             catch($e) {}
             $tvshows->{$showid} = \%show;
         }
-        $tvshows->{$showid}{seasons}{$season} //= {};
-        $tvshows->{$showid}{seasons}{$season}{"$source/$b_filename"} = {name => $filename, isdir => (-d _ // 0)+0};
+        $tvshows->{$showid}{seasons}{$season} //= {
+            editions => {},
+            do {
+                my $meta = $self->_read_season_meta($showid, $season);
+                $meta ? (meta => $meta) : ()
+            },
+        };
+        $tvshows->{$showid}{seasons}{$season}{editions}{"$source/$b_filename"} = {name => $filename, isdir => (-d _ // 0)+0};
     }
     closedir($dh);
 }
@@ -80,21 +96,6 @@ sub _build_tv_library {
         my $b_tvdir = $self->{server}{settings}{SOURCES}{$source}{folder};
         $self->readtvdir(\%tvshows, $source, $b_tvdir);
     }
-    # load the season metadata, maybe remove this if we allow querying a show without a season
-    while (my ($showid, $show) = each %tvshows) {
-        while (my ($seasonid, $season) = each %{$show->{seasons}}) {
-            my $meta;
-            try {
-                my $bytes = read_file($self->{tvmeta}."/$showid/$seasonid/season.json");
-                $meta = decode_json($bytes);
-            } catch($e) {}
-            $meta or next;
-            # HACK: modifies each season item as there isn't a season object
-            foreach my $value (values %$season) {
-                $value->{plot} = $meta->{overview};
-            }
-        }
-    }
     \%tvshows
 }
 
@@ -104,15 +105,15 @@ sub _get_tv_item {
     exists $tvshows->{$showid}{seasons}{$seasonid} or die "season $seasonid does not exist";
     my $seasonitem = $tvshows->{$showid}{seasons}{$seasonid};
     my $sourcemap = $self->{server}{settings}{SOURCES};
-    my $meta;
-    try {
-        my $bytes = read_file($self->{tvmeta}."/$showid/$seasonid/season.json");
-        $meta = decode_json($bytes);
-    } catch($e) {}
-    $source or return bless {season => $seasonitem, id => $seasonid, sourcemap => $sourcemap, ($meta ? (meta => $meta) : ())}, 'MHFS::Kodi::Season';
+    # TODO: Instead of updating the tv library here, the library should be updated when new metadata is loaded
+    if (!exists $seasonitem->{meta}) {
+        my $meta = $self->_read_season_meta($showid, $seasonid);
+        $seasonitem->{meta} = $meta if $meta;
+    }
+    $source or return bless {season => $seasonitem, id => $seasonid, sourcemap => $sourcemap}, 'MHFS::Kodi::Season';
     $b64_item or die "b64_item not provided";
     my $path = abs_path($self->{server}{settings}{SOURCES}{$source}{folder} .'/' . decode_base64url($b64_item));
-    if (!$path || rindex($path, $self->{server}{settings}{SOURCES}{$source}{folder}, 0) != 0, ! -f $path) {
+    if (!$path || rindex($path, $self->{server}{settings}{SOURCES}{$source}{folder}, 0) != 0 || ! -f $path) {
         die "item not found";
     }
     {b_path => $path}

@@ -43,12 +43,13 @@ sub _read_season_dir {
 }
 
 sub Format {
-    my ($seeason, $id, $sourcemap, $meta) = @_;
+    my ($seeason, $id, $sourcemap) = @_;
+    my $editions = $seeason->{editions};
     my @unsorted;
-    foreach my $path (keys %$seeason) {
+    foreach my $path (keys %$editions) {
         my ($source, $item) = split('/', $path, 2);
-        if (!$seeason->{$path}{isdir}) {
-            push @unsorted, _encode_item("$source/".encode_base64url($item), $seeason->{$path}{name});
+        if (!$editions->{$path}{isdir}) {
+            push @unsorted, _encode_item("$source/".encode_base64url($item), $editions->{$path}{name});
             next;
         }
         my $b_path = $sourcemap->{$source}{folder}."/$item";
@@ -58,7 +59,8 @@ sub Format {
         fold_case($a->{name}) cmp fold_case($b->{name})
     } @unsorted;
     my %season = (id => $id+0, items => \@items, name => "Season $id");
-    if ($meta) {
+    if (exists $seeason->{meta}) {
+        my $meta = $seeason->{meta};
         $season{plot} = $meta->{overview};
         my %seen;
         foreach my $item (@items) {
@@ -85,12 +87,12 @@ sub Format {
 
 sub TO_JSON {
     my ($self) = @_;
-    {season => Format($self->{season}, $self->{id}, $self->{sourcemap}, $self->{meta})}
+    {season => Format($self->{season}, $self->{id}, $self->{sourcemap})}
 }
 
 sub TO_HTML {
     my ($self) = @_;
-    my $season = Format($self->{season}, $self->{id}, $self->{sourcemap}, $self->{meta});
+    my $season = Format($self->{season}, $self->{id}, $self->{sourcemap});
     my $buf = '<style>ul{list-style: none;} li{margin: 10px 0;}</style><ul>';
     foreach my $item (@{$season->{items}}) {
         $buf .= html_list_item($item->{name}, 1);
