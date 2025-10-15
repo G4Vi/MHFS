@@ -17,7 +17,7 @@ BEGIN {
 use MHFS::Kodi::Util qw(html_list_item);
 use MHFS::Kodi::Season;
 use MHFS::Kodi::SeasonLite;
-use MHFS::Util qw(read_file fold_case read_text_file_lossy write_file);
+use MHFS::Util qw(read_file fold_case read_text_file_lossy write_file write_text_file_lossy);
 
 sub _read_season_meta {
     my ($self, $showid, $seasonid) = @_;
@@ -137,10 +137,6 @@ sub insert_season_metadata {
     my $item = $self->{tvshows};
     exists $item->{$showid} or die "showid $showid does not exist";
     $item = $item->{$showid};
-    $seasonid // do {
-        exists $item->{plot} or die "showid $showid does not have plot yet";
-        return $item->{plot};
-    };
     exists $item->{seasons}{$seasonid} or die "showid $showid season $seasonid does not exist";
     $item = $item->{seasons}{$seasonid};
     return if (exists $item->{meta} && !$force_update);
@@ -149,6 +145,21 @@ sub insert_season_metadata {
     my $bytes = encode_json($metadata);
     write_file("$b_metadir/season.json", $bytes);
     $item->{meta} = $metadata;
+}
+
+# IF NOT EXISTS unless $force_update is true
+sub insert_show_plot {
+    my ($self, $showid, $metadata, $force_update) = @_;
+    exists $metadata->{overview} or die "metadata does not have plot";
+    my $plot = $metadata->{overview};
+    my $item = $self->{tvshows};
+    exists $item->{$showid} or die "showid $showid does not exist";
+    $item = $item->{$showid};
+    return if (exists $item->{plot} && !$force_update);
+    my $b_metadir = $self->{tvmeta} . '/' . encode_utf8($showid);
+    make_path($b_metadir);
+    write_text_file_lossy("$b_metadir/plot.txt", $plot);
+    $item->{plot} = $plot;
 }
 
 sub Format {

@@ -678,10 +678,14 @@ sub route_metadata {
         })
     })->then(sub {
         # get the metadata
-        if (! defined $season && ($metadatatype eq 'plot' || ! -f "$b_metadir/plot.txt")) {
-            make_path($b_metadir);
-            try { write_text_file_lossy("$b_metadir/plot.txt", $_[0]->{overview}) }
-            catch ($e) { say "wierd, creating file failed?"; }
+        if (! defined $season) {
+            if ($mediatype eq 'tv') {
+                $tvshows->insert_show_plot($medianame, $_[0], $metadatatype eq 'plot');
+            } elsif ($metadatatype eq 'plot' || ! -f "$b_metadir/plot.txt") {
+                make_path($b_metadir);
+                try { write_text_file_lossy("$b_metadir/plot.txt", $_[0]->{overview}) }
+                catch ($e) { say "wierd, creating file failed?"; }
+            }
         }
         if($metadatatype eq 'plot') {
             $request->SendText('text/plain; charset=utf-8', $_[0]->{overview});
