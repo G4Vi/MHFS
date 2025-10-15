@@ -116,6 +116,28 @@ sub get_tv_item {
     {b_path => $path}
 }
 
+sub get_plot {
+    my ($self, $showid, $seasonid, $episode) = @_;
+    my $item = $self->{tvshows};
+    exists $item->{$showid} or die "showid $showid does not exist";
+    $item = $item->{$showid};
+    $seasonid // do {
+        exists $item->{plot} or die "showid $showid does not have plot yet";
+        return $item->{plot};
+    };
+    exists $item->{seasons}{$seasonid} or die "showid $showid season $seasonid does not exist";
+    $item = $item->{seasons}{$seasonid};
+    exists $item->{meta} or die "showid $showid season $seasonid does have metadata yet";
+    my $meta = $item->{meta};
+    $episode // do {
+        exists $meta->{overview} or die "showid $showid season $seasonid does not have plot yet";
+        return $meta->{overview};
+    };
+    $meta = MHFS::Kodi::Season::_get_season_episode($meta, $episode);
+    exists $meta->{overview} or die "showid $showid season $seasonid episode $episode does not have plot yet";
+    $meta->{overview}
+}
+
 sub Format {
     my ($tvvshows) = @_;
     my @sortedkeys = sort {basename($a) cmp basename($b)} keys %$tvvshows;

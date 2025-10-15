@@ -623,6 +623,15 @@ sub route_metadata {
     }
     $medianame = fold_case($medianame);
     say "mt $mediatype mmt $metadatatype mn $medianame". (defined $season ? " season $season". (defined $episode ? " episode $episode" : '') : '');
+    my $tvshows = $self->_get_tvshows_instance() if $mediatype eq 'tv';
+    # tv fastest path, grab from the db
+    if ($mediatype eq 'tv' && $metadatatype eq 'plot') {
+        try {
+            my $plot = $tvshows->get_plot($medianame, $season, $episode);
+            $request->SendText('text/plain; charset=utf-8', $plot);
+            return;
+        } catch ($e) {}
+    }
     my %allmediaparams  = ( 'movies' => {
         'meta' => $self->{moviemeta},
         'search' => 'movie',
@@ -634,17 +643,7 @@ sub route_metadata {
     my $b_metadir = $params->{meta} . '/' . encode_utf8($medianame) . (defined $season ? '/'.encode_utf8($season). (defined $episode ? '/'.encode_utf8($episode) : '') : '');
     my $b_plotfile =  $params->{meta} . '/' . encode_utf8($medianame) . '/'. (defined $season ? encode_utf8($season).'/season.json' : 'plot.txt');
     # fast path, check disk
-    if (defined $season && $metadatatype eq 'plot') {
-        try {
-            my $bytes = read_file($b_plotfile);
-            my $json = decode_json($bytes);
-            if (defined $episode) {
-                $json = MHFS::Kodi::Season::_get_season_episode($json, $episode);
-            }
-            $request->SendText('text/plain; charset=utf-8', $json->{overview});
-            return;
-        } catch ($e){}
-    } elsif (-d $b_metadir) {
+    if (($mediatype ne 'tv' || $metadatatype ne 'plot') && -d $b_metadir) {
         my %acceptable = ( 'thumb' => ['png', 'jpg'], 'fanart' => ['png', 'jpg'], 'plot' => ['txt']);
         if(exists $acceptable{$metadatatype}) {
             foreach my $totry (@{$acceptable{$metadatatype}}) {
