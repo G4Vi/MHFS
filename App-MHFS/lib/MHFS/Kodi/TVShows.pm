@@ -1,10 +1,120 @@
 package MHFS::Kodi::TVShows v0.7.0;
 use 5.014;
 use strict; use warnings;
+use Cwd qw(abs_path);
+use Encode qw(decode);
+use Feature::Compat::Try;
 use File::Basename qw(basename);
+use MIME::Base64 qw(decode_base64url);
+BEGIN {
+    if( ! (eval "use JSON; 1")) {
+        eval "use JSON::PP; 1" or die "No implementation of JSON available";
+        warn __PACKAGE__.": Using PurePerl version of JSON (JSON::PP)";
+    }
+}
+
 use MHFS::Kodi::Util qw(html_list_item);
-use MIME::Base64 qw(encode_base64url);
+use MHFS::Kodi::Season;
 use MHFS::Kodi::SeasonLite;
+use MHFS::Util qw(read_file fold_case read_text_file_lossy);
+
+sub _read_season_meta {
+    my ($self, $showid, $seasonid) = @_;
+    try {
+        my $bytes = read_file($self->{tvmeta}."/$showid/$seasonid/season.json");
+        my $meta = decode_json($bytes);
+        return $meta;
+    } catch($e) {}
+    return;
+}
+
+sub _readtvdir {
+    my ($self, $tvshows, $source, $b_tvdir) = @_;
+    my $dh;
+    if (! opendir ( $dh, $b_tvdir )) {
+        warn "Error in opening dir $b_tvdir\n";
+        return;
+    }
+    my @diritems;
+    while (my $b_filename = readdir($dh)) {
+        next if(($b_filename eq '.') || ($b_filename eq '..'));
+        next if(!(-s "$b_tvdir/$b_filename"));
+        my $filename = decode('UTF-8', $b_filename, Encode::FB_DEFAULT | Encode::LEAVE_SRC);
+        next if (! -d _ && $filename !~ /\.(?:avi|mkv|mp4|m4v)$/);
+        if ($filename !~ /^(.+?)(?:[\.\s]+(\d{4}))?[\.\s]+S(?:eason\s)?0*(\d+)/) {
+            say "suspicious: $filename";
+        }
+        if ($filename =~ /S(?:eason\s)?0*(\d+)\-S(?:eason\s)?0*(\d+)/) {
+            $self->_readtvdir($tvshows, $source, "$b_tvdir/$b_filename");
+            next;
+        }
+        my $showname = $1 || $filename;
+        my $year = $2;
+        my $season = $3 // 0;
+        next if (! $showname);
+        $showname =~ s/\./ /g;
+        my $showid = fold_case($showname);
+        if (! $tvshows->{$showid}) {
+            my %show = (name => $showname, seasons => {});
+            my $plot = $self->{tvmeta}."/$showid/plot.txt";
+            try { $show{plot} = read_text_file_lossy($plot); }
+            catch($e) {}
+            $tvshows->{$showid} = \%show;
+        }
+        $tvshows->{$showid}{seasons}{$season} //= {
+            editions => {},
+            do {
+                my $meta = $self->_read_season_meta($showid, $season);
+                $meta ? (meta => $meta) : ()
+            },
+        };
+        $tvshows->{$showid}{seasons}{$season}{editions}{"$source/$b_filename"} = {name => $filename, isdir => (-d _ // 0)+0};
+    }
+    closedir($dh);
+}
+
+sub build_tv_library {
+    my ($self) = @_;
+    my $sources = $self->{sources};
+    my %tvshows;
+    foreach my $source (@$sources) {
+        if ($self->{server}{settings}{SOURCES}{$source}{type} ne 'local') {
+            warn "skipping source $source, only local implemented";
+            next;
+        }
+        my $b_tvdir = $self->{server}{settings}{SOURCES}{$source}{folder};
+        $self->_readtvdir(\%tvshows, $source, $b_tvdir);
+    }
+    $self->{tvshows} = \%tvshows;
+}
+
+sub new {
+    my ($name, $server, $tvmeta) = @_;
+    my $self = bless {server => $server, sources => $server->{settings}{MEDIASOURCES}{tv}, tvmeta => $tvmeta}, $name;
+    $self->build_tv_library();
+    $self
+}
+
+sub get_tv_item {
+    my ($self, $showid, $seasonid, $source, $b64_item) = @_;
+    my $tvshows = $self->{tvshows};
+    exists $tvshows->{$showid} or die "showid $showid does not exist";
+    exists $tvshows->{$showid}{seasons}{$seasonid} or die "season $seasonid does not exist";
+    my $seasonitem = $tvshows->{$showid}{seasons}{$seasonid};
+    my $sourcemap = $self->{server}{settings}{SOURCES};
+    # TODO: Instead of updating the tv library here, the library should be updated when new metadata is loaded
+    if (!exists $seasonitem->{meta}) {
+        my $meta = $self->_read_season_meta($showid, $seasonid);
+        $seasonitem->{meta} = $meta if $meta;
+    }
+    $source or return bless {season => $seasonitem, id => $seasonid, sourcemap => $sourcemap}, 'MHFS::Kodi::Season';
+    $b64_item or die "b64_item not provided";
+    my $path = abs_path($self->{server}{settings}{SOURCES}{$source}{folder} .'/' . decode_base64url($b64_item));
+    if (!$path || rindex($path, $self->{server}{settings}{SOURCES}{$source}{folder}, 0) != 0 || ! -f $path) {
+        die "item not found";
+    }
+    {b_path => $path}
+}
 
 sub Format {
     my ($tvvshows) = @_;

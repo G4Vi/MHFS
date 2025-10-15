@@ -30,93 +30,14 @@ BEGIN {
     }
 }
 
-sub _read_season_meta {
-    my ($self, $showid, $seasonid) = @_;
-    try {
-        my $bytes = read_file($self->{tvmeta}."/$showid/$seasonid/season.json");
-        my $meta = decode_json($bytes);
-        return $meta;
-    } catch($e) {}
-    return;
-}
-
-sub readtvdir {
-    my ($self, $tvshows, $source, $b_tvdir) = @_;
-    my $dh;
-    if (! opendir ( $dh, $b_tvdir )) {
-        warn "Error in opening dir $b_tvdir\n";
-        return;
+sub _get_tvshows_instance {
+    my ($self, $force_reload) = @_;
+    if (! exists $self->{tvshows}) {
+        $self->{tvshows} = MHFS::Kodi::TVShows->new($self->{server}, $self->{tvmeta});
+        return $self->{tvshows};
     }
-    my @diritems;
-    while (my $b_filename = readdir($dh)) {
-        next if(($b_filename eq '.') || ($b_filename eq '..'));
-        next if(!(-s "$b_tvdir/$b_filename"));
-        my $filename = decode('UTF-8', $b_filename, Encode::FB_DEFAULT | Encode::LEAVE_SRC);
-        next if (! -d _ && $filename !~ /\.(?:avi|mkv|mp4|m4v)$/);
-        if ($filename !~ /^(.+?)(?:[\.\s]+(\d{4}))?[\.\s]+S(?:eason\s)?0*(\d+)/) {
-            say "suspicious: $filename";
-        }
-        if ($filename =~ /S(?:eason\s)?0*(\d+)\-S(?:eason\s)?0*(\d+)/) {
-            $self->readtvdir($tvshows, $source, "$b_tvdir/$b_filename");
-            next;
-        }
-        my $showname = $1 || $filename;
-        my $year = $2;
-        my $season = $3 // 0;
-        next if (! $showname);
-        $showname =~ s/\./ /g;
-        my $showid = fold_case($showname);
-        if (! $tvshows->{$showid}) {
-            my %show = (name => $showname, seasons => {});
-            my $plot = $self->{tvmeta}."/$showid/plot.txt";
-            try { $show{plot} = read_text_file_lossy($plot); }
-            catch($e) {}
-            $tvshows->{$showid} = \%show;
-        }
-        $tvshows->{$showid}{seasons}{$season} //= {
-            editions => {},
-            do {
-                my $meta = $self->_read_season_meta($showid, $season);
-                $meta ? (meta => $meta) : ()
-            },
-        };
-        $tvshows->{$showid}{seasons}{$season}{editions}{"$source/$b_filename"} = {name => $filename, isdir => (-d _ // 0)+0};
-    }
-    closedir($dh);
-}
-
-sub _build_tv_library {
-    my ($self, $sources) = @_;
-    my %tvshows;
-    foreach my $source (@$sources) {
-        if ($self->{server}{settings}{SOURCES}{$source}{type} ne 'local') {
-            warn "skipping source $source, only local implemented";
-            next;
-        }
-        my $b_tvdir = $self->{server}{settings}{SOURCES}{$source}{folder};
-        $self->readtvdir(\%tvshows, $source, $b_tvdir);
-    }
-    \%tvshows
-}
-
-sub _get_tv_item {
-    my ($self, $tvshows, $showid, $seasonid, $source, $b64_item) = @_;
-    exists $tvshows->{$showid} or die "showid $showid does not exist";
-    exists $tvshows->{$showid}{seasons}{$seasonid} or die "season $seasonid does not exist";
-    my $seasonitem = $tvshows->{$showid}{seasons}{$seasonid};
-    my $sourcemap = $self->{server}{settings}{SOURCES};
-    # TODO: Instead of updating the tv library here, the library should be updated when new metadata is loaded
-    if (!exists $seasonitem->{meta}) {
-        my $meta = $self->_read_season_meta($showid, $seasonid);
-        $seasonitem->{meta} = $meta if $meta;
-    }
-    $source or return bless {season => $seasonitem, id => $seasonid, sourcemap => $sourcemap}, 'MHFS::Kodi::Season';
-    $b64_item or die "b64_item not provided";
-    my $path = abs_path($self->{server}{settings}{SOURCES}{$source}{folder} .'/' . decode_base64url($b64_item));
-    if (!$path || rindex($path, $self->{server}{settings}{SOURCES}{$source}{folder}, 0) != 0 || ! -f $path) {
-        die "item not found";
-    }
-    {b_path => $path}
+    $self->{tvshows}->build_tv_library() if $force_reload;
+    $self->{tvshows}
 }
 
 # format tv library for kodi http
@@ -130,11 +51,7 @@ sub route_tv {
             return;
         }
     };
-    # build the tv show library
-    if(! exists $self->{tvshows} || $request_path eq $kodidir) {
-        $self->{tvshows} = $self->_build_tv_library($sources);
-    }
-    my $tvshows = $self->{tvshows};
+    my $tvshows = $self->_get_tvshows_instance($request_path eq $kodidir);
     my $tvitem;
     if ($request_path ne $kodidir) {
         my $fulltvpath = substr($request_path, length($kodidir)+1);
@@ -152,7 +69,7 @@ sub route_tv {
             return;
         };
         try {
-            $tvitem = $self->_get_tv_item($tvshows, $showid, $season, $source, $b64_item);
+            $tvitem = $tvshows->get_tv_item($showid, $season, $source, $b64_item);
         } catch($e) {
             say "exception $e";
             $request->Send404;
@@ -168,7 +85,7 @@ sub route_tv {
             return;
         }
     } else {
-        $tvitem = bless {tvshows => $tvshows}, 'MHFS::Kodi::TVShows';
+        $tvitem = $tvshows;
     }
     if(exists $request->{qs}{fmt} && $request->{qs}{fmt} eq 'html') {
         my $buf = $tvitem->TO_HTML;
