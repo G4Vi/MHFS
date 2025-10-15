@@ -628,6 +628,7 @@ sub route_metadata {
     if ($mediatype eq 'tv' && $metadatatype eq 'plot') {
         try {
             my $plot = $tvshows->get_plot($medianame, $season, $episode);
+            say "fastest path";
             $request->SendText('text/plain; charset=utf-8', $plot);
             return;
         } catch ($e) {}
@@ -641,7 +642,6 @@ sub route_metadata {
     });
     my $params = $allmediaparams{$mediatype};
     my $b_metadir = $params->{meta} . '/' . encode_utf8($medianame) . (defined $season ? '/'.encode_utf8($season). (defined $episode ? '/'.encode_utf8($episode) : '') : '');
-    my $b_plotfile =  $params->{meta} . '/' . encode_utf8($medianame) . '/'. (defined $season ? encode_utf8($season).'/season.json' : 'plot.txt');
     # fast path, check disk
     if (($mediatype ne 'tv' || $metadatatype ne 'plot') && -d $b_metadir) {
         my %acceptable = ( 'thumb' => ['png', 'jpg'], 'fanart' => ['png', 'jpg'], 'plot' => ['txt']);
@@ -672,12 +672,7 @@ sub route_metadata {
         # find the season and then the episode if applicable
         my $showid = $json->{id} // die "showid not available";
         _TMDB_api_promise($request->{client}{server}, "tv/$showid/season/$season")->then(sub {
-            if ($metadatatype eq 'plot' || ! -f $b_plotfile) {
-                make_path($b_metadir);
-                my $bytes = encode_json($_[0]);
-                try { write_file($b_plotfile, $bytes) }
-                catch ($e) { say "wierd, creating file failed?"; }
-            }
+            $tvshows->insert_season_metadata($medianame, $season, $_[0], $metadatatype eq 'plot');
             $episode // return $_[0];
             MHFS::Kodi::Season::_get_season_episode($_[0], $episode)
         })

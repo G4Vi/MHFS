@@ -2,8 +2,9 @@ package MHFS::Kodi::TVShows v0.7.0;
 use 5.014;
 use strict; use warnings;
 use Cwd qw(abs_path);
-use Encode qw(decode);
+use Encode qw(decode encode_utf8);
 use Feature::Compat::Try;
+use File::Path qw(make_path);
 use File::Basename qw(basename);
 use MIME::Base64 qw(decode_base64url);
 BEGIN {
@@ -16,16 +17,16 @@ BEGIN {
 use MHFS::Kodi::Util qw(html_list_item);
 use MHFS::Kodi::Season;
 use MHFS::Kodi::SeasonLite;
-use MHFS::Util qw(read_file fold_case read_text_file_lossy);
+use MHFS::Util qw(read_file fold_case read_text_file_lossy write_file);
 
 sub _read_season_meta {
     my ($self, $showid, $seasonid) = @_;
     try {
         my $bytes = read_file($self->{tvmeta}."/$showid/$seasonid/season.json");
         my $meta = decode_json($bytes);
-        return $meta;
+        return (meta => $meta);
     } catch($e) {}
-    return;
+    return ();
 }
 
 sub _readtvdir {
@@ -63,10 +64,7 @@ sub _readtvdir {
         }
         $tvshows->{$showid}{seasons}{$season} //= {
             editions => {},
-            do {
-                my $meta = $self->_read_season_meta($showid, $season);
-                $meta ? (meta => $meta) : ()
-            },
+            $self->_read_season_meta($showid, $season),
         };
         $tvshows->{$showid}{seasons}{$season}{editions}{"$source/$b_filename"} = {name => $filename, isdir => (-d _ // 0)+0};
     }
@@ -102,11 +100,6 @@ sub get_tv_item {
     exists $tvshows->{$showid}{seasons}{$seasonid} or die "season $seasonid does not exist";
     my $seasonitem = $tvshows->{$showid}{seasons}{$seasonid};
     my $sourcemap = $self->{server}{settings}{SOURCES};
-    # TODO: Instead of updating the tv library here, the library should be updated when new metadata is loaded
-    if (!exists $seasonitem->{meta}) {
-        my $meta = $self->_read_season_meta($showid, $seasonid);
-        $seasonitem->{meta} = $meta if $meta;
-    }
     $source or return bless {season => $seasonitem, id => $seasonid, sourcemap => $sourcemap}, 'MHFS::Kodi::Season';
     $b64_item or die "b64_item not provided";
     my $path = abs_path($self->{server}{settings}{SOURCES}{$source}{folder} .'/' . decode_base64url($b64_item));
@@ -136,6 +129,26 @@ sub get_plot {
     $meta = MHFS::Kodi::Season::_get_season_episode($meta, $episode);
     exists $meta->{overview} or die "showid $showid season $seasonid episode $episode does not have plot yet";
     $meta->{overview}
+}
+
+# IF NOT EXISTS unless $force_update is true
+sub insert_season_metadata {
+    my ($self, $showid, $seasonid, $metadata, $force_update) = @_;
+    my $item = $self->{tvshows};
+    exists $item->{$showid} or die "showid $showid does not exist";
+    $item = $item->{$showid};
+    $seasonid // do {
+        exists $item->{plot} or die "showid $showid does not have plot yet";
+        return $item->{plot};
+    };
+    exists $item->{seasons}{$seasonid} or die "showid $showid season $seasonid does not exist";
+    $item = $item->{seasons}{$seasonid};
+    return if (exists $item->{meta} && !$force_update);
+    my $b_metadir = $self->{tvmeta} . '/' . encode_utf8($showid) . '/' . encode_utf8($seasonid);
+    make_path($b_metadir);
+    my $bytes = encode_json($metadata);
+    write_file("$b_metadir/season.json", $bytes);
+    $item->{meta} = $metadata;
 }
 
 sub Format {
