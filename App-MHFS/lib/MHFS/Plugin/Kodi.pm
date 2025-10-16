@@ -623,6 +623,24 @@ sub route_metadata {
     }
     $medianame = fold_case($medianame);
     say "mt $mediatype mmt $metadatatype mn $medianame". (defined $season ? " season $season". (defined $episode ? " episode $episode" : '') : '');
+    if ($mediatype eq 'tv') {
+        weaken($request);
+        $self->_get_tvshows_instance()->fetch_metadata($metadatatype, $medianame, $season, $episode)->then(sub {
+            my ($result) = @_;
+            if ($result->{file}) {
+                $request->SendLocalFile($result->{file});
+            } elsif ($result->{text}) {
+                $request->SendText('text/plain; charset=utf-8', $result->{text});
+            } else {
+                die "unknown result type";
+            }
+        })->then(undef, sub {
+            print $_[0];
+            say "fetch_metadata failure";
+            $request->Send404;
+        });
+        return;
+    }
     my $tvshows = $self->_get_tvshows_instance() if $mediatype eq 'tv';
     # tv fastest path, grab from the db
     if ($mediatype eq 'tv' && $metadatatype eq 'plot') {

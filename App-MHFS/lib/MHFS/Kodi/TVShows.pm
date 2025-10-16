@@ -17,6 +17,7 @@ BEGIN {
 use MHFS::Kodi::Util qw(html_list_item);
 use MHFS::Kodi::Season;
 use MHFS::Kodi::SeasonLite;
+use MHFS::Promise;
 use MHFS::Util qw(read_file fold_case read_text_file_lossy write_file write_text_file_lossy);
 
 sub _read_season_meta {
@@ -160,6 +161,86 @@ sub insert_show_plot {
     make_path($b_metadir);
     write_text_file_lossy("$b_metadir/plot.txt", $plot);
     $item->{plot} = $plot;
+}
+
+# returns a promise
+sub fetch_metadata {
+    my ($self, $metadatatype, $medianame, $season, $episode) = @_;
+    # tv fastest path, grab from the db
+    if ($metadatatype eq 'plot') {
+        try {
+            my $plot = $self->get_plot($medianame, $season, $episode);
+            say "fastest path";
+            my $result = {text => $plot};
+            return MHFS::Promise->new($self->{server}{evp}, sub {
+                my ($resolve, $reject) = @_;
+                $resolve->($result);
+            });
+        } catch ($e) {}
+    }
+    my $b_metadir = $self->{tvmeta} . '/' . encode_utf8($medianame) . (defined $season ? '/'.encode_utf8($season). (defined $episode ? '/'.encode_utf8($episode) : '') : '');
+    # fast path, check disk
+    if ($metadatatype ne 'plot' && -d $b_metadir) {
+        my %acceptable = ( 'thumb' => ['png', 'jpg'], 'fanart' => ['png', 'jpg']);
+        if (exists $acceptable{$metadatatype}) {
+            foreach my $totry (@{$acceptable{$metadatatype}}) {
+                my $path = $b_metadir.'/'.$metadatatype.".$totry";
+                if (-f $path) {
+                    return MHFS::Promise->new($self->{server}{evp}, sub {
+                        my ($resolve, $reject) = @_;
+                        $resolve->({file => $path});
+                    });
+                }
+            }
+        }
+    }
+    # slow path, download it
+    $self->{server}{settings}{TMDB} or die "TMDB config not available";
+    # find the movie or tv show
+    my $searchname = $medianame;
+    say "searchname $searchname";
+    return MHFS::Plugin::Kodi::_TMDB_api_promise($self->{server}, 'search/tv', {'query' => $searchname})->then(sub {
+        my $json = $_[0]->{results}[0];
+        $json or die "Failed to find item";
+        $season // return $json;
+        # find the season and then the episode if applicable
+        my $showid = $json->{id} // die "showid not available";
+        MHFS::Plugin::Kodi::_TMDB_api_promise($self->{server}, "tv/$showid/season/$season")->then(sub {
+            $self->insert_season_metadata($medianame, $season, $_[0], $metadatatype eq 'plot');
+            $episode // return $_[0];
+            MHFS::Kodi::Season::_get_season_episode($_[0], $episode)
+        })
+    })->then(sub {
+        # get the metadata
+        if (! defined $season) {
+            $self->insert_show_plot($medianame, $_[0], $metadatatype eq 'plot');
+        }
+        if($metadatatype eq 'plot') {
+            return {text => $_[0]->{overview}};
+        }
+        # thumb or fanart
+        my $imagepartial = ($metadatatype eq 'thumb') ? (! defined $episode ? $_[0]->{poster_path} : $_[0]->{still_path}) : $_[0]->{backdrop_path};
+        if (!$imagepartial || $imagepartial !~ /(\.[^\.]+)$/) {
+            die 'path not matched '.$imagepartial;
+        }
+        my $ext = $1;
+        make_path($b_metadir);
+        return MHFS::Promise->new($self->{server}{evp}, sub {
+            my ($resolve, $reject) = @_;
+            if(! defined $self->{tmdbconfig}) {
+                $resolve->(MHFS::Plugin::Kodi::_TMDB_api_promise($self->{server}, 'configuration')->then( sub {
+                    $self->{tmdbconfig} = $_[0];
+                    return $_[0];
+                }));
+            } else {
+                $resolve->();
+            }
+        })->then( sub {
+            return MHFS::Plugin::Kodi::_DownloadFile_promise($self->{server}, $self->{tmdbconfig}{images}{secure_base_url}.'original'.$imagepartial, "$b_metadir/$metadatatype$ext")->then(sub {
+                return {file => "$b_metadir/$metadatatype$ext"};
+            });
+        });
+    });
 }
 
 sub Format {

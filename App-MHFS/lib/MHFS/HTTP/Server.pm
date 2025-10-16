@@ -87,6 +87,7 @@ sub new {
     # load the plugins
     foreach my $pluginname (@{$plugins}) {
         eval "use $pluginname; 1;" or do {
+            say $@;
             say __PACKAGE__.": module $pluginname not found!";
             next;
         };
