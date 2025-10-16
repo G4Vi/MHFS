@@ -21,6 +21,7 @@ use MHFS::Kodi::MovieSubtitle;
 use MHFS::Kodi::Season;
 use MHFS::Process;
 use MHFS::Promise;
+use MHFS::TMDBClient;
 use MHFS::Util qw(base64url_to_str str_to_base64url uri_escape_path_utf8 read_text_file_lossy write_text_file_lossy decode_utf_8 escape_html_noquote fold_case write_file read_file);
 use Feature::Compat::Try;
 BEGIN {
@@ -30,10 +31,20 @@ BEGIN {
     }
 }
 
+sub _get_tmdb_instance {
+    my ($self) = @_;
+    exists $self->{server}{settings}{TMDB} or die "no TMDB api key set";
+    my $api_key = $self->{server}{settings}{TMDB};
+    $self->{tmdb} //= MHFS::TMDBClient->new($self->{server}, $api_key)
+}
+
 sub _get_tvshows_instance {
     my ($self, $force_reload) = @_;
+    my $tmdb;
+    try {$tmdb = $self->_get_tmdb_instance()}
+    catch ($e){print $e}
     if (! exists $self->{tvshows}) {
-        $self->{tvshows} = MHFS::Kodi::TVShows->new($self->{server}, $self->{tvmeta});
+        $self->{tvshows} = MHFS::Kodi::TVShows->new($self->{server}, $self->{tvmeta}, $tmdb);
         return $self->{tvshows};
     }
     $self->{tvshows}->build_tv_library() if $force_reload;

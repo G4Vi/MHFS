@@ -88,8 +88,11 @@ sub build_tv_library {
 }
 
 sub new {
-    my ($name, $server, $tvmeta) = @_;
-    my $self = bless {server => $server, sources => $server->{settings}{MEDIASOURCES}{tv}, tvmeta => $tvmeta}, $name;
+    my ($name, $server, $tvmeta, $tmdb_client) = @_;
+    my %optional = (
+        ($tmdb_client ? (tmdb => $tmdb_client) : ()),
+    );
+    my $self = bless {server => $server, sources => $server->{settings}{MEDIASOURCES}{tv}, tvmeta => $tvmeta, %optional}, $name;
     $self->build_tv_library();
     $self
 }
@@ -195,17 +198,18 @@ sub fetch_metadata {
         }
     }
     # slow path, download it
-    $self->{server}{settings}{TMDB} or die "TMDB config not available";
+    exists $self->{tmdb} or die "cannot load metadata without tmdb";
+    my $tmdb = $self->{tmdb};
     # find the movie or tv show
     my $searchname = $medianame;
     say "searchname $searchname";
-    return MHFS::Plugin::Kodi::_TMDB_api_promise($self->{server}, 'search/tv', {'query' => $searchname})->then(sub {
+    return $tmdb->search('tv', {'query' => $searchname})->then(sub {
         my $json = $_[0]->{results}[0];
         $json or die "Failed to find item";
         $season // return $json;
         # find the season and then the episode if applicable
         my $showid = $json->{id} // die "showid not available";
-        MHFS::Plugin::Kodi::_TMDB_api_promise($self->{server}, "tv/$showid/season/$season")->then(sub {
+        $tmdb->get_tv_season($showid, $season)->then(sub {
             $self->insert_season_metadata($medianame, $season, $_[0], $metadatatype eq 'plot');
             $episode // return $_[0];
             MHFS::Kodi::Season::_get_season_episode($_[0], $episode)
@@ -225,21 +229,9 @@ sub fetch_metadata {
         }
         my $ext = $1;
         make_path($b_metadir);
-        return MHFS::Promise->new($self->{server}{evp}, sub {
-            my ($resolve, $reject) = @_;
-            if(! defined $self->{tmdbconfig}) {
-                $resolve->(MHFS::Plugin::Kodi::_TMDB_api_promise($self->{server}, 'configuration')->then( sub {
-                    $self->{tmdbconfig} = $_[0];
-                    return $_[0];
-                }));
-            } else {
-                $resolve->();
-            }
-        })->then( sub {
-            return MHFS::Plugin::Kodi::_DownloadFile_promise($self->{server}, $self->{tmdbconfig}{images}{secure_base_url}.'original'.$imagepartial, "$b_metadir/$metadatatype$ext")->then(sub {
-                return {file => "$b_metadir/$metadatatype$ext"};
-            });
-        });
+        $tmdb->get_image("original$imagepartial", "$b_metadir/$metadatatype$ext")->then(sub {
+            {file => $_[0]}
+        })
     });
 }
 
