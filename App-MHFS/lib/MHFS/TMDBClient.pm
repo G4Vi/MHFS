@@ -2,6 +2,7 @@ package MHFS::TMDBClient v0.7.0;
 use 5.014;
 use strict; use warnings;
 use feature 'say';
+use File::Path qw(make_path);
 use Encode qw(encode_utf8);
 use URI::Escape qw(uri_escape);
 BEGIN {
@@ -121,6 +122,18 @@ sub get_image {
             $save_path
         })
     })
+}
+
+# returns a promise to path
+sub get_image_from_metadata {
+    my ($self, $metadata_type, $metadata, $image_type, $destdir) = @_;
+    my $imagepartial = ($image_type eq 'thumb') ? ($metadata_type ne 'tv_episode' ? $metadata->{poster_path} : $metadata->{still_path}) : $metadata->{backdrop_path};
+    if (!$imagepartial || $imagepartial !~ /(\.[^\.]+)$/) {
+        die 'path not matched '.$imagepartial;
+    }
+    my $ext = $1;
+    make_path($destdir);
+    $self->get_image("original$imagepartial", "$destdir/$image_type$ext")
 }
 
 1;

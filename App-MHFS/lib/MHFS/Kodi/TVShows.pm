@@ -206,6 +206,7 @@ sub fetch_metadata {
     return $tmdb->search('tv', {'query' => $searchname})->then(sub {
         my $json = $_[0]->{results}[0];
         $json or die "Failed to find item";
+        $self->insert_show_plot($medianame, $json, ! defined $season && $metadatatype eq 'plot');
         $season // return $json;
         # find the season and then the episode if applicable
         my $showid = $json->{id} // die "showid not available";
@@ -215,21 +216,11 @@ sub fetch_metadata {
             MHFS::Kodi::Season::_get_season_episode($_[0], $episode)
         })
     })->then(sub {
-        # get the metadata
-        if (! defined $season) {
-            $self->insert_show_plot($medianame, $_[0], $metadatatype eq 'plot');
-        }
-        if($metadatatype eq 'plot') {
+        if ($metadatatype eq 'plot') {
             return {text => $_[0]->{overview}};
         }
-        # thumb or fanart
-        my $imagepartial = ($metadatatype eq 'thumb') ? (! defined $episode ? $_[0]->{poster_path} : $_[0]->{still_path}) : $_[0]->{backdrop_path};
-        if (!$imagepartial || $imagepartial !~ /(\.[^\.]+)$/) {
-            die 'path not matched '.$imagepartial;
-        }
-        my $ext = $1;
-        make_path($b_metadir);
-        $tmdb->get_image("original$imagepartial", "$b_metadir/$metadatatype$ext")->then(sub {
+        my $type = defined $season ? (defined $episode ? 'tv_episode' : 'tv_season') : 'tv_show';
+        $tmdb->get_image_from_metadata($type, $_[0], $metadatatype, $b_metadir)->then(sub {
             {file => $_[0]}
         })
     });
