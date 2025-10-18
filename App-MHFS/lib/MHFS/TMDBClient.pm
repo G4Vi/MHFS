@@ -26,8 +26,8 @@ sub _curl {
     print "$_ " foreach @cmd;
     print "\n";
     $process = MHFS::Process->new_io_process($server->{evp}, \@cmd, sub {
-        my ($output, $error) = @_;
-        $cb->($output);
+        my ($output, $error, $exit_status) = @_;
+        $cb->($output, $exit_status >>= 8);
     });
 
     if(! $process) {
@@ -73,7 +73,7 @@ sub _TMDB_api_promise {
 
 sub _DownloadFile {
     my ($server, $url, $dest, $cb) = @_;
-    return _curl($server, ['-k', $url, '-o', $dest], $cb);
+    return _curl($server, ['-f', $url, '-o', $dest], $cb);
 }
 
 sub _DownloadFile_promise {
@@ -81,6 +81,11 @@ sub _DownloadFile_promise {
     return MHFS::Promise->new($server->{evp}, sub {
         my ($resolve, $reject) = @_;
         _DownloadFile($server, $url, $dest, sub {
+            my ($output, $exit_code) = @_;
+            if ($exit_code != 0) {
+                $reject->("download failed exitcode $exit_code\n");
+                return;
+            }
             $resolve->();
         });
     });

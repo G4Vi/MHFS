@@ -256,7 +256,7 @@ sub new_io_process {
         'at_exit' => sub {
             my ($context) = @_;
             say 'run handler';
-            $handler->($context->{'stdout'}, $context->{'stderr'});
+            $handler->($context->{'stdout'}, $context->{'stderr'}, $context->{exit_status});
         }
     };
     if(defined $inputdata) {
