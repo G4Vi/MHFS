@@ -126,14 +126,12 @@ sub get_image {
 
 # returns a promise to path
 sub get_image_from_metadata {
-    my ($self, $metadata_type, $metadata, $image_type, $destdir) = @_;
-    my $imagepartial = ($image_type eq 'thumb') ? ($metadata_type ne 'tv_episode' ? $metadata->{poster_path} : $metadata->{still_path}) : $metadata->{backdrop_path};
-    if (!$imagepartial || $imagepartial !~ /(\.[^\.]+)$/) {
-        die 'path not matched '.$imagepartial;
-    }
-    my $ext = $1;
+    my ($self, $metadata, $image_type, $destdir, $save_base) = @_;
+    exists $metadata->{$image_type} or die "$image_type does not exist in metadata";
+    my $imagepartial = $metadata->{$image_type};
+    my ($ext) = $imagepartial =~ /(\.[^\.]+)$/ or die "file extension not found in $imagepartial";
     make_path($destdir);
-    $self->get_image("original$imagepartial", "$destdir/$image_type$ext")
+    $self->get_image("original$imagepartial", "$destdir/$save_base$ext")
 }
 
 1;

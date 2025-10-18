@@ -219,8 +219,8 @@ sub fetch_metadata {
         if ($metadatatype eq 'plot') {
             return {text => $_[0]->{overview}};
         }
-        my $type = defined $season ? (defined $episode ? 'tv_episode' : 'tv_season') : 'tv_show';
-        $tmdb->get_image_from_metadata($type, $_[0], $metadatatype, $b_metadir)->then(sub {
+        my $image_type = ($metadatatype eq 'thumb') ? (! defined $episode ? 'poster_path' : 'still_path') : 'backdrop_path';
+        $tmdb->get_image_from_metadata($_[0], $image_type, $b_metadir, $metadatatype)->then(sub {
             {file => $_[0]}
         })
     });
