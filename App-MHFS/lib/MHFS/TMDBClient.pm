@@ -16,91 +16,73 @@ use MHFS::Promise;
 
 sub new {
     my ($name, $server, $api_key) = @_;
+    $api_key //= $server->{settings}{TMDB};
     bless {server => $server, api_key => $api_key}, $name
 }
 
-sub _curl {
-    my ($server, $params, $cb) = @_;
-    my $process;
-    my @cmd = ('curl', @$params);
-    print "$_ " foreach @cmd;
-    print "\n";
-    $process = MHFS::Process->new_io_process($server->{evp}, \@cmd, sub {
-        my ($output, $error, $exit_status) = @_;
-        $cb->($output, $exit_status >>= 8);
-    });
-
-    if(! $process) {
-        $cb->(undef);
-    }
-
-    return $process;
-}
-
-sub _TMDB_api {
-    my ($server, $route, $qs, $cb) = @_;
-    my $url = 'https://api.themoviedb.org/3/' . $route;
-    $url .= '?api_key=' . $server->{settings}{TMDB} . '&';
-    if($qs){
-        foreach my $key (keys %{$qs}) {
-            my @values;
-            if(ref($qs->{$key}) ne 'ARRAY') {
-                push @values, $qs->{$key};
-            }
-            else {
-                @values = @{$qs->{$key}};
-            }
-            foreach my $value (@values) {
-                $url .= uri_escape($key).'='.uri_escape($value) . '&';
-            }
+sub _curl_Promise {
+    my ($server, $params) = @_;
+    MHFS::Promise->new($server->{evp}, sub {
+        my ($resolve, $reject) = @_;
+        my @cmd = ('curl', @$params);
+        print "$_ " foreach @cmd;
+        print "\n";
+        my $process = MHFS::Process->new_io_process($server->{evp}, \@cmd, sub {
+            my ($output, $error, $exit_status) = @_;
+            $resolve->({exit_code => $exit_status >> 8, stdout => $output, stderr => $error});
+        });
+        if(! $process) {
+            $reject->('failed to start process');
         }
-    }
-    chop $url;
-    return _curl($server, [encode_utf8($url)], sub {
-        $cb->(decode_json($_[0]));
-    });
+    })
 }
 
 sub _TMDB_api_promise {
-    my ($server, $route, $qs) = @_;
-    return MHFS::Promise->new($server->{evp}, sub {
+    my ($self, $route, $qs) = @_;
+    MHFS::Promise->new($self->{server}{evp}, sub {
         my ($resolve, $reject) = @_;
-        _TMDB_api($server, $route, $qs, sub {
-            $resolve->($_[0]);
-        });
-    });
-}
-
-sub _DownloadFile {
-    my ($server, $url, $dest, $cb) = @_;
-    return _curl($server, ['-f', $url, '-o', $dest], $cb);
+        my $url = 'https://api.themoviedb.org/3/' . $route;
+        $url .= '?api_key=' . $self->{api_key} . '&';
+        if($qs){
+            foreach my $key (keys %{$qs}) {
+                my @values;
+                if(ref($qs->{$key}) ne 'ARRAY') {
+                    push @values, $qs->{$key};
+                }
+                else {
+                    @values = @{$qs->{$key}};
+                }
+                foreach my $value (@values) {
+                    $url .= uri_escape($key).'='.uri_escape($value) . '&';
+                }
+            }
+        }
+        chop $url;
+        $resolve->(_curl_Promise($self->{server}, ['-f', encode_utf8($url)])->then(sub {
+            $_[0]->{exit_code} == 0 or die "curl to $url failed with " . $_[0]->{exit_code};
+            decode_json($_[0]->{stdout})
+        }));
+    })
 }
 
 sub _DownloadFile_promise {
     my ($server, $url, $dest) = @_;
-    return MHFS::Promise->new($server->{evp}, sub {
-        my ($resolve, $reject) = @_;
-        _DownloadFile($server, $url, $dest, sub {
-            my ($output, $exit_code) = @_;
-            if ($exit_code != 0) {
-                $reject->("download failed exitcode $exit_code\n");
-                return;
-            }
-            $resolve->();
-        });
-    });
+    _curl_Promise($server, ['-f', $url, '-o', $dest])->then(sub {
+        $_[0]->{exit_code} == 0 or die "curl to $url failed with " . $_[0]->{exit_code};
+        undef
+    })
 }
 
 # returns a promise
 sub search {
     my ($self, $mediatype, $query) = @_;
-    _TMDB_api_promise($self->{server}, "search/$mediatype", $query)
+    $self->_TMDB_api_promise("search/$mediatype", $query)
 }
 
 # returns a promise
 sub get_tv_season {
     my ($self, $series_id, $season, $query) = @_;
-    _TMDB_api_promise($self->{server}, "tv/$series_id/season/$season", $query)
+    $self->_TMDB_api_promise("tv/$series_id/season/$season", $query)
 }
 
 sub _get_config {
@@ -108,7 +90,7 @@ sub _get_config {
     MHFS::Promise->new($self->{server}{evp}, sub {
         my ($resolve, $reject) = @_;
         if(! defined $self->{tmdbconfig}) {
-            $resolve->(_TMDB_api_promise($self->{server}, 'configuration')->then( sub {
+            $resolve->($self->_TMDB_api_promise('configuration')->then( sub {
                 $self->{tmdbconfig} = $_[0];
                 return $_[0];
             }));

@@ -46,7 +46,11 @@ sub _new {
 sub new {
     my ($class, $evp, $cb) = @_;
     my $self = _new(@_);
-    $cb->($self->{fulfill}, $self->{reject});
+    try {
+        $cb->($self->{fulfill}, $self->{reject});
+    } catch ($e) {
+        $self->{reject}->($e);
+    }
     return $self;
 }
 
