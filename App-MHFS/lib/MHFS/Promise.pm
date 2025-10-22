@@ -103,4 +103,23 @@ sub then {
     return $promise;
 }
 
+# static method
+sub try {
+    my $evp = shift @_;
+    my $func = shift @_;
+    my $promise;
+    try {
+        my $res = $func->(@_);
+        if (ref($res) eq __PACKAGE__) {
+            return $res;
+        }
+        $promise = MHFS::Promise->_new($evp);
+        $promise->{fulfill}->($res);
+    } catch ($e) {
+        $promise = MHFS::Promise->_new($evp);
+        $promise->{reject}->($e);
+    }
+    $promise
+}
+
 1;

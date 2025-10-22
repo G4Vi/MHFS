@@ -166,8 +166,7 @@ sub insert_show_plot {
     $item->{plot} = $plot;
 }
 
-# returns a promise
-sub fetch_metadata {
+sub _fetch_metadata {
     my ($self, $metadatatype, $medianame, $season, $episode) = @_;
     # tv fastest path, grab from the db
     if ($metadatatype eq 'plot') {
@@ -224,6 +223,12 @@ sub fetch_metadata {
             {file => $_[0]}
         })
     });
+}
+
+# returns a promise
+sub fetch_metadata {
+    # Look Ma, no closure
+    MHFS::Promise::try($_[0]->{server}{evp}, \&_fetch_metadata, @_)
 }
 
 sub Format {

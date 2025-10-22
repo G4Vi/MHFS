@@ -114,11 +114,13 @@ sub get_image {
 # returns a promise to path
 sub get_image_from_metadata {
     my ($self, $metadata, $image_type, $destdir, $save_base) = @_;
-    exists $metadata->{$image_type} or die "$image_type does not exist in metadata";
-    my $imagepartial = $metadata->{$image_type};
-    my ($ext) = $imagepartial =~ /(\.[^\.]+)$/ or die "file extension not found in $imagepartial";
-    make_path($destdir);
-    $self->get_image("original$imagepartial", "$destdir/$save_base$ext")
+    MHFS::Promise::try($self->{server}{evp}, sub {
+        exists $metadata->{$image_type} or die "$image_type does not exist in metadata";
+        my $imagepartial = $metadata->{$image_type};
+        my ($ext) = $imagepartial =~ /(\.[^\.]+)$/ or die "file extension not found in $imagepartial";
+        make_path($destdir);
+        $self->get_image("original$imagepartial", "$destdir/$save_base$ext")
+    })
 }
 
 1;
