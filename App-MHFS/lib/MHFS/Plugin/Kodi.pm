@@ -6,24 +6,23 @@ use File::Basename qw(basename);
 use Cwd qw(abs_path getcwd);
 use URI::Escape qw(uri_escape);
 use Encode qw(decode encode_utf8);
+use Feature::Compat::Try;
 use File::Path qw(make_path);
 use Data::Dumper qw(Dumper);
 use Scalar::Util qw(weaken);
 use MIME::Base64 qw(encode_base64url decode_base64url);
 use Devel::Peek qw(Dump);
-use MHFS::Kodi::TVShows;
 use MHFS::Kodi::Movie;
 use MHFS::Kodi::MovieEdition;
 use MHFS::Kodi::MovieEditions;
 use MHFS::Kodi::MoviePart;
 use MHFS::Kodi::Movies;
 use MHFS::Kodi::MovieSubtitle;
-use MHFS::Kodi::Season;
+use MHFS::Kodi::TVShows;
 use MHFS::Process;
 use MHFS::Promise;
 use MHFS::TMDBClient;
 use MHFS::Util qw(base64url_to_str str_to_base64url uri_escape_path_utf8 read_text_file_lossy write_text_file_lossy decode_utf_8 escape_html_noquote fold_case write_file read_file);
-use Feature::Compat::Try;
 BEGIN {
     if( ! (eval "use JSON; 1")) {
         eval "use JSON::PP; 1" or die "No implementation of JSON available";
@@ -530,73 +529,6 @@ sub _zip_Promise {
     });
 }
 
-sub _curl {
-    my ($server, $params, $cb) = @_;
-    my $process;
-    my @cmd = ('curl', @$params);
-    print "$_ " foreach @cmd;
-    print "\n";
-    $process = MHFS::Process->new_io_process($server->{evp}, \@cmd, sub {
-        my ($output, $error) = @_;
-        $cb->($output);
-    });
-
-    if(! $process) {
-        $cb->(undef);
-    }
-
-    return $process;
-}
-
-sub _TMDB_api {
-    my ($server, $route, $qs, $cb) = @_;
-    my $url = 'https://api.themoviedb.org/3/' . $route;
-    $url .= '?api_key=' . $server->{settings}{TMDB} . '&';
-    if($qs){
-        foreach my $key (keys %{$qs}) {
-            my @values;
-            if(ref($qs->{$key}) ne 'ARRAY') {
-                push @values, $qs->{$key};
-            }
-            else {
-                @values = @{$qs->{$key}};
-            }
-            foreach my $value (@values) {
-                $url .= uri_escape($key).'='.uri_escape($value) . '&';
-            }
-        }
-    }
-    chop $url;
-    return _curl($server, [encode_utf8($url)], sub {
-        $cb->(decode_json($_[0]));
-    });
-}
-
-sub _TMDB_api_promise {
-    my ($server, $route, $qs) = @_;
-    return MHFS::Promise->new($server->{evp}, sub {
-        my ($resolve, $reject) = @_;
-        _TMDB_api($server, $route, $qs, sub {
-            $resolve->($_[0]);
-        });
-    });
-}
-
-sub _DownloadFile {
-    my ($server, $url, $dest, $cb) = @_;
-    return _curl($server, ['-k', $url, '-o', $dest], $cb);
-}
-
-sub _DownloadFile_promise {
-    my ($server, $url, $dest) = @_;
-    return MHFS::Promise->new($server->{evp}, sub {
-        my ($resolve, $reject) = @_;
-        _DownloadFile($server, $url, $dest, sub {
-            $resolve->();
-        });
-    });
-}
-
 sub DirectoryRoute {
     my ($path_without_end_slash, $cb) = @_;
     return ([
@@ -652,32 +584,16 @@ sub route_metadata {
         });
         return;
     }
-    my $tvshows = $self->_get_tvshows_instance() if $mediatype eq 'tv';
-    # tv fastest path, grab from the db
-    if ($mediatype eq 'tv' && $metadatatype eq 'plot') {
-        try {
-            my $plot = $tvshows->get_plot($medianame, $season, $episode);
-            say "fastest path";
-            $request->SendText('text/plain; charset=utf-8', $plot);
-            return;
-        } catch ($e) {}
-    }
-    my %allmediaparams  = ( 'movies' => {
-        'meta' => $self->{moviemeta},
-        'search' => 'movie',
-    }, 'tv' => {
-        'meta' => $self->{tvmeta},
-        'search' => 'tv'
-    });
-    my $params = $allmediaparams{$mediatype};
-    my $b_metadir = $params->{meta} . '/' . encode_utf8($medianame) . (defined $season ? '/'.encode_utf8($season). (defined $episode ? '/'.encode_utf8($episode) : '') : '');
+    # TODO movies fastest path, grab from db
+    my $b_metadir = $self->{moviemeta} . '/' . encode_utf8($medianame);
     # fast path, check disk
-    if (($mediatype ne 'tv' || $metadatatype ne 'plot') && -d $b_metadir) {
+    if ((1 || $metadatatype ne 'plot') && -d $b_metadir) {
         my %acceptable = ( 'thumb' => ['png', 'jpg'], 'fanart' => ['png', 'jpg'], 'plot' => ['txt']);
         if(exists $acceptable{$metadatatype}) {
             foreach my $totry (@{$acceptable{$metadatatype}}) {
                 my $path = $b_metadir.'/'.$metadatatype.".$totry";
                 if(-f $path) {
+                    say "disk path";
                     $request->SendLocalFile($path);
                     return;
                 }
@@ -685,64 +601,35 @@ sub route_metadata {
         }
     }
     # slow path, download it
-    $request->{client}{server}{settings}{TMDB} or do {
+    my $tmdb;
+    try {
+        $tmdb = $self->_get_tmdb_instance();
+    } catch ($e) {
         $request->Send404;
         return;
-    };
+    }
     # find the movie or tv show
     my $searchname = $medianame;
     $searchname =~ s/\s\(\d\d\d\d\)// if($mediatype eq 'movies');
     say "searchname $searchname";
     weaken($request);
-    _TMDB_api_promise($request->{client}{server}, 'search/'.$params->{search}, {'query' => $searchname})->then(sub {
+    $tmdb->search('movie', {'query' => $searchname})->then(sub {
         my $json = $_[0]->{results}[0];
         $json or die "Failed to find item";
-        $season // return $json;
-        # find the season and then the episode if applicable
-        my $showid = $json->{id} // die "showid not available";
-        _TMDB_api_promise($request->{client}{server}, "tv/$showid/season/$season")->then(sub {
-            $tvshows->insert_season_metadata($medianame, $season, $_[0], $metadatatype eq 'plot');
-            $episode // return $_[0];
-            MHFS::Kodi::Season::_get_season_episode($_[0], $episode)
-        })
-    })->then(sub {
-        # get the metadata
-        if (! defined $season) {
-            if ($mediatype eq 'tv') {
-                $tvshows->insert_show_plot($medianame, $_[0], $metadatatype eq 'plot');
-            } elsif ($metadatatype eq 'plot' || ! -f "$b_metadir/plot.txt") {
-                make_path($b_metadir);
-                try { write_text_file_lossy("$b_metadir/plot.txt", $_[0]->{overview}) }
-                catch ($e) { say "wierd, creating file failed?"; }
-            }
+        if ($metadatatype eq 'plot' || ! -f "$b_metadir/plot.txt") {
+            make_path($b_metadir);
+            try { write_text_file_lossy("$b_metadir/plot.txt", $json->{overview}) }
+            catch ($e) { say "wierd, creating file failed?"; }
         }
-        if($metadatatype eq 'plot') {
-            $request->SendText('text/plain; charset=utf-8', $_[0]->{overview});
+        if ($metadatatype eq 'plot') {
+            $request->SendText('text/plain; charset=utf-8', $json->{overview});
             return;
         }
-        # thumb or fanart
-        my $imagepartial = ($metadatatype eq 'thumb') ? (! defined $episode ? $_[0]->{poster_path} : $_[0]->{still_path}) : $_[0]->{backdrop_path};
-        if (!$imagepartial || $imagepartial !~ /(\.[^\.]+)$/) {
-            die 'path not matched '.$imagepartial;
-        }
-        my $ext = $1;
-        make_path($b_metadir);
-        return MHFS::Promise->new($request->{client}{server}{evp}, sub {
-            my ($resolve, $reject) = @_;
-            if(! defined $self->{tmdbconfig}) {
-                $resolve->(_TMDB_api_promise($request->{client}{server}, 'configuration')->then( sub {
-                    $self->{tmdbconfig} = $_[0];
-                    return $_[0];
-                }));
-            } else {
-                $resolve->();
-            }
-        })->then( sub {
-            return _DownloadFile_promise($request->{client}{server}, $self->{tmdbconfig}{images}{secure_base_url}.'original'.$imagepartial, "$b_metadir/$metadatatype$ext")->then(sub {
-                $request->SendLocalFile("$b_metadir/$metadatatype$ext");
-                return;
-            });
-        });
+        my $image_type = ($metadatatype eq 'thumb') ? 'poster_path' : 'backdrop_path';
+        $tmdb->get_image_from_metadata($json, $image_type, $b_metadir, $metadatatype)->then(sub {
+            $request->SendLocalFile($_[0]);
+            return;
+        })
     })->then(undef, sub {
         print $_[0];
         $request->Send404;
