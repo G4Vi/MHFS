@@ -39,8 +39,7 @@ sub _curl_Promise {
 
 sub _TMDB_api_promise {
     my ($self, $route, $qs) = @_;
-    MHFS::Promise->new($self->{server}{evp}, sub {
-        my ($resolve, $reject) = @_;
+    MHFS::Promise::try($self->{server}{evp}, sub {
         my $url = 'https://api.themoviedb.org/3/' . $route;
         $url .= '?api_key=' . $self->{api_key} . '&';
         if($qs){
@@ -58,10 +57,10 @@ sub _TMDB_api_promise {
             }
         }
         chop $url;
-        $resolve->(_curl_Promise($self->{server}, ['-f', encode_utf8($url)])->then(sub {
+        _curl_Promise($self->{server}, ['-f', encode_utf8($url)])->then(sub {
             $_[0]->{exit_code} == 0 or die "curl to $url failed with " . $_[0]->{exit_code};
             decode_json($_[0]->{stdout})
-        }));
+        })
     })
 }
 
@@ -87,16 +86,12 @@ sub get_tv_season {
 
 sub _get_config {
     my ($self) = @_;
-    MHFS::Promise->new($self->{server}{evp}, sub {
-        my ($resolve, $reject) = @_;
-        if(! defined $self->{tmdbconfig}) {
-            $resolve->($self->_TMDB_api_promise('configuration')->then( sub {
-                $self->{tmdbconfig} = $_[0];
-                return $_[0];
-            }));
-        } else {
-            $resolve->($self->{tmdbconfig});
-        }
+    MHFS::Promise::try($self->{server}{evp}, sub {
+        return $self->{tmdbconfig} if exists $self->{tmdbconfig};
+        $self->_TMDB_api_promise('configuration')->then( sub {
+            $self->{tmdbconfig} = $_[0];
+            $_[0]
+        })
     })
 }
 

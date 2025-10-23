@@ -173,11 +173,7 @@ sub _fetch_metadata {
         try {
             my $plot = $self->get_plot($medianame, $season, $episode);
             say "fastest path";
-            my $result = {text => $plot};
-            return MHFS::Promise->new($self->{server}{evp}, sub {
-                my ($resolve, $reject) = @_;
-                $resolve->($result);
-            });
+            return {text => $plot};
         } catch ($e) {}
     }
     my $b_metadir = $self->{tvmeta} . '/' . encode_utf8($medianame) . (defined $season ? '/'.encode_utf8($season). (defined $episode ? '/'.encode_utf8($episode) : '') : '');
@@ -187,12 +183,7 @@ sub _fetch_metadata {
         if (exists $acceptable{$metadatatype}) {
             foreach my $totry (@{$acceptable{$metadatatype}}) {
                 my $path = $b_metadir.'/'.$metadatatype.".$totry";
-                if (-f $path) {
-                    return MHFS::Promise->new($self->{server}{evp}, sub {
-                        my ($resolve, $reject) = @_;
-                        $resolve->({file => $path});
-                    });
-                }
+                return {file => $path} if (-f $path);
             }
         }
     }
