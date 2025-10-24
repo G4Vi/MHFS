@@ -190,7 +190,7 @@ sub _fetch_metadata {
     # slow path, download it
     exists $self->{tmdb} or die "cannot load metadata without tmdb";
     my $tmdb = $self->{tmdb};
-    # find the movie or tv show
+    # find the tv show, season, or episode
     my $searchname = $medianame;
     say "searchname $searchname";
     return $tmdb->search('tv', {'query' => $searchname})->then(sub {

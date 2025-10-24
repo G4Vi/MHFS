@@ -404,6 +404,12 @@ sub Send416 {
     $self->SendHTML('', {'code' => 416});
 }
 
+sub Send500 {
+    my ($self) = @_;
+    my $msg = "500 Internal Server Error";
+    $self->SendHTML($msg, {'code' => 500});
+}
+
 sub Send503 {
     my ($self) = @_;
     $self->{'outheaders'}{'Retry-After'} = 5;

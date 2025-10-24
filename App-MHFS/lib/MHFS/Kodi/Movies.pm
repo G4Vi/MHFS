@@ -3,6 +3,7 @@ use 5.014;
 use strict; use warnings;
 use Encode qw(encode_utf8);
 use Feature::Compat::Try;
+use File::Path qw(make_path);
 use File::Basename qw(basename);
 use MHFS::Kodi::Movie;
 use MHFS::Kodi::MovieEdition;
@@ -10,7 +11,7 @@ use MHFS::Kodi::MovieEditions;
 use MHFS::Kodi::MoviePart;
 use MHFS::Kodi::MovieSubtitle;
 use MHFS::Kodi::Util qw(html_list_item);
-use MHFS::Util qw(decode_utf_8 read_text_file_lossy);
+use MHFS::Util qw(decode_utf_8 read_text_file_lossy fold_case write_text_file_lossy);
 
 sub _readsubdir{
     my ($subtitles, $source, $b_path) = @_;
@@ -160,6 +161,7 @@ sub _readmoviedir {
             $showname = $edition;
         }
         $showname =~ s/\./ /g;
+        $showname = fold_case($showname);
         if(! $movies->{$showname}) {
             my %diritem;
             if(defined $year) {
@@ -241,6 +243,76 @@ sub get_movie_item {
     }
     my $b_subfile = encode_utf8($subfile);
     return bless {b_path => "$b_editiondir/$b_subfile", subtitle => $subfile}, 'MHFS::Kodi::MovieSubtitle';
+}
+
+sub get_plot {
+    my ($self, $movieid) = @_;
+    my $item = $self->{movies};
+    exists $item->{$movieid} or die "movieid $movieid does not exist";
+    $item = $item->{$movieid};
+    exists $item->{plot} or die "movieid $movieid does not have plot yet";
+    $item->{plot}
+}
+
+# IF NOT EXISTS unless $force_update is true
+sub insert_movie_plot {
+    my ($self, $movieid, $metadata, $force_update) = @_;
+    exists $metadata->{overview} or die "metadata does not have plot";
+    my $plot = $metadata->{overview};
+    my $item = $self->{movies};
+    exists $item->{$movieid} or die "movieid $movieid does not exist";
+    $item = $item->{$movieid};
+    return if (exists $item->{plot} && !$force_update);
+    my $b_metadir = $self->{moviemeta} . '/' . encode_utf8($movieid);
+    make_path($b_metadir);
+    write_text_file_lossy("$b_metadir/plot.txt", $plot);
+    $item->{plot} = $plot;
+}
+
+sub _fetch_metadata {
+    my ($self, $metadatatype, $medianame) = @_;
+    # fastest path, grab from the db
+    if ($metadatatype eq 'plot') {
+        try {
+            my $plot = $self->get_plot($medianame);
+            say "fastest path";
+            return {text => $plot};
+        } catch ($e) {}
+    }
+    my $b_metadir = $self->{moviemeta} . '/' . encode_utf8($medianame);
+    # fast path, check disk
+    if ($metadatatype ne 'plot' && -d $b_metadir) {
+        my %acceptable = ( 'thumb' => ['png', 'jpg'], 'fanart' => ['png', 'jpg']);
+        if(exists $acceptable{$metadatatype}) {
+            foreach my $totry (@{$acceptable{$metadatatype}}) {
+                my $path = $b_metadir.'/'.$metadatatype.".$totry";
+                return {file => $path} if (-f $path);
+            }
+        }
+    }
+    # slow path, download it
+    exists $self->{tmdb} or die "cannot load metadata without tmdb";
+    my $tmdb = $self->{tmdb};
+    # find the movie
+    my $searchname = $medianame;
+    $searchname =~ s/\s\(\d\d\d\d\)//;
+    say "searchname $searchname";
+    $tmdb->search('movie', {'query' => $searchname})->then(sub {
+        my $json = $_[0]->{results}[0];
+        $json or die "Failed to find item";
+        $self->insert_movie_plot($medianame, $json, $metadatatype eq 'plot');
+        if ($metadatatype eq 'plot') {
+            return {text => $json->{overview}};
+        }
+        my $image_type = ($metadatatype eq 'thumb') ? 'poster_path' : 'backdrop_path';
+        $tmdb->get_image_from_metadata($json, $image_type, $b_metadir, $metadatatype)->then(sub {
+            {file => $_[0]}
+        })
+    })
+}
+
+sub fetch_metadata {
+    MHFS::Promise::try($_[0]->{server}{evp}, \&_fetch_metadata, @_)
 }
 
 sub Format {

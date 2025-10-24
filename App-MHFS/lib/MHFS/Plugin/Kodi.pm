@@ -45,7 +45,7 @@ sub _get_movies_instance {
     try {$tmdb = $self->_get_tmdb_instance()}
     catch ($e){print $e}
     if (! exists $self->{movies}) {
-        $self->{movies} = MHFS::Kodi::Movies->new($self->{server}, $self->{tvmeta}, $tmdb);
+        $self->{movies} = MHFS::Kodi::Movies->new($self->{server}, $self->{moviemeta}, $tmdb);
         return $self->{movies};
     }
     $self->{movies}->build_movie_library() if $force_reload;
@@ -344,74 +344,29 @@ sub route_metadata {
     }
     $medianame = fold_case($medianame);
     say "mt $mediatype mmt $metadatatype mn $medianame". (defined $season ? " season $season". (defined $episode ? " episode $episode" : '') : '');
+    my $library;
     if ($mediatype eq 'tv') {
-        weaken($request);
-        $self->_get_tvshows_instance()->fetch_metadata($metadatatype, $medianame, $season, $episode)->then(sub {
-            my ($result) = @_;
-            if ($result->{file}) {
-                $request->SendLocalFile($result->{file});
-            } elsif ($result->{text}) {
-                $request->SendText('text/plain; charset=utf-8', $result->{text});
-            } else {
-                die "unknown result type";
-            }
-        })->then(undef, sub {
-            print $_[0];
-            say "fetch_metadata failure";
-            $request->Send404;
-        });
+        $library = $self->_get_tvshows_instance();
+    } elsif ($mediatype eq 'movies') {
+        $library = $self->_get_movies_instance();
+    } else {
+        $request->Send500;
         return;
     }
-    # TODO movies fastest path, grab from db
-    my $b_metadir = $self->{moviemeta} . '/' . encode_utf8($medianame);
-    # fast path, check disk
-    if ((1 || $metadatatype ne 'plot') && -d $b_metadir) {
-        my %acceptable = ( 'thumb' => ['png', 'jpg'], 'fanart' => ['png', 'jpg'], 'plot' => ['txt']);
-        if(exists $acceptable{$metadatatype}) {
-            foreach my $totry (@{$acceptable{$metadatatype}}) {
-                my $path = $b_metadir.'/'.$metadatatype.".$totry";
-                if(-f $path) {
-                    say "disk path";
-                    $request->SendLocalFile($path);
-                    return;
-                }
-            }
-        }
-    }
-    # slow path, download it
-    my $tmdb;
-    try {
-        $tmdb = $self->_get_tmdb_instance();
-    } catch ($e) {
-        $request->Send404;
-        return;
-    }
-    # find the movie or tv show
-    my $searchname = $medianame;
-    $searchname =~ s/\s\(\d\d\d\d\)// if($mediatype eq 'movies');
-    say "searchname $searchname";
     weaken($request);
-    $tmdb->search('movie', {'query' => $searchname})->then(sub {
-        my $json = $_[0]->{results}[0];
-        $json or die "Failed to find item";
-        if ($metadatatype eq 'plot' || ! -f "$b_metadir/plot.txt") {
-            make_path($b_metadir);
-            try { write_text_file_lossy("$b_metadir/plot.txt", $json->{overview}) }
-            catch ($e) { say "wierd, creating file failed?"; }
+    $library->fetch_metadata($metadatatype, $medianame, $season, $episode)->then(sub {
+        my ($result) = @_;
+        if ($result->{file}) {
+            $request->SendLocalFile($result->{file});
+        } elsif ($result->{text}) {
+            $request->SendText('text/plain; charset=utf-8', $result->{text});
+        } else {
+            die "unknown result type";
         }
-        if ($metadatatype eq 'plot') {
-            $request->SendText('text/plain; charset=utf-8', $json->{overview});
-            return;
-        }
-        my $image_type = ($metadatatype eq 'thumb') ? 'poster_path' : 'backdrop_path';
-        $tmdb->get_image_from_metadata($json, $image_type, $b_metadir, $metadatatype)->then(sub {
-            $request->SendLocalFile($_[0]);
-            return;
-        })
     })->then(undef, sub {
         print $_[0];
+        say "fetch_metadata failure";
         $request->Send404;
-        return;
     });
     return;
 }
