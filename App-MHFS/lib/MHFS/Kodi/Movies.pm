@@ -294,10 +294,12 @@ sub _fetch_metadata {
     exists $self->{tmdb} or die "cannot load metadata without tmdb";
     my $tmdb = $self->{tmdb};
     # find the movie
-    my $searchname = $medianame;
-    $searchname =~ s/\s\(\d\d\d\d\)//;
+    my ($searchname, $year) = $medianame =~ /^(.+)\s\((\d\d\d\d)\)$/;
+    $searchname //= $medianame;
     say "searchname $searchname";
-    $tmdb->search('movie', {'query' => $searchname})->then(sub {
+    say "primary_release_year $year" if $year;
+    my $params = {query => $searchname, ($year ? (primary_release_year => $year) : ())};
+    $tmdb->search('movie', $params)->then(sub {
         my $json = $_[0]->{results}[0];
         $json or die "Failed to find item";
         $self->insert_movie_plot($medianame, $json, $metadatatype eq 'plot');
