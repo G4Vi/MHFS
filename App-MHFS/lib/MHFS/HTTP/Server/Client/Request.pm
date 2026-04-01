@@ -22,13 +22,7 @@ use FindBin;
 use File::Spec;
 use MHFS::EventLoop::Poll;
 use MHFS::Process;
-use MHFS::Util qw(get_printable_utf8 LOCK_GET_LOCKDATA getMIME shell_escape escape_html_noquote parse_ipv4);
-BEGIN {
-    if( ! (eval "use JSON; 1")) {
-        eval "use JSON::PP; 1" or die "No implementation of JSON available";
-        warn __PACKAGE__.": Using PurePerl version of JSON (JSON::PP)";
-    }
-}
+use MHFS::Util qw(get_printable_utf8 LOCK_GET_LOCKDATA getMIME shell_escape escape_html_noquote parse_ipv4 encode_json);
 
 # Optional dependency, Alien::Tar::Size
 BEGIN {

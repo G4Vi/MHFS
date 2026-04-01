@@ -14,7 +14,13 @@ use URI::Escape qw(uri_escape uri_escape_utf8);
 use MIME::Base64 qw(encode_base64url decode_base64url);
 use PerlIO::encoding;
 use warnings::register;
-our @EXPORT_OK = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'write_text_file', 'write_text_file_lossy', 'read_file', 'read_text_file', 'read_text_file_lossy', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'shell_escape', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME', 'get_printable_utf8', 'small_url_encode', 'uri_escape_path', 'uri_escape_path_utf8', 'round', 'ceil_div', 'get_SI_size', 'str_to_base64url', 'base64url_to_str', 'decode_utf_8', 'parse_ipv4', 'fold_case');
+BEGIN {
+    if( ! (eval "use Cpanel::JSON::XS; 1")) {
+        eval "use JSON::PP; 1" or die "No implementation of JSON available";
+        warn __PACKAGE__.": Cpanel::JSON::XS not available, falling back to JSON::PP";
+    }
+}
+our @EXPORT_OK = ('LOCK_GET_LOCKDATA', 'LOCK_WRITE', 'UNLOCK_WRITE', 'write_file', 'write_text_file', 'write_text_file_lossy', 'read_file', 'read_text_file', 'read_text_file_lossy', 'shellcmd_unlock', 'ASYNC', 'FindFile', 'space2us', 'escape_html', 'shell_escape', 'pid_running', 'escape_html_noquote', 'output_dir_versatile', 'do_multiples', 'getMIME', 'get_printable_utf8', 'small_url_encode', 'uri_escape_path', 'uri_escape_path_utf8', 'round', 'ceil_div', 'get_SI_size', 'str_to_base64url', 'base64url_to_str', 'decode_utf_8', 'parse_ipv4', 'fold_case', 'encode_json', 'decode_json');
 
 BEGIN {
     if (eval "use feature 'fc'; 1;") {

@@ -5,14 +5,9 @@ use feature 'say';
 use File::Path qw(make_path);
 use Encode qw(encode_utf8);
 use URI::Escape qw(uri_escape);
-BEGIN {
-    if( ! (eval "use JSON; 1")) {
-        eval "use JSON::PP; 1" or die "No implementation of JSON available";
-        warn __PACKAGE__.": Using PurePerl version of JSON (JSON::PP)";
-    }
-}
 
 use MHFS::Promise;
+use MHFS::Util qw(decode_json);
 
 sub new {
     my ($name, $server, $api_key) = @_;

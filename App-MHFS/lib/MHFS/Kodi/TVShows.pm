@@ -7,18 +7,12 @@ use Feature::Compat::Try;
 use File::Path qw(make_path);
 use File::Basename qw(basename);
 use MIME::Base64 qw(decode_base64url);
-BEGIN {
-    if( ! (eval "use JSON; 1")) {
-        eval "use JSON::PP; 1" or die "No implementation of JSON available";
-        warn __PACKAGE__.": Using PurePerl version of JSON (JSON::PP)";
-    }
-}
 
 use MHFS::Kodi::Util qw(html_list_item);
 use MHFS::Kodi::Season;
 use MHFS::Kodi::SeasonLite;
 use MHFS::Promise;
-use MHFS::Util qw(read_file fold_case read_text_file_lossy write_file write_text_file_lossy);
+use MHFS::Util qw(read_file fold_case read_text_file_lossy write_file write_text_file_lossy decode_json encode_json);
 
 sub _read_season_meta {
     my ($self, $showid, $seasonid) = @_;

@@ -11,13 +11,7 @@ use File::stat;
 use File::Basename;
 use File::Path qw(make_path);
 use Scalar::Util qw(looks_like_number);
-use MHFS::Util qw(get_printable_utf8 escape_html_noquote LOCK_GET_LOCKDATA LOCK_WRITE UNLOCK_WRITE);
-BEGIN {
-    if( ! (eval "use JSON; 1")) {
-        eval "use JSON::PP; 1" or die "No implementation of JSON available";
-        warn __PACKAGE__.": Using PurePerl version of JSON (JSON::PP)";
-    }
-}
+use MHFS::Util qw(get_printable_utf8 escape_html_noquote LOCK_GET_LOCKDATA LOCK_WRITE UNLOCK_WRITE encode_json);
 use Encode qw(decode encode);
 use URI::Escape;
 use Storable qw(dclone);

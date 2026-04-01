@@ -9,13 +9,8 @@ use URI::Escape;
 use Scalar::Util qw(looks_like_number weaken);
 use File::stat;
 use MHFS::Process;
-use MHFS::Util qw(escape_html LOCK_WRITE UNLOCK_WRITE);
-BEGIN {
-    if( ! (eval "use JSON; 1")) {
-        eval "use JSON::PP; 1" or die "No implementation of JSON available";
-        warn __PACKAGE__.": Using PurePerl version of JSON (JSON::PP)";
-    }
-}
+use MHFS::Util qw(escape_html LOCK_WRITE UNLOCK_WRITE decode_json);
+
 sub searchbox {
     my ($self, $request) = @_;
     #my $html = '<form  name="searchbox" action="' . $request->{'path'}{'basename'} . '">';

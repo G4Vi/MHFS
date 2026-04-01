@@ -47,7 +47,8 @@ my %WriteMakefileArgs = (
             runtime => {
                 recommends => {
                     'MHFS::XS' => '0',
-                    'Alien::Tar::Size' => '0'
+                    'Alien::Tar::Size' => '0',
+                    'Cpanel::JSON::XS' => '4.40',
                 }
             },
             develop => {

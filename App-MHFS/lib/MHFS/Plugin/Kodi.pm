@@ -12,12 +12,6 @@ use MHFS::Process;
 use MHFS::Promise;
 use MHFS::TMDBClient;
 use MHFS::Util qw(base64url_to_str write_text_file_lossy decode_utf_8 fold_case);
-BEGIN {
-    if( ! (eval "use JSON; 1")) {
-        eval "use JSON::PP; 1" or die "No implementation of JSON available";
-        warn __PACKAGE__.": Using PurePerl version of JSON (JSON::PP)";
-    }
-}
 
 sub _get_tmdb_instance {
     my ($self) = @_;
