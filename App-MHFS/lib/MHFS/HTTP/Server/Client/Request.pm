@@ -204,18 +204,33 @@ sub want_headers {
     # finally handle the request
     foreach my $route (@{$self->{'client'}{'server'}{'routes'}}) {
         if($self->{'path'}{'unsafecollapse'} eq $route->[0]) {
-            $route->[1]($self);
+            try {
+                $route->[1]($self);
+            } catch ($e) {
+                print "$e";
+                $self->Send500;
+            }
             return 1;
         }
         else {
             # wildcard ending
             next if(index($route->[0], '*', length($route->[0])-1) == -1);
             next if(rindex($self->{'path'}{'unsafecollapse'}, substr($route->[0], 0, -1), 0) != 0);
-            $route->[1]($self);
+            try {
+                $route->[1]($self);
+            } catch ($e) {
+                print "$e";
+                $self->Send500;
+            }
             return 1;
         }
     }
-    $self->{'client'}{'server'}{'route_default'}($self);
+    try {
+        $self->{'client'}{'server'}{'route_default'}($self);
+    } catch ($e) {
+        print "$e";
+        $self->Send500;
+    }
     return 1;
 }
 
@@ -320,6 +335,7 @@ sub _SendDataItem {
         404 => "HTTP/1.1 404 File Not Found\r\n",
         408 => "HTTP/1.1 408 Request Timeout\r\n",
         416 => "HTTP/1.1 416 Range Not Satisfiable\r\n",
+        500 => "HTTP/1.1 500 Internal Service Error\r\n",
         503 => "HTTP/1.1 503 Service Unavailable\r\n"
     );
 
