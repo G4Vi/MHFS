@@ -172,6 +172,9 @@ sub route_movies {
             return;
         }
     } else {
+        if ($request->{method} eq 'POST')  {
+            say "kodi got post";
+        }
         $movieitem = $movies;
     }
     # render

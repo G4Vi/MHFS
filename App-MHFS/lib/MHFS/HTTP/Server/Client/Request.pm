@@ -46,6 +46,29 @@ sub new {
     return \%self;
 }
 
+sub parse_querystring {
+    my ($querystring) = @_;
+    my %qsStruct;
+    # In the querystring spaces are sometimes encoded as + for legacy reasons unfortunately
+    $querystring =~ s/\+/%20/g;
+    my @qsPairs = split('&', $querystring);
+    foreach my $pair (@qsPairs) {
+        my($key, $value) = split('=', $pair);
+        if(defined $value) {
+            if(!defined $qsStruct{$key}) {
+                $qsStruct{$key} = uri_unescape($value);
+            }
+            else {
+                if(ref($qsStruct{$key}) ne 'ARRAY') {
+                    $qsStruct{$key} = [$qsStruct{$key}];
+                };
+                push @{$qsStruct{$key}}, uri_unescape($value);
+            }
+        }
+    }
+    \%qsStruct
+}
+
 # on ready ready handlers
 sub want_request_line {
     my ($self) = @_;
@@ -61,7 +84,7 @@ sub want_request_line {
             $self->{'outheaders'}{'X-MHFS-REQUEST-ID'} = sprintf("%X", $rid);
             say "X-MHFS-CONN-ID: " . $self->{'outheaders'}{'X-MHFS-CONN-ID'} . " X-MHFS-REQUEST-ID: " . $self->{'outheaders'}{'X-MHFS-REQUEST-ID'};
             say "RECV: $rl";
-            if(($self->{'method'} ne 'GET') && ($self->{'method'} ne 'HEAD') && ($self->{'method'} ne 'PUT')) {
+            if(($self->{'method'} ne 'GET') && ($self->{'method'} ne 'HEAD') && ($self->{'method'} ne 'PUT') && ($self->{'method'} ne 'POST')) {
                 say "X-MHFS-CONN-ID: " . $self->{'outheaders'}{'X-MHFS-CONN-ID'} . 'Invalid method: ' . $self->{'method'}. ', closing conn';
                 return undef;
             }
@@ -86,27 +109,10 @@ sub want_request_line {
             $pathStruct{'unsafepath'} = $path;
 
             ## Querystring
-            my %qsStruct;
-            # In the querystring spaces are sometimes encoded as + for legacy reasons unfortunately
-            $querystring =~ s/\+/%20/g;
-            my @qsPairs = split('&', $querystring);
-            foreach my $pair (@qsPairs) {
-                my($key, $value) = split('=', $pair);
-                if(defined $value) {
-                    if(!defined $qsStruct{$key}) {
-                        $qsStruct{$key} = uri_unescape($value);
-                    }
-                    else {
-                        if(ref($qsStruct{$key}) ne 'ARRAY') {
-                            $qsStruct{$key} = [$qsStruct{$key}];
-                        };
-                        push @{$qsStruct{$key}}, uri_unescape($value);
-                    }
-                }
-            }
+            my $qsStruct = parse_querystring($querystring);
 
             $self->{'path'} = \%pathStruct;
-            $self->{'qs'} = \%qsStruct;
+            $self->{'qs'} = $qsStruct;
             $self->{'on_read_ready'} = \&want_headers;
             #return want_headers($self);
             goto &want_headers;
@@ -189,6 +195,37 @@ sub want_headers {
     if((defined $self->{'header'}{'Range'}) &&  ($self->{'header'}{'Range'} =~ /^bytes=([0-9]+)\-([0-9]*)$/)) {
         $self->{'header'}{'_RangeStart'} = $1;
         $self->{'header'}{'_RangeEnd'} = ($2 ne  '') ? $2 : undef;
+    }
+
+    if (exists $self->{header}{'Content-Length'}) {
+        my $cl = $self->{header}{'Content-Length'};
+        if ($cl !~ /^(\d+)$/ || $cl > 20000000) {
+            say "bad content-length header: $cl";
+            $self->{'on_read_ready'} = undef;
+            $self->Send400;
+            $self->{'outheaders'}{'Connection'} = 'close';
+            return 1;
+        }
+    }
+
+    $self->{'on_read_ready'} = \&want_body;
+    goto &want_body;
+}
+
+sub want_body {
+    my ($self) = @_;
+    if (exists $self->{header}{'Content-Length'}) {
+        my $cl = $self->{header}{'Content-Length'};
+        if (length($self->{'client'}{'inbuf'}) < $cl) {
+            return 1;
+        }
+        my $body = substr($self->{'client'}{'inbuf'}, 0, $cl, '');
+        my %body = (rawbody => $body);
+        if (exists $self->{header}{'Content-Type'} && $self->{header}{'Content-Type'} eq 'application/x-www-form-urlencoded') {
+            my $qs = parse_querystring($body);
+            $body{qs} = $qs;
+        }
+        $self->{body} = \%body;
     }
     $self->{'on_read_ready'} = undef;
     $self->{'client'}->SetEvents(MHFS::EventLoop::Poll->ALWAYSMASK );
@@ -325,6 +362,7 @@ sub _SendDataItem {
         206 => "HTTP/1.1 206 Partial Content\r\n",
         301 => "HTTP/1.1 301 Moved Permanently\r\n",
         307 => "HTTP/1.1 307 Temporary Redirect\r\n",
+        400 => "HTTP/1.1 400 Bad Request\r\n",
         403 => "HTTP/1.1 403 Forbidden\r\n",
         404 => "HTTP/1.1 404 File Not Found\r\n",
         408 => "HTTP/1.1 408 Request Timeout\r\n",
@@ -386,7 +424,7 @@ sub _SendDataItem {
 sub Send400 {
     my ($self) = @_;
     my $msg = "400 Bad Request\r\n";
-    $self->SendHTML($msg, {'code' => 403});
+    $self->SendHTML($msg, {'code' => 400});
 }
 
 sub Send403 {
@@ -852,72 +890,6 @@ sub SendDirectoryListing {
         }
     }
     $self->Send404;
-}
-
-sub PUTBuf_old {
-    my ($self, $handler) = @_;
-    if(length($self->{'client'}{'inbuf'}) < $self->{'header'}{'Content-Length'}) {
-        $self->{'client'}->SetEvents(POLLIN | MHFS::EventLoop::Poll->ALWAYSMASK );
-    }
-    my $sdata;
-    $self->{'on_read_ready'} = sub {
-        my $contentlength = $self->{'header'}{'Content-Length'};
-        $sdata .= $self->{'client'}{'inbuf'};
-        my $dlength = length($sdata);
-        if($dlength >= $contentlength) {
-            say 'PUTBuf datalength ' . $dlength;
-            my $data;
-            if($dlength > $contentlength) {
-                $data = substr($sdata, 0, $contentlength);
-                $self->{'client'}{'inbuf'} = substr($sdata, $contentlength);
-                $dlength = length($data)
-            }
-            else {
-                $data = $sdata;
-                $self->{'client'}{'inbuf'} = '';
-            }
-            $self->{'on_read_ready'} = undef;
-            $handler->($data);
-        }
-        else {
-            $self->{'client'}{'inbuf'} = '';
-        }
-        #return '';
-        return 1;
-    };
-    $self->{'on_read_ready'}->();
-}
-
-sub PUTBuf {
-    my ($self, $handler) = @_;
-    if($self->{'header'}{'Content-Length'} > 20000000) {
-        say "PUTBuf too big";
-        $self->{'client'}->SetEvents(POLLIN | MHFS::EventLoop::Poll->ALWAYSMASK );
-        $self->{'on_read_ready'} = sub { return undef };
-        return;
-    }
-    if(length($self->{'client'}{'inbuf'}) < $self->{'header'}{'Content-Length'}) {
-        $self->{'client'}->SetEvents(POLLIN | MHFS::EventLoop::Poll->ALWAYSMASK );
-    }
-    $self->{'on_read_ready'} = sub {
-        my $contentlength = $self->{'header'}{'Content-Length'};
-        my $dlength = length($self->{'client'}{'inbuf'});
-        if($dlength >= $contentlength) {
-            say 'PUTBuf datalength ' . $dlength;
-            my $data;
-            if($dlength > $contentlength) {
-                $data = substr($self->{'client'}{'inbuf'}, 0, $contentlength, '');
-            }
-            else {
-                $data = $self->{'client'}{'inbuf'};
-                $self->{'client'}{'inbuf'} = '';
-            }
-            $self->{'on_read_ready'} = undef;
-            $handler->($data);
-        }
-        return 1;
-    };
-    $self->{'on_read_ready'}->();
 }
 
 sub SendFile {
