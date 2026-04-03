@@ -11,7 +11,7 @@ use MHFS::Kodi::MovieEditions;
 use MHFS::Kodi::MoviePart;
 use MHFS::Kodi::MovieSubtitle;
 use MHFS::Kodi::Util qw(html_list_item);
-use MHFS::Util qw(decode_utf_8 read_text_file_lossy fold_case write_text_file_lossy);
+use MHFS::Util qw(decode_utf_8 read_text_file_lossy fold_case write_text_file_lossy read_json_file);
 
 sub _readsubdir{
     my ($subtitles, $source, $b_path) = @_;
@@ -127,7 +127,11 @@ sub _readmoviedir {
         my $showname;
         my $withoutyear;
         my $year;
-        if($edition =~ /^(.+)[\.\s]+\(?(\d{4})([^p]|$)/) {
+        if (exists $self->{userdb}{editions}{"$source/$edition"}) {
+            my $editionmeta = $self->{userdb}{editions}{"$source/$edition"};
+            exists $editionmeta->{movie_id} and $showname = $editionmeta->{movie_id};
+        }
+        elsif ($edition =~ /^(.+)[\.\s]+\(?(\d{4})([^p]|$)/) {
             $showname = "$1 ($2)";
             $withoutyear = $1;
             $year = $2;
@@ -161,26 +165,61 @@ sub _readmoviedir {
             $showname = $edition;
         }
         $showname =~ s/\./ /g;
+        $withoutyear //= $showname;
         $showname = fold_case($showname);
         if(! $movies->{$showname}) {
-            my %diritem;
-            if(defined $year) {
-                $diritem{name} = $withoutyear;
-                $diritem{year} = $year;
+            if (exists $self->{userdb}{movies}{$showname}) {
+                my $moviemeta = $self->{userdb}{movies}{$showname};
+                exists $moviemeta->{name} and $withoutyear = $moviemeta->{name};
+                exists $moviemeta->{year} and $year = $moviemeta->{year};
             }
+            my %diritem = (name => $withoutyear);
+            $year and $diritem{year} = $year;
             my $b_showname = encode_utf8($showname);
             my $plot = $self->{moviemeta}."/$b_showname/plot.txt";
             try { $diritem{plot} = read_text_file_lossy($plot); }
             catch($e) {}
             $movies->{$showname} = \%diritem;
         }
+        #if (! $movies->{$showname}) {
+        #    my %diritem;
+        #    my $b_showname = encode_utf8($showname);
+        #    my $plot = $self->{moviemeta}."/$b_showname/plot.txt";
+        #    try { $diritem{plot} = read_text_file_lossy($plot); }
+        #    catch($e) {}
+        #    $movies->{$showname} = \%diritem;
+        #}
+        #if (exists $self->{userdb}{movies}{$showname}) {
+        #    my $moviemeta = $self->{userdb}{movies}{$showname};
+        #    exists $moviemeta->{name} and $withoutyear = $moviemeta->{name};
+        #    exists $moviemeta->{year} and $year = $moviemeta->{year};
+        #}
+        #$year and $movies->{$showname}{year} = $year;
+        #$movies->{$showname}{name} = $withoutyear;
         $movies->{$showname}{editions}{"$source/$edition"} = \%edition;
     }
     closedir($dh);
 }
 
+sub _read_user_db {
+    my ($self) = @_;
+    my $userdb_file = $self->{moviemeta}."/user_db.json";
+    try {
+        my $userdb = read_json_file($userdb_file);
+        exists $userdb->{editions} or die "userdb does not have editions";
+        return $userdb;
+    } catch($e) {
+        print "$e";
+    }
+    {
+        editions => {},
+        movies => {},
+    }
+}
+
 sub build_movie_library {
     my ($self) = @_;
+    $self->{userdb} = $self->_read_user_db();
     my $sources = $self->{sources};
     my %movies;
     foreach my $source (@$sources) {
