@@ -84,6 +84,12 @@ apperl/Feature-Compat-Try:
 	cd apperl && mv Feature-Compat-Try-* Feature-Compat-Try
 	cd apperl && rm Feature-Compat-Try.*
 
+apperl/Cpanel-JSON-XS:
+	cd apperl && perl download_package.pl Cpanel::JSON::XS
+	cd apperl && tar xf Cpanel-JSON-XS.*
+	cd apperl && mv Cpanel-JSON-XS-* Cpanel-JSON-XS
+	cd apperl && rm Cpanel-JSON-XS.*
+
 apperl/App-MHFS: release
 	rm -rf apperl/MHFS* apperl/App-MHFS*
 	cd apperl && tar xf ../MHFS*.tar
@@ -92,7 +98,7 @@ apperl/App-MHFS: release
 	cd apperl && rm -r MHFS*
 
 .PHONY: apperl
-apperl: apperl/HTML-Template apperl/URI apperl/Class-Inspector apperl/File-ShareDir apperl/File-ShareDir-Install apperl/Module-Build apperl/Feature-Compat-Try apperl/App-MHFS
+apperl: apperl/HTML-Template apperl/URI apperl/Class-Inspector apperl/File-ShareDir apperl/File-ShareDir-Install apperl/Module-Build apperl/Feature-Compat-Try apperl/Cpanel-JSON-XS apperl/App-MHFS
 	cd apperl && $(APPERLM) checkout mhfs
 	cd apperl && $(APPERLM) configure
 	cd apperl && $(APPERLM) build

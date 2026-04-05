@@ -13,6 +13,7 @@
             "./File-ShareDir",
             "./Module-Build",
             "./Feature-Compat-Try",
+            "./Cpanel-JSON-XS",
             "./App-MHFS"
          ]
       }

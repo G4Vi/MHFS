@@ -44,5 +44,8 @@ apperl/URI
 apperl/Class-Inspector
 apperl/File-ShareDir-Install
 apperl/File-ShareDir
+apperl/Module-Build
+apperl/Feature-Compat-Try
+apperl/Cpanel-JSON-XS
 apperl/App-MHFS
 apperl/mhfs.com*
