@@ -288,13 +288,11 @@ sub get_movie_item {
     return bless {b_path => "$b_editiondir/$b_subfile", subtitle => $subfile}, 'MHFS::Kodi::MovieSubtitle';
 }
 
-sub get_plot {
+sub get_movie {
     my ($self, $movieid) = @_;
-    my $item = $self->{movies};
-    exists $item->{$movieid} or die "movieid $movieid does not exist";
-    $item = $item->{$movieid};
-    exists $item->{plot} or die "movieid $movieid does not have plot yet";
-    $item->{plot}
+    my $db = $self->{movies};
+    exists $db->{$movieid} or die "movieid $movieid does not exist";
+    $db->{$movieid}
 }
 
 # IF NOT EXISTS unless $force_update is true
@@ -312,15 +310,6 @@ sub insert_movie_plot {
     $item->{plot} = $plot;
 }
 
-sub get_tmdb_id {
-    my ($self, $movieid) = @_;
-    my $db = $self->{movies};
-    exists $db->{$movieid} or die "movieid $movieid does not exist";
-    $db = $db->{$movieid};
-    exists $db->{tmdb_id} or die "movieid $movieid does not have a tmdb_id";
-    $db->{tmdb_id}
-}
-
 sub _fetch_metadata_on_movie {
     my ($self, $metadatatype, $medianame, $b_metadir, $tmdb, $json) = @_;
     $self->insert_movie_plot($medianame, $json, $metadatatype eq 'plot');
@@ -335,13 +324,11 @@ sub _fetch_metadata_on_movie {
 
 sub _fetch_metadata {
     my ($self, $metadatatype, $medianame) = @_;
+    my $movie = $self->get_movie($medianame);
     # fastest path, grab from the db
-    if ($metadatatype eq 'plot') {
-        try {
-            my $plot = $self->get_plot($medianame);
-            say "fastest path";
-            return {text => $plot};
-        } catch ($e) {}
+    if ($metadatatype eq 'plot' && exists $movie->{plot}) {
+        say "fastest path";
+        return {text => $movie->{plot}};
     }
     my $b_metadir = $self->{moviemeta} . '/' . encode_utf8($medianame);
     # fast path, check disk
@@ -358,14 +345,9 @@ sub _fetch_metadata {
     exists $self->{tmdb} or die "cannot load metadata without tmdb";
     my $tmdb = $self->{tmdb};
     # id in db
-    my $tmdb_id;
-    try {
-        $tmdb_id = get_tmdb_id($self, $medianame);
-    } catch ($e) {
-        say "e: $e";
-    }
-    if ($tmdb_id) {
-        return $tmdb->get_movie($tmdb_id)->then(sub {
+    if (exists $movie->{tmdb_id}) {
+        say "tmdb_id in db";
+        return $tmdb->get_movie($movie->{tmdb_id})->then(sub {
             my $json = $_[0];
             $json or die "Failed to find item";
             _fetch_metadata_on_movie($self, $metadatatype, $medianame, $b_metadir, $tmdb, $json)
