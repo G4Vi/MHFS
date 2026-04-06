@@ -168,13 +168,16 @@ sub _readmoviedir {
         $withoutyear //= $showname;
         $showname = fold_case($showname);
         if(! $movies->{$showname}) {
+            my $tmdb_id;
             if (exists $self->{userdb}{movies}{$showname}) {
                 my $moviemeta = $self->{userdb}{movies}{$showname};
                 exists $moviemeta->{name} and $withoutyear = $moviemeta->{name};
                 exists $moviemeta->{year} and $year = $moviemeta->{year};
+                exists $moviemeta->{tmdb_id} and $tmdb_id = $moviemeta->{tmdb_id};
             }
             my %diritem = (name => $withoutyear);
             $year and $diritem{year} = $year;
+            $tmdb_id and $diritem{tmdb_id} = $tmdb_id;
             my $b_showname = encode_utf8($showname);
             my $plot = $self->{moviemeta}."/$b_showname/plot.txt";
             try { $diritem{plot} = read_text_file_lossy($plot); }
@@ -207,6 +210,7 @@ sub _read_user_db {
     try {
         my $userdb = read_json_file($userdb_file);
         exists $userdb->{editions} or die "userdb does not have editions";
+        exists $userdb->{movies} or die "userdb does not have movies";
         return $userdb;
     } catch($e) {
         print "$e";
@@ -308,6 +312,27 @@ sub insert_movie_plot {
     $item->{plot} = $plot;
 }
 
+sub get_tmdb_id {
+    my ($self, $movieid) = @_;
+    my $db = $self->{movies};
+    exists $db->{$movieid} or die "movieid $movieid does not exist";
+    $db = $db->{$movieid};
+    exists $db->{tmdb_id} or die "movieid $movieid does not have a tmdb_id";
+    $db->{tmdb_id}
+}
+
+sub _fetch_metadata_on_movie {
+    my ($self, $metadatatype, $medianame, $b_metadir, $tmdb, $json) = @_;
+    $self->insert_movie_plot($medianame, $json, $metadatatype eq 'plot');
+    if ($metadatatype eq 'plot') {
+        return {text => $json->{overview}};
+    }
+    my $image_type = ($metadatatype eq 'thumb') ? 'poster_path' : 'backdrop_path';
+    $tmdb->get_image_from_metadata($json, $image_type, $b_metadir, $metadatatype)->then(sub {
+        {file => $_[0]}
+    })
+}
+
 sub _fetch_metadata {
     my ($self, $metadatatype, $medianame) = @_;
     # fastest path, grab from the db
@@ -332,7 +357,21 @@ sub _fetch_metadata {
     # slow path, download it
     exists $self->{tmdb} or die "cannot load metadata without tmdb";
     my $tmdb = $self->{tmdb};
-    # find the movie
+    # id in db
+    my $tmdb_id;
+    try {
+        $tmdb_id = get_tmdb_id($self, $medianame);
+    } catch ($e) {
+        say "e: $e";
+    }
+    if ($tmdb_id) {
+        return $tmdb->get_movie($tmdb_id)->then(sub {
+            my $json = $_[0];
+            $json or die "Failed to find item";
+            _fetch_metadata_on_movie($self, $metadatatype, $medianame, $b_metadir, $tmdb, $json)
+        })
+    }
+    # no id, search for it
     my ($searchname, $year) = $medianame =~ /^(.+)\s\((\d\d\d\d)\)$/;
     $searchname //= $medianame;
     say "searchname $searchname";
@@ -341,14 +380,7 @@ sub _fetch_metadata {
     $tmdb->search('movie', $params)->then(sub {
         my $json = $_[0]->{results}[0];
         $json or die "Failed to find item";
-        $self->insert_movie_plot($medianame, $json, $metadatatype eq 'plot');
-        if ($metadatatype eq 'plot') {
-            return {text => $json->{overview}};
-        }
-        my $image_type = ($metadatatype eq 'thumb') ? 'poster_path' : 'backdrop_path';
-        $tmdb->get_image_from_metadata($json, $image_type, $b_metadir, $metadatatype)->then(sub {
-            {file => $_[0]}
-        })
+        _fetch_metadata_on_movie($self, $metadatatype, $medianame, $b_metadir, $tmdb, $json)
     })
 }
 

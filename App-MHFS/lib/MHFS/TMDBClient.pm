@@ -74,6 +74,12 @@ sub search {
 }
 
 # returns a promise
+sub get_movie {
+    my ($self, $tmdb_id, $query) = @_;
+    $self->_TMDB_api_promise("movie/$tmdb_id", $query)
+}
+
+# returns a promise
 sub get_tv_season {
     my ($self, $series_id, $season, $query) = @_;
     $self->_TMDB_api_promise("tv/$series_id/season/$season", $query)
