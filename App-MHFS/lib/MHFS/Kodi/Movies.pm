@@ -11,7 +11,7 @@ use MHFS::Kodi::MovieEditions;
 use MHFS::Kodi::MoviePart;
 use MHFS::Kodi::MovieSubtitle;
 use MHFS::Kodi::Util qw(html_list_item);
-use MHFS::Util qw(decode_utf_8 read_text_file_lossy fold_case write_text_file_lossy read_json_file);
+use MHFS::Util qw(decode_utf_8 read_text_file_lossy fold_case write_text_file_lossy read_json_file encode_json write_file write_json_file);
 
 sub _readsubdir{
     my ($subtitles, $source, $b_path) = @_;
@@ -34,6 +34,14 @@ sub _readsubdir{
             _readsubdir($subtitles, $nextsource, $b_nextpath);
         }
     }
+}
+
+sub _dealias {
+    my ($self, $publicid) = @_;
+    return $publicid if (! exists $self->{db}{aliases}{$publicid});
+    my $movieid = $self->{db}{aliases}{$publicid};
+    say "mapping $publicid to $movieid";
+    $movieid
 }
 
 sub _readmoviedir {
@@ -167,38 +175,20 @@ sub _readmoviedir {
         $showname =~ s/\./ /g;
         $withoutyear //= $showname;
         $showname = fold_case($showname);
+        $showname = $self->_dealias($showname);
         if(! $movies->{$showname}) {
-            my $tmdb_id;
+            my %diritem = (name => $withoutyear, ($year ? (year => $year) : ()));
+            my $b_showname = encode_utf8($showname);
+            try {
+                my $di = read_json_file($self->{moviemeta}."/$b_showname/movie.json");
+                %diritem = (%diritem, %$di);
+            } catch($e) {}
             if (exists $self->{userdb}{movies}{$showname}) {
                 my $moviemeta = $self->{userdb}{movies}{$showname};
-                exists $moviemeta->{name} and $withoutyear = $moviemeta->{name};
-                exists $moviemeta->{year} and $year = $moviemeta->{year};
-                exists $moviemeta->{tmdb_id} and $tmdb_id = $moviemeta->{tmdb_id};
+                %diritem = (%diritem, %$moviemeta);
             }
-            my %diritem = (name => $withoutyear);
-            $year and $diritem{year} = $year;
-            $tmdb_id and $diritem{tmdb_id} = $tmdb_id;
-            my $b_showname = encode_utf8($showname);
-            my $plot = $self->{moviemeta}."/$b_showname/plot.txt";
-            try { $diritem{plot} = read_text_file_lossy($plot); }
-            catch($e) {}
             $movies->{$showname} = \%diritem;
         }
-        #if (! $movies->{$showname}) {
-        #    my %diritem;
-        #    my $b_showname = encode_utf8($showname);
-        #    my $plot = $self->{moviemeta}."/$b_showname/plot.txt";
-        #    try { $diritem{plot} = read_text_file_lossy($plot); }
-        #    catch($e) {}
-        #    $movies->{$showname} = \%diritem;
-        #}
-        #if (exists $self->{userdb}{movies}{$showname}) {
-        #    my $moviemeta = $self->{userdb}{movies}{$showname};
-        #    exists $moviemeta->{name} and $withoutyear = $moviemeta->{name};
-        #    exists $moviemeta->{year} and $year = $moviemeta->{year};
-        #}
-        #$year and $movies->{$showname}{year} = $year;
-        #$movies->{$showname}{name} = $withoutyear;
         $movies->{$showname}{editions}{"$source/$edition"} = \%edition;
     }
     closedir($dh);
@@ -221,9 +211,27 @@ sub _read_user_db {
     }
 }
 
+sub _read_db {
+    my ($self) = @_;
+    my $db_file = $self->{moviemeta}."/db.json";
+    try {
+        my $db = read_json_file($db_file);
+        exists $db->{aliases} or die "db does not have aliases";
+        exists $db->{tmdb_ids} or die "db does not have tmdb_ids";
+        return $db;
+    } catch($e) {
+        print "$e";
+    }
+    {
+        aliases => {},
+        tmdb_ids => {},
+    }
+}
+
 sub build_movie_library {
     my ($self) = @_;
     $self->{userdb} = $self->_read_user_db();
+    $self->{db} = $self->_read_db();
     my $sources = $self->{sources};
     my %movies;
     foreach my $source (@$sources) {
@@ -249,7 +257,8 @@ sub new {
 
 # dies on not found/error
 sub get_movie_item {
-    my ($self, $movieid, $source, $editionname, $partname, $subfile) = @_;
+    my ($self, $publicid, $source, $editionname, $partname, $subfile) = @_;
+    my $movieid = $self->_dealias($publicid);
     my $movies = $self->{movies};
     unless(exists $movies->{$movieid}) {
         die "movie not found";
@@ -295,35 +304,65 @@ sub get_movie {
     $db->{$movieid}
 }
 
-# IF NOT EXISTS unless $force_update is true
-sub insert_movie_plot {
-    my ($self, $movieid, $metadata, $force_update) = @_;
-    exists $metadata->{overview} or die "metadata does not have plot";
-    my $plot = $metadata->{overview};
+sub update_movie_metadata {
+    my ($self, $movieid, $metadata) = @_;
     my $item = $self->{movies};
     exists $item->{$movieid} or die "movieid $movieid does not exist";
-    $item = $item->{$movieid};
-    return if (exists $item->{plot} && !$force_update);
+    @{$item->{$movieid}}{keys %$metadata} = values %$metadata;
+    my %json = %{$item->{$movieid}};
+    delete $json{editions};
     my $b_metadir = $self->{moviemeta} . '/' . encode_utf8($movieid);
     make_path($b_metadir);
-    write_text_file_lossy("$b_metadir/plot.txt", $plot);
-    $item->{plot} = $plot;
+    write_json_file("$b_metadir/movie.json", \%json);
+    $item->{$movieid}
 }
 
 sub _fetch_metadata_on_movie {
-    my ($self, $metadatatype, $medianame, $b_metadir, $tmdb, $json) = @_;
-    $self->insert_movie_plot($medianame, $json, $metadatatype eq 'plot');
-    if ($metadatatype eq 'plot') {
-        return {text => $json->{overview}};
+    my ($self, $metadatatype, $medianame, $tmdb, $metadata) = @_;
+    my %update = (
+        (exists $metadata->{overview} ? (plot => $metadata->{overview}) : ()),
+        (exists $metadata->{name} ? (name => $metadata->{name}) : ()),
+    );
+    # merge if there's an existing entry with the same tmdb id
+    if (exists $metadata->{id}) {
+        my $tmdb_id = $metadata->{id};
+        if (! exists $self->{db}{tmdb_ids}{$tmdb_id}) {
+            say "adding tmdb_id $tmdb_id -> $medianame mapping";
+            $self->{db}{tmdb_ids}{$tmdb_id} = $medianame;
+        } else {
+            my $realmovieid = $self->{db}{tmdb_ids}{$tmdb_id};
+            if ($medianame ne $realmovieid) {
+                say "$medianame is actually $realmovieid";
+                my $target = $self->{movies}{$realmovieid};
+                my $source = delete $self->{movies}{$medianame};
+                $target->{editions} = {%{$target->{editions}}, %{$source->{editions}}};
+                $self->{db}{aliases}{$medianame} = $realmovieid;
+                $medianame = $realmovieid;
+                %update = (
+                    ((exists $source->{year} && !exists $target->{year}) ? (year => $source->{year}) : ()),
+                    ((exists $source->{plot} && !exists $target->{plot}) ? (plot => $source->{plot}) : ()),
+                    %update,
+                );
+            }
+        }
+        write_json_file($self->{moviemeta}.'/db.json', $self->{db});
     }
+    my $movie = $self->update_movie_metadata($medianame, \%update);
+    if ($metadatatype eq 'plot') {
+        exists $movie->{plot} or die "plot not found for $medianame";
+        return {text => $movie->{plot}};
+    }
+    # TODO if a merge occured we probably don't need to refetch images
     my $image_type = ($metadatatype eq 'thumb') ? 'poster_path' : 'backdrop_path';
-    $tmdb->get_image_from_metadata($json, $image_type, $b_metadir, $metadatatype)->then(sub {
+    my $b_metadir = $self->{moviemeta} . '/' . encode_utf8($medianame);
+    $tmdb->get_image_from_metadata($metadata, $image_type, $b_metadir, $metadatatype)->then(sub {
         {file => $_[0]}
     })
 }
 
 sub _fetch_metadata {
     my ($self, $metadatatype, $medianame) = @_;
+    $medianame = $self->_dealias($medianame);
     my $movie = $self->get_movie($medianame);
     # fastest path, grab from the db
     if ($metadatatype eq 'plot' && exists $movie->{plot}) {
@@ -350,7 +389,7 @@ sub _fetch_metadata {
         return $tmdb->get_movie($movie->{tmdb_id})->then(sub {
             my $json = $_[0];
             $json or die "Failed to find item";
-            _fetch_metadata_on_movie($self, $metadatatype, $medianame, $b_metadir, $tmdb, $json)
+            _fetch_metadata_on_movie($self, $metadatatype, $medianame, $tmdb, $json)
         })
     }
     # no id, search for it
@@ -362,8 +401,9 @@ sub _fetch_metadata {
     $tmdb->search('movie', $params)->then(sub {
         my $json = $_[0]->{results}[0];
         $json or die "Failed to find item";
-        _fetch_metadata_on_movie($self, $metadatatype, $medianame, $b_metadir, $tmdb, $json)
+        _fetch_metadata_on_movie($self, $metadatatype, $medianame, $tmdb, $json)
     })
+    # TODO maybe retry search without year or see if year even helps searches
 }
 
 sub fetch_metadata {
